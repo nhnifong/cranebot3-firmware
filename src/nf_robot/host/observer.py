@@ -143,6 +143,9 @@ VISIBILITY_POLL_S = 1.0
 UNSEEN_LIMIT_S = 40.0
 # (s) of spool records monitor_spools keeps, to write out with a derailment
 SPOOL_HISTORY_S = 60.0
+# (m) below this rangefinder reading monitor_spools ignores the derail detector: with the
+# gripper this close to whatever is under it, lines are resisted without having derailed.
+DERAIL_MIN_RANGE_M = 0.20
 
 USER_TARGETS_DIR = "user_targets_data"
 METADATA_PATH = os.path.join(USER_TARGETS_DIR, "metadata.jsonl")
@@ -2976,12 +2979,15 @@ class AsyncObserver:
 
         Keeps the last SPOOL_HISTORY_S of what the detector reads, trimmed to what it uses, so
         a detection can be written out with what led up to it. With a spool log open, also
-        writes everything to that.
+        writes everything to that. Suppressed while the rangefinder reads under
+        DERAIL_MIN_RANGE_M; no reading at all leaves it running.
         """
         detector = DerailDetector(N_LINES)
         while True:
             await asyncio.sleep(period_s)
             now = time.time()
+            laser = self.laser_range()
+            suppressed = laser is not None and laser < DERAIL_MIN_RANGE_M
             tick = {'t': now, 'lines': []}
             trips = []
             verbose = [] if self.spool_log is not None else None
@@ -2999,6 +3005,10 @@ class AsyncObserver:
                 cmd_speed = None if cmd is None or cmd[2] == 'jog' else cmd[1]
                 detector.add(line_no, rows, cmd_speed)
                 derailed, moved, resisted = detector.verdict(line_no)
+                if suppressed:
+                    # start clean once clear, rather than judging what happened down here
+                    detector.reset(line_no)
+                    derailed = False
                 tick['lines'].append({
                     'cmd': cmd_speed,
                     'rows': [(r[0], r[2], r[3]) for r in rows],
@@ -4291,6 +4301,14 @@ class AsyncObserver:
         The camera only cares about the heading, which repeats every 360 degrees of the
         wrist's 0-1080 range, so reproducing a recorded angle exactly can mean winding the
         cable two turns to look at what is already in front of it.
+        """
+        current = self.datastore.winch_line_record.getLast()[1]
+        candidates = [angle_deg + 360.0 * k for k in (-2, -1, 0, 1, 2) if 0 <= angle_deg + 360.0 * k <= 1080]
+        target = min(candidates or [angle_deg], key=lambda c: abs(c - current))
+        return await self.ease_wrist(target, tol=tol, peak_dps=peak_dps)
+
+    async def ease_wrist(self, target, tol=2.0, peak_dps=WRIST_EASE_DPS):
+        """Walk the wrist to an absolute angle, easing in and out, and wait until it arrives.
 
         Walked there rather than commanded in one step: an absolute angle sent in one go has
         the servo start and stop at its own rate, and the gripper is a pendulum that gets
@@ -4298,9 +4316,6 @@ class AsyncObserver:
         wait at the end confirms the wrist arrived.
         """
         current = self.datastore.winch_line_record.getLast()[1]
-        candidates = [angle_deg + 360.0 * k for k in (-2, -1, 0, 1, 2) if 0 <= angle_deg + 360.0 * k <= 1080]
-        target = min(candidates or [angle_deg], key=lambda c: abs(c - current))
-
         travel = abs(target - current)
         if travel > WRIST_EASE_MIN_DEG:
             direction = np.sign(target - current)

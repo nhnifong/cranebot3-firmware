@@ -262,8 +262,9 @@ class Plates(Maneuver):
             # the demux loop closes the file when it next sees a packet
             await asyncio.sleep(RECORDING_CLOSE_S)
             # the capture stream stays selected for the rest of the session; see
-            # collect_fingerplates
-            await ob.settle_wrist(start_wrist)
+            # collect_fingerplates. the sweeps alternate direction, so this can be a full
+            # turn back; eased so it doesn't set the gripper swinging.
+            await ob.ease_wrist(start_wrist)
 
         return writer.close(stream_start_ts or 0.0, packets=packets,
                             target_ranges=list(ranges), sweep_degrees=degrees,
