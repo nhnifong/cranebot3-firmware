@@ -10,6 +10,7 @@ import numpy as np
 import nf_robot.common.definitions as model_constants
 import nf_robot.generated.nf.config as nf_config
 from nf_robot.common.cv_common import get_inward_wall_normal, get_wall_escape_direction
+from nf_robot.common.image_motion import image_shift
 from nf_robot.common.util import fromnp, tonp
 from nf_robot.generated.nf import control, telemetry
 from nf_robot.host.maneuver import Maneuver, TiltWatch, command, startup_step
@@ -106,18 +107,9 @@ class Parking(Maneuver):
     def compare_to_reference(self, frame, name=None):
         """Where this gripper frame sits relative to a parking reference image.
 
-        Returns (dx, dy, confidence, inliers): how far the scene has slid in pixels between
-        the two, the share of feature matches that agree on that (0 to 1), and how many that
-        was.
-
-        Matched features rather than phase correlation, because the two frames are not one
-        image shifted. What is a hand's width under the camera sits in the same view as a
-        room several metres off, so a sideways move slides the near and far halves by quite
-        different amounts, and phase correlation - which can only answer with one shift for
-        the whole frame - reported peaks of 0.01 on real pairs that were obviously the same
-        corner of the room. RANSAC instead picks whichever depth the bulk of the matches
-        agree on and throws the rest out, passing people included. The bottom of the frame
-        is cropped off first, as the nearest and so worst-parallax part of the view.
+        Returns (dx, dy, confidence, inliers) as image_motion.image_shift does: how far the
+        scene has slid in pixels between the two, the share of feature matches that agree
+        on that (0 to 1), and how many that was.
         """
         name = name or self.data.reference_image
         if not name:
@@ -125,37 +117,8 @@ class Parking(Maneuver):
         reference = self._reference_gray(name)
         if reference is None:
             return None
-        live = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-        if live.shape != reference.shape:
-            live = cv2.resize(live, (reference.shape[1], reference.shape[0]),
-                              interpolation=cv2.INTER_AREA)
-        keep = slice(0, int(reference.shape[0] * PARK_COMPARE_CROP))
-        reference, live = reference[keep], live[keep]
-
-        detector = cv2.ORB_create(nfeatures=1500)
-        ref_kp, ref_desc = detector.detectAndCompute(reference, None)
-        live_kp, live_desc = detector.detectAndCompute(live, None)
-        if ref_desc is None or live_desc is None or len(ref_kp) < 8 or len(live_kp) < 8:
-            return 0.0, 0.0, 0.0, 0
-        matches = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True).match(ref_desc, live_desc)
-        if len(matches) < PARK_COMPARE_MIN_MATCHES:
-            return 0.0, 0.0, 0.0, 0
-        ref_pts = np.float32([ref_kp[m.queryIdx].pt for m in matches])
-        live_pts = np.float32([live_kp[m.trainIdx].pt for m in matches])
-        # partial affine: a translation, plus the rotation and scale that a wrist a degree
-        # out or a few centimetres of height put on top of it, which are not the answer but
-        # do have to be absorbed before the translation is right
-        transform, inliers = cv2.estimateAffinePartial2D(ref_pts, live_pts, method=cv2.RANSAC,
-                                                         ransacReprojThreshold=3.0)
-        if transform is None:
-            return 0.0, 0.0, 0.0, 0
-        # read the shift off at the middle of the frame rather than from the transform's own
-        # translation, which is measured at the corner and so carries the rotation with it
-        center = np.float32([reference.shape[1] / 2.0, reference.shape[0] / 2.0, 1.0])
-        moved = transform @ center
-        agreed = int(inliers.sum())
-        return (float(moved[0] - center[0]), float(moved[1] - center[1]),
-                agreed / len(matches), agreed)
+        return image_shift(reference, cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY),
+                           crop=PARK_COMPARE_CROP, min_matches=PARK_COMPARE_MIN_MATCHES)
 
     def _reference_gray(self, name):
         """A parking reference image in grayscale, or None if it cannot be read."""

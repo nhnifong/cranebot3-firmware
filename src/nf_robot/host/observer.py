@@ -49,6 +49,7 @@ import nf_robot.common.definitions as model_constants
 from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, control, common
 import nf_robot.generated.nf.config as nf_config
+from nf_robot.common.image_motion import image_shift, heading_error, mean_heading_error, wrap_angle
 from nf_robot.host.data_store import DataStore
 from nf_robot.host.stats import StatCounter
 from nf_robot.host.eyelet_calibration import (optimize_arp_anchors, analyze_diamond_data,
@@ -101,6 +102,7 @@ WRIST_EASE_MIN_DEG = 5.0
 DEFAULT_VELOCITY_KEY = 'ob:default'
 SWING_VELOCITY_KEY = 'ob:swingc'
 NUDGE_VELOCITY_KEY = 'ob:centering'
+SPIN_VELOCITY_KEY = 'ob:spin'
 # The step names set_startup_sequence starts with, which is what an --auto_start robot did
 # before the sequence was configurable.
 DEFAULT_STARTUP_SEQUENCE = ('unpark', 'pick_and_place', 'park')
@@ -119,7 +121,7 @@ BUILTIN_CONTROL_FIELDS = frozenset({
     'single_component_action', 'set_point', 'popup_ack', 'add_relay_creds',
 })
 BUILTIN_VERBS = frozenset({
-    'spincal', 'fingercal', 'eyelets', 'gripcards', 'stow', 'upright', 'swinglatency',
+    'spincal', 'spin-recover', 'fingercal', 'eyelets', 'gripcards', 'stow', 'upright', 'swinglatency',
     'swinglatencycal', 'polecal', 'reset_wrist', 'spind', 'sync_timezone', 'pull_logs',
     'untwist', 'setvar', 'savevar', 'spoollog', 'holdtension', 'tensionreg', 'findorigin', 'centerorigin',
     'servograsp', 'servowatch', 'servocenter', 'servoloop',
@@ -1088,6 +1090,31 @@ class AsyncObserver:
         logger.info(f'Gantry drifted {drift:.2f} m; recentering')
         await self._recenter_gantry(center_pos)
 
+    async def _verify_swing_cancellation(self, log_context, popup_context):
+        """Re-test swing cancellation against the geometry as it now stands, record the
+        verdict, and switch it on only if it passed. True if it did.
+
+        _measure_swing_residual induces a swing, runs cancellation, and reports the leftover
+        swing (or the safety cap / no reading if it pumped or drifted). Anything that isn't a
+        clearly-damped low residual leaves it OFF. The verdict outlives the process:
+        prefer_swing_cancellation reads it to decide whether it may turn cancellation on by
+        itself. log_context and popup_context say what changed, for the log and the popup.
+        """
+        center_pos = self.gantry_position()
+        residual, aborted = await self._measure_swing_residual(self.config.swing_latency, center_pos)
+        self.config.swing_cancellation_verified = (
+            residual is not None and residual < swing.VERIFIED_RESIDUAL_RAD)
+        save_config(self.config, self.config_path)
+        if self.config.swing_cancellation_verified:
+            logger.info(f'Swing cancellation damps {log_context} (residual {np.degrees(residual):.1f} deg); enabling.')
+            self.set_swing_cancellation(True)
+        else:
+            detail = aborted or (f'{np.degrees(residual):.1f} deg residual' if residual is not None else 'no reading')
+            logger.warning(f'Swing cancellation did not damp {log_context} ({detail}); leaving it OFF.')
+            self.send_ui(pop_message=telemetry.Popup(
+                message=f'Swing cancellation did not damp {popup_context} and was left OFF. Re-check the calibration before running.'))
+        return self.config.swing_cancellation_verified
+
     async def _measure_swing_residual(self, latency, center_pos):
         """Run swing cancellation at `latency` and return how much the swing still
         settles to (the residual), plus an abort reason or None.
@@ -1336,6 +1363,9 @@ class AsyncObserver:
         if item.action == "spincal":
             # as a motion task, so the stop button reaches it
             r = await self.invoke_motion_task(self.calibrate_spin())
+        if item.action == 'spin-recover':
+            # re-measures the spin with no origin card, by flying a slow circle
+            r = await self.invoke_motion_task(self.recover_spin())
         if item.action == 'fingercal':
             asyncio.create_task(self.calibrate_finger_servo())
         if item.action == 'eyelets':
@@ -2836,9 +2866,9 @@ class AsyncObserver:
         """The gripper camera's 3x3 intrinsic matrix."""
         return np.array(self.config.camera_cal_wide.intrinsic_matrix).reshape(3, 3)
 
-    def gripper_camera_to_room(self, vec):
+    def gripper_camera_to_room(self, vec, timestamp=None):
         """A vector in the gripper camera's optical frame (x right, y down, z along the axis),
-        rotated into the room frame.
+        rotated into the room frame, with the gripper as it was at timestamp (now, by default).
 
         Goes through the same chain as measure_gantry_minus_card, which is the one place that
         knows how the camera is mounted and which way the pole is leaning; guessing it from
@@ -2846,7 +2876,7 @@ class AsyncObserver:
         """
         in_gripper = Rotation.from_rotvec(model_constants.gripper_camera[0]).apply(vec)
         in_body = Rotation.from_euler('x', 90, degrees=True).apply(in_gripper)
-        return self.gripper_client.gripper_body_room_rotation().apply(in_body)
+        return self.gripper_client.gripper_body_room_rotation(timestamp=timestamp).apply(in_body)
 
     async def gripper_frame(self, after=None, timeout=3.0):
         """An RGB frame from the gripper camera captured after `after` (now, by default), or
@@ -3909,23 +3939,11 @@ class AsyncObserver:
                         name="Calibration",
                         current_action="Verifying swing cancellation is safe",
                     ))
-                    center_pos = np.array(self.pe.gant_pos, dtype=float)
-                    residual, aborted = await self._measure_swing_residual(self.config.swing_latency, center_pos)
-                    # The verdict outlives the process: prefer_swing_cancellation reads it to
-                    # decide whether it may turn cancellation on by itself. This is the last
-                    # word on it, taken against the refined geometry, so it overwrites what
-                    # the latency sweep earlier in this run concluded against the old one.
-                    self.config.swing_cancellation_verified = (
-                        residual is not None and residual < swing.VERIFIED_RESIDUAL_RAD)
-                    save_config(self.config, self.config_path)
-                    if self.config.swing_cancellation_verified:
-                        logger.info(f'Swing cancellation damps with refined geometry (residual {np.degrees(residual):.1f} deg); enabling.')
-                        self.set_swing_cancellation(True)
-                    else:
-                        detail = aborted or (f'{np.degrees(residual):.1f} deg residual' if residual is not None else 'no reading')
-                        logger.warning(f'Swing cancellation did not damp with refined geometry ({detail}); leaving it OFF.')
-                        self.send_ui(pop_message=telemetry.Popup(
-                            message='Swing cancellation did not damp after calibration refinement and was left OFF. Re-check the calibration before running.'))
+                    # This is the last word on the verdict, taken against the refined geometry,
+                    # so it overwrites what the latency sweep earlier in this run concluded
+                    # against the old one.
+                    await self._verify_swing_cancellation('with refined geometry',
+                                                          'after calibration refinement')
                 else:
                     logger.warning(f'Only {len(gripper_obs)} of {REQUIRED_GRIPPER_CARDS} gripper card observations; need all four to refine. Skipping 3rd pass.')
                     # geometry is unchanged, so no damping re-test is needed to restore it, and
@@ -4042,6 +4060,204 @@ class AsyncObserver:
         finally:
             # left set, the client would go on leaving the room spin out of every heading
             client.calibrating_room_spin = False
+
+    async def recover_spin(self):
+        """Re-measure frame_room_spin without the origin card. This is a motion task.
+
+        get_spin is the wrist angle plus frame_room_spin, so a wrong frame_room_spin turns
+        every camera direction the robot reports by the same angle. Moving the gantry and
+        watching the floor slide the other way in the gripper camera measures that angle
+        directly: the slide, turned into the room frame with the spin as it stands, points
+        along the gantry's actual motion rotated by the error.
+
+        The gantry flies a slow circle rather than straight legs, since a corner kicks the
+        pole into a swing and a steady turn does not, and a circle takes every heading so
+        nothing that favours one direction survives the average. It goes round once each
+        way: a lag between frames and positions reads as a heading error of opposite sign
+        on the two loops and cancels, where a spin error reads the same on both.
+
+        Wants floor with some texture under it, the laser reading 0.25 to 2m, and room for a
+        40cm circle beside the gantry, on the side towards the middle of the room. Swing
+        cancellation is switched off first, since with the spin wrong it pumps swing rather
+        than damping it. Once the spin is corrected it is re-tested as full calibration does,
+        which records swing_cancellation_verified and turns it on only if it damps.
+        """
+        RADIUS_M = 0.20
+        SPEED_MPS = 0.03
+        RAMP_S = 6.0                   # easing into and out of the circle
+        SETTLE_S = 3.0
+        RANGE_M = (0.25, 2.0)          # laser range the floor texture is usable over
+        MIN_CONFIDENCE = 0.5           # share of feature matches that must agree
+        MIN_MOVE_M = 0.004             # a frame pair the gantry barely moved over says little
+        OUTLIER_RAD = np.radians(30)   # pairs this far from their loop's consensus are dropped
+        MIN_PAIRS = 10                 # per loop
+        MAX_LOOP_DISAGREEMENT_RAD = np.radians(20)
+
+        client = self.gripper_client
+        if client is None or client.last_output_frame is None:
+            logger.warning('Spin recovery needs a connected gripper with its camera running')
+            return None
+        laser = self.laser_range()
+        if laser is None or not RANGE_M[0] <= laser <= RANGE_M[1]:
+            self.send_ui(pop_message=telemetry.Popup(
+                message=f'Spin recovery needs the gripper {RANGE_M[0]:.2f} to {RANGE_M[1]:.1f}m '
+                        f'above the floor; the laser reads {laser}.'))
+            return None
+
+        start = self.gantry_position()
+        room_middle = np.mean(self.anchor_points()[:, :2], axis=0)
+        inward = room_middle - start[:2]
+        inward = inward / np.linalg.norm(inward) if np.linalg.norm(inward) > 1e-3 else np.array([1.0, 0.0])
+        center = start[:2] + inward * RADIUS_M
+        rim = [center + RADIUS_M * np.array([np.cos(a), np.sin(a)])
+               for a in np.linspace(0, 2 * np.pi, 16, endpoint=False)]
+        if not all(self.inside_work_area_2d(p) for p in rim):
+            self.send_ui(pop_message=telemetry.Popup(
+                message='Not enough room for spin recovery here; move the gantry further '
+                        'into the room and try again.'))
+            return None
+
+        before = self.config.gripper.frame_room_spin
+        try:
+            self.set_swing_cancellation(False)
+            # fully open is fully retracted, out of the camera's view
+            await self.settle_fingers(-90)
+            await asyncio.sleep(SETTLE_S)
+
+            loop_errors = []
+            for turn in (1, -1):
+                track, pairs = await self._fly_spin_circle(start, center, RADIUS_M, turn,
+                                                           SPEED_MPS, RAMP_S)
+                errors = self._spin_errors(track, pairs, MIN_CONFIDENCE, MIN_MOVE_M)
+                if len(errors) < MIN_PAIRS:
+                    raise RuntimeError(f'only {len(errors)} usable frame pairs going round '
+                                       f'{"counterclockwise" if turn > 0 else "clockwise"}; '
+                                       f'the floor may have too little texture')
+                consensus, _ = mean_heading_error(errors)
+                kept = [e for e in errors if abs(wrap_angle(e - consensus)) < OUTLIER_RAD]
+                mean, spread = mean_heading_error(kept)
+                logger.info(f'Spin recovery, {"counterclockwise" if turn > 0 else "clockwise"}: '
+                            f'error {np.degrees(mean):+.1f} deg from {len(kept)} of '
+                            f'{len(errors)} frame pairs, within {np.degrees(spread):.1f} deg')
+                loop_errors.append(mean)
+                self.slow_stop_all_spools()
+                await asyncio.sleep(SETTLE_S)
+
+            disagreement = abs(wrap_angle(loop_errors[0] - loop_errors[1]))
+            if disagreement > MAX_LOOP_DISAGREEMENT_RAD:
+                raise RuntimeError(f'the two loops disagree by {np.degrees(disagreement):.0f} '
+                                   f'degrees, so neither can be trusted')
+            correction, _ = mean_heading_error(loop_errors)
+        except RuntimeError as e:
+            logger.warning(f'Spin recovery failed: {e}')
+            self.send_ui(pop_message=telemetry.Popup(message=f'Spin recovery failed: {e}'))
+            return None
+        finally:
+            await self.move_direction_speed(np.zeros(3), 0, key=SPIN_VELOCITY_KEY)
+            self.slow_stop_all_spools()
+
+        self.config.gripper.frame_room_spin = wrap_angle(before + correction)
+        save_config(self.config, self.config_path)
+        logger.info(f'Spin recovered: frame_room_spin {np.degrees(before):.1f} -> '
+                    f'{np.degrees(self.config.gripper.frame_room_spin):.1f} deg')
+
+        # the same test full calibration ends with, since the spin is what swing
+        # cancellation steers by
+        verified = await self._verify_swing_cancellation('with the recovered spin',
+                                                         'after spin recovery')
+        self.send_ui(pop_message=telemetry.Popup(
+            message=f'Spin corrected by {np.degrees(correction):+.1f} degrees. '
+                    + ('Swing cancellation damps with it and has been turned on. ' if verified else '')
+                    + 'Running this again should find almost nothing left to correct.'))
+        return correction
+
+    async def _fly_spin_circle(self, start, center, radius, turn, speed, ramp):
+        """Fly once round a horizontal circle through start, easing in and out, while pairing
+        up gripper frames. turn is 1 for counterclockwise, -1 for clockwise.
+
+        Returns (track, pairs): track is (time, gantry position) every control step, and
+        pairs is (earlier capture time, later capture time, dx, dy, confidence, inliers,
+        laser range) for consecutive frames, the slide measured by image_shift.
+        """
+        LOOP_S = 0.1
+        FRAME_GAP_S = 0.4              # enough travel between frames for a measurable slide
+        TRACK_GAIN = 0.5               # 1/s pulling the gantry back onto the circle
+
+        track, pairs = [], []
+
+        async def pair_frames():
+            last_ts, last_gray = await self.gripper_capture(timeout=2.0)
+            if last_gray is not None:
+                last_gray = cv2.cvtColor(last_gray, cv2.COLOR_RGB2GRAY)
+            while True:
+                await asyncio.sleep(FRAME_GAP_S)
+                ts, frame = await self.gripper_capture(after=last_ts or 0, timeout=2.0)
+                if frame is None:
+                    continue
+                gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+                if last_gray is not None:
+                    dx, dy, confidence, inliers = await asyncio.to_thread(image_shift, last_gray, gray)
+                    pairs.append((last_ts, ts, dx, dy, confidence, inliers, self.laser_range()))
+                last_ts, last_gray = ts, gray
+
+        start_angle = np.arctan2(start[1] - center[1], start[0] - center[0])
+        total, ramp = eased_move_time(2 * np.pi * radius, speed, ramp)
+        sampler = asyncio.create_task(pair_frames())
+        travelled = 0.0
+        began = last = time.monotonic()
+        try:
+            while True:
+                now = time.monotonic()
+                elapsed = now - began
+                if elapsed >= total:
+                    break
+                current = speed * eased_speed(elapsed, total, ramp)
+                travelled += current * (now - last)
+                last = now
+                angle = start_angle + turn * travelled / radius
+                on_circle = center + radius * np.array([np.cos(angle), np.sin(angle)])
+                along = turn * np.array([-np.sin(angle), np.cos(angle)])
+                here = self.gantry_position()
+                track.append((time.time(), here))
+                velocity = np.array([*(along * current + TRACK_GAIN * (on_circle - here[:2])),
+                                     TRACK_GAIN * (start[2] - here[2])])
+                await self.move_direction_speed(velocity, None, here, downward_bias=0,
+                                                key=SPIN_VELOCITY_KEY)
+                await asyncio.sleep(LOOP_S)
+        finally:
+            sampler.cancel()
+            await asyncio.gather(sampler, return_exceptions=True)
+            await self.move_direction_speed(np.zeros(3), 0, key=SPIN_VELOCITY_KEY)
+        return track, pairs
+
+    def _spin_errors(self, track, pairs, min_confidence, min_move_m):
+        """The heading error of each usable frame pair: the counterclockwise angle from the
+        gantry's actual motion between the two captures to the motion the floor's slide
+        implies, turned into the room frame with frame_room_spin as it stands."""
+        if len(track) < 2:
+            return []
+        times = np.array([t for t, _ in track])
+        positions = np.array([p for _, p in track])
+
+        def position_at(t):
+            return np.array([np.interp(t, times, positions[:, i]) for i in range(3)])
+
+        intrinsics = self.gripper_camera_intrinsics()
+        errors = []
+        for t_a, t_b, dx, dy, confidence, inliers, laser in pairs:
+            if confidence < min_confidence or laser is None:
+                continue
+            if t_a < times[0] or t_b > times[-1]:
+                continue
+            moved = (position_at(t_b) - position_at(t_a))[:2]
+            if np.linalg.norm(moved) < min_move_m:
+                continue
+            # a camera that moves by t sees the scene slide by -f*t/depth
+            camera_move = np.array([-dx * laser / intrinsics[0][0],
+                                    -dy * laser / intrinsics[1][1], 0.0])
+            implied = self.gripper_camera_to_room(camera_move, timestamp=t_b)[:2]
+            errors.append(heading_error(moved, implied))
+        return errors
 
     def record_drop_position(self):
         """Save where the gantry is standing now as the place to drop things, and route there.
