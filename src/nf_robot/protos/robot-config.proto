@@ -208,6 +208,11 @@ message StringmanPilotConfig {
   // name. The value is whatever the maneuver chose to store; nf_robot never reads it.
   // Maneuvers that ship with nf_robot keep typed fields of their own instead.
   map<string, string> maneuver_settings = 26;
+
+  // Onboard config overrides pushed to every component each time it connects, keyed by
+  // the component's own config variable name. Values are kept as the text that was
+  // entered and sent as a number when they parse as one.
+  map<string, string> component_vars = 27;
 }
 
 // Tunable constants used by AsyncObserver.pick_and_place_loop

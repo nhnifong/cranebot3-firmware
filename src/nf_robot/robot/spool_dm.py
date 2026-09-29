@@ -39,7 +39,7 @@ default_conf_dm = {
     # the floor while the motion controller is paying line out, which is also where the soft mute
     # stops the payout. lower than TENSION_FLOOR_N so a nearly slack line can keep paying out
     # and let the gantry reach a wall instead of holding it off.
-    'PAYOUT_TENSION_FLOOR_N': 0.0,
+    'PAYOUT_TENSION_FLOOR_N': 0.05,
     # proportional gain converting a tension error (N) into a correction line speed (m/s).
     'TENSION_KP': 0.3,
     # clamp on the magnitude of the tension correction line speed in meters per second.

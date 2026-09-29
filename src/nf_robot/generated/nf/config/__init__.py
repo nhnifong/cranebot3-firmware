@@ -460,6 +460,19 @@ class StringmanPilotConfig(betterproto2.Message):
     Maneuvers that ship with nf_robot keep typed fields of their own instead.
     """
 
+    component_vars: "dict[str, str]" = betterproto2.field(
+        27,
+        betterproto2.TYPE_MAP,
+        map_meta=betterproto2.map_meta(
+            betterproto2.TYPE_STRING, betterproto2.TYPE_STRING
+        ),
+    )
+    """
+    Onboard config overrides pushed to every component each time it connects, keyed by
+    the component's own config variable name. Values are kept as the text that was
+    entered and sent as a number when they parse as one.
+    """
+
 
 default_message_pool.register_message(
     "nf.config", "StringmanPilotConfig", StringmanPilotConfig

@@ -51,6 +51,14 @@ sam_confidence_cutoff = 0.75
 VIDEO_LATENCY_SAMPLES = 120
 
 
+def parse_config_var(text):
+    """A config variable value as entered on the command line: a number when it reads as one."""
+    try:
+        return float(text)
+    except ValueError:
+        return text
+
+
 class ComponentClient:
     def __init__(self, address, port, datastore, ob, pool, stat, telemetry_env):
         self.address = address
@@ -141,6 +149,10 @@ class ComponentClient:
         self.conn_status = None # subclass needs to set this in init
         self.last_known_centers = {}
         self.last_known_half_extents = {}  # tag name -> apparent half-size, sizes the search crop
+
+    def saved_config_vars(self):
+        """The config overrides saved with savevar, ready to send as set_config_vars."""
+        return {k: parse_config_var(v) for k, v in self.config.component_vars.items()}
 
     def send_conn_status(self):
         self.ob.send_ui(component_conn_status=copy.deepcopy(self.conn_status))

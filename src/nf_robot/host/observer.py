@@ -54,7 +54,7 @@ from nf_robot.host.stats import StatCounter
 from nf_robot.host.eyelet_calibration import (optimize_arp_anchors, analyze_diamond_data,
                                              refinement_is_plausible, estimate_cam_tilts,
                                              DIAMOND_SIZE)
-from nf_robot.host.component_client import max_origin_detections
+from nf_robot.host.component_client import max_origin_detections, parse_config_var
 from nf_robot.host.arp_gripper_client import (ArpeggioGripperClient, rotate_vector,
                                               ROUTE_TAG_MAX_AGE_S, CAPTURE_RESOLUTION_SIZE,
                                               OPEN, CLOSED, RANGE_MAX_AGE_S)
@@ -120,7 +120,7 @@ BUILTIN_CONTROL_FIELDS = frozenset({
 BUILTIN_VERBS = frozenset({
     'spincal', 'fingercal', 'eyelets', 'gripcards', 'stow', 'upright', 'swinglatency',
     'swinglatencycal', 'polecal', 'reset_wrist', 'spind', 'sync_timezone', 'pull_logs',
-    'untwist', 'setvar', 'holdtension', 'tensionreg', 'findorigin', 'centerorigin',
+    'untwist', 'setvar', 'savevar', 'holdtension', 'tensionreg', 'findorigin', 'centerorigin',
     'servograsp', 'servowatch', 'servocenter', 'servoloop',
 })
 # (seconds) how far a wrist record may be from a frame's capture time and still describe
@@ -1373,23 +1373,25 @@ class AsyncObserver:
             parts = item.action.split()
             if len(parts)==2 and parts[0]=='untwist':
                 r = await self.gripper_client.send_commands({'untwist': int(parts[1])})
-        if item.action.startswith('setvar '):
+        if item.action.startswith(('setvar ', 'savevar ')):
             # 'setvar KEY VALUE' broadcasts a live config override to every component.
             # used for bench tuning of onboard loop constants without restarting firmware.
+            # 'savevar KEY VALUE' does the same and keeps it in the robot config, so every
+            # component is sent it again each time it connects.
             parts = item.action.split()
             if len(parts) == 3:
-                key = parts[1]
-                try:
-                    value = float(parts[2])
-                except ValueError:
-                    value = parts[2]
+                verb, key, text = parts
+                value = parse_config_var(text)
+                if verb == 'savevar':
+                    self.config.component_vars[key] = text
+                    save_config(self.config, self.config_path)
                 logger.info(f'Broadcasting set_config_vars {key}={value} to all components')
                 await asyncio.gather(*[
                     client.send_commands({'set_config_vars': {key: value}})
                     for client in self.bot_clients.values()
                 ])
             else:
-                logger.warning(f'invalid setvar command, expected "setvar KEY VALUE": {item.action}')
+                logger.warning(f'invalid {parts[0]} command, expected "{parts[0]} KEY VALUE": {item.action}')
         if item.action.startswith('holdtension '):
             # 'holdtension LINE VALUE|off' engages onboard two-sided tension hold on one
             # arpeggio line, or clears it with 'off'. for bench testing hold mode.

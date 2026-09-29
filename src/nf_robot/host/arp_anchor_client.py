@@ -47,8 +47,7 @@ class ArpeggioAnchorClient(ComponentClient):
         )
 
     async def send_config(self):
-        anchor_config_vars = {}
-        # TODO
+        anchor_config_vars = self.saved_config_vars()
         if len(anchor_config_vars) > 0:
             await self.websocket.send(json.dumps({'set_config_vars': anchor_config_vars}))
 

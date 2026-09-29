@@ -277,10 +277,12 @@ class ArpeggioGripperClient(ComponentClient):
         """Push host-side settings on every connect, before the gripper is used.
 
         The gripper boots with a default pole length, so a robot wearing the other pole
-        fits its swing model at the wrong frequency until this arrives.
+        fits its swing model at the wrong frequency until this arrives. Saved overrides go
+        last so a value set with savevar wins over the host's own.
         """
         await self.websocket.send(json.dumps({'set_config_vars': {
             'POLE_LENGTH': self.pendulum.length,
+            **self.saved_config_vars(),
         }}))
 
     def get_gripper_rvec(self, timestamp=None):
