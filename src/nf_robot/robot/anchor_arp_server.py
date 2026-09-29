@@ -292,6 +292,9 @@ class AnchorArpServer(RobotComponentServer):
             if len(meas) > 0:
                 meas = meas[:50]
             self.update[f'spool{i}'] = meas
+            diag = spool.popDiagnostics()
+            if diag:
+                self.update[f'spool{i}_diag'] = diag
 
     def startOtherTasks(self):
         return list([

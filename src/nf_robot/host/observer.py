@@ -55,6 +55,7 @@ from nf_robot.host.eyelet_calibration import (optimize_arp_anchors, analyze_diam
                                              refinement_is_plausible, estimate_cam_tilts,
                                              DIAMOND_SIZE)
 from nf_robot.host.component_client import max_origin_detections, parse_config_var
+from nf_robot.host.derail_detector import DerailDetector
 from nf_robot.host.arp_gripper_client import (ArpeggioGripperClient, rotate_vector,
                                               ROUTE_TAG_MAX_AGE_S, CAPTURE_RESOLUTION_SIZE,
                                               OPEN, CLOSED, RANGE_MAX_AGE_S)
@@ -120,7 +121,7 @@ BUILTIN_CONTROL_FIELDS = frozenset({
 BUILTIN_VERBS = frozenset({
     'spincal', 'fingercal', 'eyelets', 'gripcards', 'stow', 'upright', 'swinglatency',
     'swinglatencycal', 'polecal', 'reset_wrist', 'spind', 'sync_timezone', 'pull_logs',
-    'untwist', 'setvar', 'savevar', 'holdtension', 'tensionreg', 'findorigin', 'centerorigin',
+    'untwist', 'setvar', 'savevar', 'spoollog', 'holdtension', 'tensionreg', 'findorigin', 'centerorigin',
     'servograsp', 'servowatch', 'servocenter', 'servoloop',
 })
 # (seconds) how far a wrist record may be from a frame's capture time and still describe
@@ -138,6 +139,8 @@ VIDEO_LATENCY_S = 0.25
 # of the gantry marker before that is called a fault rather than a gap.
 VISIBILITY_POLL_S = 1.0
 UNSEEN_LIMIT_S = 40.0
+# (s) of spool records monitor_spools keeps, to write out with a derailment
+SPOOL_HISTORY_S = 60.0
 
 USER_TARGETS_DIR = "user_targets_data"
 METADATA_PATH = os.path.join(USER_TARGETS_DIR, "metadata.jsonl")
@@ -318,6 +321,13 @@ class AsyncObserver:
         self.bot_clients = {}
         # all connected anchors keyed by anchor num
         self.anchors = {}
+        # per line, the last (time, value, 'aim'|'jog'|'stop') sent to its spool, for the spool log
+        self.line_speed_cmds = [None] * N_LINES
+        # the last SPOOL_HISTORY_S of what monitor_spools read, written out if it sees a derailment
+        self.spool_history = deque(maxlen=int(SPOOL_HISTORY_S / 0.1))
+        # the open file start_spool_log is writing everything to, if any
+        self.spool_log = None
+        self.spool_monitor_task = None
         # convenience reference to gripper client
         self.gripper_client = None
         # TODO allow a command line argument to override the config file path
@@ -1392,6 +1402,12 @@ class AsyncObserver:
                 ])
             else:
                 logger.warning(f'invalid {parts[0]} command, expected "{parts[0]} KEY VALUE": {item.action}')
+        if item.action.startswith('spoollog'):
+            # 'spoollog [off]' starts or stops the spool diagnostic log.
+            if item.action.split()[-1] == 'off':
+                self.stop_spool_log()
+            else:
+                self.start_spool_log()
         if item.action.startswith('holdtension '):
             # 'holdtension LINE VALUE|off' engages onboard two-sided tension hold on one
             # arpeggio line, or clears it with 'off'. for bench testing hold mode.
@@ -2128,6 +2144,8 @@ class AsyncObserver:
         self.slow_stop_all_spools()
 
     def slow_stop_all_spools(self):
+        now = time.time()
+        self.line_speed_cmds = [(now, 0.0, 'stop')] * N_LINES
         for name, client in self.bot_clients.items():
             # Slow stop all spools. gripper too
             asyncio.create_task(client.slow_stop_spool())
@@ -2849,6 +2867,142 @@ class AsyncObserver:
         """Command the wrist to angle (degrees, 0 to 1080) without waiting."""
         if self.gripper_client is not None:
             await self.gripper_client.send_commands({'set_wrist_angle': float(angle)})
+
+    def start_spool_log(self, path=None):
+        """Also write everything monitor_spools sees to a JSON Lines file until stop_spool_log:
+        every line record, where the gantry is, and what each line was told to do. Turns on the
+        anchors' SPOOL_DIAG while it runs, which adds the raw torque and the soft mute's
+        decisions from anchors whose firmware has it."""
+        if self.spool_log is not None:
+            logger.info('spool log already running')
+            return
+        if path is None:
+            path = f'spool_diag_{int(time.time())}.jsonl'
+        self.spool_log = open(path, 'w')
+        self.spool_log.write(json.dumps({
+            'header': True,
+            'start': time.time(),
+            'anchor_points': np.asarray(self.pe.anchor_points, dtype=float).tolist(),
+            'anchors_connected': sorted(self.anchors),
+            'component_vars': dict(self.config.component_vars),
+            'line_row': ['t', 'length_m', 'speed_mps', 'tension_n'],
+            'diag_row': ['t', 'torque_nm', 'hold_nm_motor_frame', 'motor_vel_rad_s',
+                         'meters_per_rev', 'aim_mps', 'mute', 'wanted_mps', 'tension_reg',
+                         'mute_tension_n'],
+        }) + '\n')
+        asyncio.create_task(self._set_spool_diag(True))
+        logger.info(f'Spool log writing to {path}')
+
+    def stop_spool_log(self):
+        if self.spool_log is None:
+            return
+        logger.info(f'Spool log stopped, {self.spool_log.name}')
+        self.spool_log.close()
+        self.spool_log = None
+        asyncio.create_task(self._set_spool_diag(False))
+
+    def _report_derailed_spool(self, line_no, moved, resisted):
+        """Stop whatever is moving the gantry, tell the operator which spool has derailed, and
+        write out the spool history that led up to it.
+        Carrying on pays out more line from the other spools against one that cannot follow."""
+        spool = 'upper (direct)' if line_no % 2 == 0 else 'lower (indirect)'
+        logger.warning(f'Line {line_no} looks derailed: paid out {moved:.0%} of what it was told '
+                       f'to, {resisted:.0%} of its payout records resisted. Stopping.')
+        # not awaited, so the monitor keeps recording while the motion task winds down
+        asyncio.create_task(self.stop_all())
+        self.send_ui(pop_message=telemetry.Popup(message=(
+            f'The {spool} spool on anchor {line_no // 2} appears to have lost its line: it cannot '
+            f'pay out. All motion has been stopped. Check that the line is seated on the spool.')))
+        now = time.time()
+        header = {
+            'header': True,
+            't': now,
+            'line': line_no,
+            'moved_fraction': moved,
+            'resisted_fraction': resisted,
+            'line_row': ['t', 'speed_mps', 'tension_n'],
+            'cmd': 'aim speed in m/s the line was last told, null if unknown or a jog',
+        }
+        asyncio.create_task(asyncio.to_thread(
+            self._write_derail_event, f'derail_event_{int(now * 1000)}.jsonl', header,
+            list(self.spool_history)))
+
+    @staticmethod
+    def _write_derail_event(path, header, history):
+        with open(path, 'w') as f:
+            f.write(json.dumps(header) + '\n')
+            for tick in history:
+                f.write(json.dumps(tick) + '\n')
+        logger.info(f'Wrote derailment event to {path}')
+
+    async def _set_spool_diag(self, on):
+        await asyncio.gather(*[
+            client.send_commands({'set_config_vars': {'SPOOL_DIAG': 1 if on else 0}})
+            for client in self.anchors.values()
+        ], return_exceptions=True)
+
+    async def monitor_spools(self, period_s=0.1):
+        """Watch every spool for having lost its line, for as long as the observer runs.
+
+        Keeps the last SPOOL_HISTORY_S of what the detector reads, trimmed to what it uses, so
+        a detection can be written out with what led up to it. With a spool log open, also
+        writes everything to that.
+        """
+        detector = DerailDetector(N_LINES)
+        while True:
+            await asyncio.sleep(period_s)
+            now = time.time()
+            tick = {'t': now, 'lines': []}
+            trips = []
+            verbose = [] if self.spool_log is not None else None
+            for line_no in range(N_LINES):
+                client = self.anchors.get(line_no // 2)
+                rows, diag = [], []
+                if client is not None:
+                    q_rows = client.spool_log_rows[line_no % 2]
+                    q_diag = client.spool_log_diag[line_no % 2]
+                    while q_rows:
+                        rows.append(q_rows.popleft())
+                    while q_diag:
+                        diag.append(q_diag.popleft())
+                cmd = self.line_speed_cmds[line_no]
+                cmd_speed = None if cmd is None or cmd[2] == 'jog' else cmd[1]
+                detector.add(line_no, rows, cmd_speed)
+                derailed, moved, resisted = detector.verdict(line_no)
+                tick['lines'].append({
+                    'cmd': cmd_speed,
+                    'rows': [(r[0], r[2], r[3]) for r in rows],
+                    'derailed': derailed,
+                })
+                if verbose is not None:
+                    verbose.append({'cmd': cmd, 'rows': rows, 'diag': diag, 'derailed': derailed})
+                if derailed:
+                    detector.reset(line_no)
+                    trips.append((line_no, moved, resisted))
+            self.spool_history.append(tick)
+            for trip in trips:
+                self._report_derailed_spool(*trip)
+            if verbose is not None:
+                self._write_spool_log_tick(now, verbose)
+
+    def _write_spool_log_tick(self, now, lines):
+        def arr(v):
+            return None if v is None else np.asarray(v, dtype=float).tolist()
+        gant_pos = np.asarray(self.pe.gant_pos, dtype=float)
+        geom = np.linalg.norm(np.asarray(self.pe.anchor_points) - gant_pos, axis=1)
+        for line_no, line in enumerate(lines):
+            line['geom_len'] = float(geom[line_no])
+        self.spool_log.write(json.dumps({
+            't': now,
+            'gant_pos': arr(gant_pos),
+            'gant_vel': arr(self.pe.gant_vel),
+            'hang_pos': arr(self.pe.hang_pos),
+            'visual_pos': arr(self.pe.visual_pos),
+            'slack_lines': [bool(x) for x in self.pe.slack_lines],
+            'holding': bool(self.pe.holding),
+            'lines': lines,
+        }) + '\n')
+        self.spool_log.flush()
 
     def save_config(self):
         """Write the robot config out. A maneuver writes only its own field before calling it."""
@@ -4367,6 +4521,7 @@ class AsyncObserver:
 
         self.passive_safety_task = asyncio.create_task(self.passive_safety())
         self.gantry_visibility_task = asyncio.create_task(self.monitor_gantry_visibility())
+        self.spool_monitor_task = asyncio.create_task(self.monitor_spools())
         self._clear_item_task = asyncio.create_task(self._watch_for_clear_item())
 
         self.telemetry.start_cloud_link()
@@ -4531,6 +4686,10 @@ class AsyncObserver:
         if self.gantry_visibility_task is not None:
             self.gantry_visibility_task.cancel()
             tasks.append(self.gantry_visibility_task)
+        if self.spool_monitor_task is not None:
+            self.spool_monitor_task.cancel()
+            tasks.append(self.spool_monitor_task)
+        self.stop_spool_log()
 
         try:
             result = await asyncio.gather(*tasks)
@@ -4797,6 +4956,7 @@ class AsyncObserver:
         # send the line speed to the client that controls that line
         # when jog==True, speed is interpreted as a length in meters by which to lengthen the line
         command = 'jog' if jog else 'aim_speed'
+        self.line_speed_cmds[line_no] = (time.time(), float(speed), 'jog' if jog else 'aim')
         if line_no//2 in self.anchors:
             spool_no = line_no%2
             # we consider the lower line number to be the direct line

@@ -51,4 +51,5 @@ previews/
 # gripper camera views of the parking hook, written by record_park
 park_reference/
 MUJOCO_LOG.TXT
-
+spool_diag_*.jsonl
+derail_event_*.jsonl

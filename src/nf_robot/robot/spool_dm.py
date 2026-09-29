@@ -40,6 +40,13 @@ default_conf_dm = {
     # stops the payout. lower than TENSION_FLOOR_N so a nearly slack line can keep paying out
     # and let the gantry reach a wall instead of holding it off.
     'PAYOUT_TENSION_FLOOR_N': 0.05,
+    # most friction (N.m) the soft mute credits the tension reading with. Paying out a slack line
+    # takes only the motor's moving friction, measured at 0.007 to 0.027 N.m across four spools,
+    # while its holding torque, which the reported tension credits, ran 0.011 to 0.033. Crediting
+    # all of that made a slack spool read as up to half a newton of tension, so the mute let it
+    # keep paying out until the line came off. Crediting no more than the loosest spool's moving
+    # friction makes the mute's reading a lower bound on the real tension.
+    'PAYOUT_FRICTION_CREDIT_NM': 0.005,
     # proportional gain converting a tension error (N) into a correction line speed (m/s).
     'TENSION_KP': 0.3,
     # clamp on the magnitude of the tension correction line speed in meters per second.
@@ -53,6 +60,9 @@ default_conf_dm = {
     # Tension beyond this limit (even without a connection to a controller) will disable motor torque.
     # Newtons
     'NO_CONN_TENSION_LIMIT': 40.0,
+    # when nonzero, every loop also records the raw torque and what the regulator did with it,
+    # sent as spool<n>_diag. off by default: it roughly triples what each anchor sends.
+    'SPOOL_DIAG': 0,
 }
 
 class DamiaoSpoolController:
@@ -88,6 +98,8 @@ class DamiaoSpoolController:
         if hold_torque is None:
             hold_torque = read_hold_torque(getattr(motor, 'motor_id', None))
         self.hold_torque = hold_torque
+        # holding torque after paying out, in this spool's frame, where it is positive
+        self.payout_hold = abs(hold_torque[0] if direction > 0 else hold_torque[1])
         self.last_turn = 0  # +1 or -1, motor frame. 0 until the shaft has turned
         logging.info(f'motor {getattr(motor, "motor_id", "?")} hold torque {hold_torque} N.m')
         # spiral always dir -1, we're hiding that from it.
@@ -116,6 +128,7 @@ class DamiaoSpoolController:
 
         # Recording and Loops
         self.record = []
+        self.diag = []
         self.run_spool_loop = True # permanent
         self.spool_pause = False
         self._torque_disabled = False
@@ -172,6 +185,12 @@ class DamiaoSpoolController:
         copy_record = self.record
         self.record = []
         return copy_record
+
+    def popDiagnostics(self):
+        """Return the SPOOL_DIAG rows recorded since the last call. newest at the end."""
+        copy_diag = self.diag
+        self.diag = []
+        return copy_diag
 
     def fastStop(self):
         # fast stop is permanent.
@@ -321,6 +340,9 @@ class DamiaoSpoolController:
 
                 # line speed commanded by the motion controller (meters per second)
                 wanted_line_speed = self.aim_line_speed
+                applied_mute = 1.0
+                credit = min(self.conf['PAYOUT_FRICTION_CREDIT_NM'], self.payout_hold)
+                mute_tension = (-(smooth_torque - credit) * twopi) / self.meters_per_rev
 
                 if self.tension_reg_enabled:
                     paying_out = wanted_line_speed > 0
@@ -329,10 +351,12 @@ class DamiaoSpoolController:
                     # 1) soft mute: never pay out below the payout floor, smoothed so the velocity
                     #    eases to zero instead of stepping. prevents birdsnest. gated by a flag so
                     #    it can be A/B tested live (it keeps the would-be-slack cable taut, which
-                    #    over-constrains the gantry and warps open-loop moves).
+                    #    over-constrains the gantry and warps open-loop moves). judged on
+                    #    mute_tension, not last_tension; see PAYOUT_FRICTION_CREDIT_NM.
                     if self.conf['SOFT_MUTE_ENABLED']:
-                        mute = 0 if (paying_out and self.last_tension < payout_floor) else 1
+                        mute = 0 if (paying_out and mute_tension < payout_floor) else 1
                         smooth_mute = mute * sf + smooth_mute * (1 - sf)
+                        applied_mute = smooth_mute
                         wanted_line_speed *= smooth_mute
 
                     # 2) active tension correction toward a target, with a hysteresis band.
@@ -359,6 +383,15 @@ class DamiaoSpoolController:
                 # convert commanded line speed in meters per second to motor velocity in
                 # radians per second based on current circumfrence; motor enforces accel limit
                 wanted_motor_vel = wanted_line_speed / self.meters_per_rev * twopi
+
+                if self.conf['SPOOL_DIAG']:
+                    # torque and velocity in this spool's frame, hold in the motor's
+                    self.diag.append((loop_start, motor_torque, hold, motor_vel, self.meters_per_rev,
+                                      self.aim_line_speed, applied_mute, wanted_line_speed,
+                                      int(self.tension_reg_enabled), mute_tension))
+                    overflow = len(self.diag) - self.conf['DATA_LEN']
+                    if overflow > 0:
+                        del self.diag[:overflow]
 
                 self.motor.send_cmd_vel(target_velocity=wanted_motor_vel*self.direction)
 

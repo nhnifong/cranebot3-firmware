@@ -40,6 +40,10 @@ class ArpeggioAnchorClient(ComponentClient):
         self.raw_gant_poses = deque(maxlen=24)
         self.gantry_pos_sightings = deque(maxlen=100)
         self.gantry_pos_sightings_lock = threading.RLock()
+        # per spool, what the observer's monitor_spools has not taken yet: the line records,
+        # and the onboard SPOOL_DIAG rows when the anchor is sending them
+        self.spool_log_rows = [deque(maxlen=5000), deque(maxlen=5000)]
+        self.spool_log_diag = [deque(maxlen=5000), deque(maxlen=5000)]
 
         self.updatePoseAndEye(
             poseProtoToTuple(self.config.anchors[anchor_num].pose),
@@ -65,6 +69,9 @@ class ArpeggioAnchorClient(ComponentClient):
             self.storeSpoolData(0, update['spool0'])
         if 'spool1' in update: # low spool (indirect line)
             self.storeSpoolData(1, update['spool1'])
+        for spool_no in (0, 1):
+            if f'spool{spool_no}_diag' in update:
+                self.spool_log_diag[spool_no].extend(update[f'spool{spool_no}_diag'])
 
         if len(self.gantry_pos_sightings) > 0:
             with self.gantry_pos_sightings_lock:
@@ -76,6 +83,7 @@ class ArpeggioAnchorClient(ComponentClient):
     def storeSpoolData(self, spool_no, data):
         """File one spool's [(time, line_length, line_speed, torque), ...] records."""
         line_number = self.anchor_num * 2 + spool_no
+        self.spool_log_rows[spool_no].extend(data)
         self.datastore.anchor_line_record[line_number].insertList(np.array(data))
         self.datastore.anchor_line_record_event.set()
 

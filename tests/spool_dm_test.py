@@ -232,14 +232,53 @@ class TestDamiaoSpoolController(unittest.TestCase):
         self.controller.trackingLoop()
         
         # Extract the velocity commanded to the motor
+        # the last call is the loop's own stop on the way out
         cmd_vel_calls = self.mock_motor.send_cmd_vel.call_args_list
-        last_cmd_vel = cmd_vel_calls[-1].kwargs['target_velocity']
+        last_cmd_vel = cmd_vel_calls[-2].kwargs['target_velocity']
         
         # Because tension < payout floor and wanted vel > 0, mute = 0.
         # Smooth_mute pulls it down heavily from 1 towards 0. 
         # So commanded velocity should be less than the raw aim requested.
         raw_wanted_vel = (1.0 / self.controller.meters_per_rev) * (2 * math.pi)
         self.assertLess(last_cmd_vel, raw_wanted_vel)
+
+    def _one_loop(self, mock_time, mock_sleep, torq, vel=0.0):
+        mock_time.side_effect = [1.0, 1.0, 1.01]
+        def stop_loop(*args):
+            self.controller.run_spool_loop = False
+        mock_sleep.side_effect = stop_loop
+        self.controller.run_spool_loop = True
+        self.mock_motor.get_states.return_value = {'pos': 0.0, 'vel': vel, 'torq': torq}
+        self.controller.trackingLoop()
+        # the last call is the loop's own stop on the way out
+        return self.mock_motor.send_cmd_vel.call_args_list[-2].kwargs['target_velocity']
+
+    @patch('time.sleep')
+    @patch('time.time')
+    def test_slack_payout_is_muted_despite_friction_credit(self, mock_time, mock_sleep):
+        """A slack spool paying out pushes only through its moving friction, which is less than
+        its holding torque. The reported tension credits the holding torque and reads positive,
+        but the mute must still stop the payout."""
+        self.controller.hold_torque = (0.033, -0.033)
+        self.controller.payout_hold = 0.033
+        self.controller.last_turn = 1  # has been paying out
+        self.controller.aim_line_speed = 0.1
+        # 0.012 N.m pushing the spool outward, and turning outward
+        cmd = self._one_loop(mock_time, mock_sleep, torq=0.012, vel=1.0)
+        self.assertGreater(self.controller.last_tension, self.config['PAYOUT_TENSION_FLOOR_N'])
+        self.assertLessEqual(cmd, 0.0)
+
+    @patch('time.sleep')
+    @patch('time.time')
+    def test_taut_payout_is_not_muted(self, mock_time, mock_sleep):
+        """A line pulling a newton or so still pays out."""
+        self.controller.hold_torque = (0.033, -0.033)
+        self.controller.payout_hold = 0.033
+        self.controller.last_turn = 1
+        self.controller.aim_line_speed = 0.1
+        # 1 N at 0.05 m/rev is 0.008 N.m braking against the line
+        cmd = self._one_loop(mock_time, mock_sleep, torq=-0.008, vel=1.0)
+        self.assertAlmostEqual(cmd, 0.1 / 0.05 * 2 * math.pi)
 
 if __name__ == '__main__':
     unittest.main()
