@@ -7,10 +7,10 @@
     "committed_at": "2026-09-21"
   },
   "naavox/visual_servo": {
-    "revision": "e0edc0418dbb05c5596a7f2ee96a80aaf5f1d630",
-    "pinned_at": "2026-09-19",
+    "revision": "d90f33aa2e72bb50623818fa0b1ef068347e5b66",
+    "pinned_at": "2026-09-30",
     "title": "Upload visual_servo.pth with huggingface_hub",
-    "committed_at": "2026-09-19"
+    "committed_at": "2026-09-30"
   },
   "naavox/drop_point": {
     "revision": "34ca9a53ab31115a482cb3d74d41de4cacd0945e",
