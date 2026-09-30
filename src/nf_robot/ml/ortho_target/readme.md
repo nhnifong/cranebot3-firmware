@@ -21,7 +21,7 @@ free, with no hand labelling.
 
 ## Pipeline
 
-1. `distill` reduces that to a handful of samples per episode - ortho frames from before
+1. `distill` reduces a dataset to a handful of samples per episode - ortho frames from before
    the grasp and the ortho pixel where contact eventually happened - which is a few
    hundred MB rather than a few hundred GB. One run over the whole dataset, into the pool
    that step 4 deals from:
@@ -53,6 +53,14 @@ free, with no hand labelling.
 
    ```
    python -m nf_robot.ml.ortho_target split --upload
+   ```
+
+   Before training on a new deal, audit it. It reads the hub copy (or --data_root, including
+   the local pool), and --preview_dir writes a contact sheet per kind of suspect row plus
+   rows.csv with every row's measurements:
+
+   ```
+   python -m nf_robot.ml.ortho_target.audit --preview_dir audit_previews
    ```
 
    The split lands here, downstream of the merge, so that hand labels reach eval in
@@ -144,8 +152,14 @@ python -m nf_robot.ml.ortho_target merge_labels
 python -m nf_robot.ml.ortho_target merge_labels --repo_id you/ortho-target-user-labels
 ```
 
-Merged files keep the names they arrived under, so `rm ortho_target_data/all/user-*.parquet`
-undoes it and merging twice overwrites rather than duplicates. Step 2 rewrites the pool
+A merged frame that is the same picture as a distilled teleop frame replaces it: the hand
+label marks the grasped object and everything else, so the teleop row says nothing it does
+not, and keeping both would put one picture on both sides of the split. The merge logs how
+many it dropped and in how many the grasp had no hand label near it.
+
+Merged files keep the names they arrived under, so merging twice overwrites rather than
+duplicates. `rm ortho_target_data/all/user-*.parquet` takes the hand labels back out but not
+the teleop frames they replaced; a re-distill restores those. Step 1 rewrites the pool
 from scratch, so a re-distill drops them and the merge has to run again after it - and so
 does the split, which is downstream of both.
 

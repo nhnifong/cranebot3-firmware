@@ -11,7 +11,7 @@ empty there. ortho_target's objectness head has no other source for that.
     python -m nf_robot.ml.ortho_target.labeler --repo_id naavox/combined_targets_reblend
 
 Then open the printed URL. Frames are extracted from the LeRobot dataset once, into
-ortho_labeler_frames/, so a restart is instant; --refresh re-extracts them.
+ortho_labeler_frames/<source>/, so a restart is instant; --refresh re-extracts them.
 
 Episodes are taken spread across the whole dataset rather than from the front of it. A
 merged dataset is its sources concatenated, so a limit applied to the front stops inside
@@ -36,8 +36,9 @@ is what a second pass over a part-labelled set wants; the page opens on the firs
 unlabelled frame regardless.
 
 Labels are written with ortho_target.write_user_labels, one parquet per frame, named for
-the frame - so re-labelling one overwrites it rather than leaving both, and the result
-merges with the ordinary command:
+the source dataset and the frame - so re-labelling one overwrites it rather than leaving
+both, while the same episode and offset of another dataset stays a different label - and
+the result merges with the ordinary command:
 
     python -m nf_robot.ml.ortho_target merge_labels
     python -m nf_robot.ml.ortho_target train --data_root ortho_target_data
@@ -178,10 +179,13 @@ def extract_frames(repo_id, root, cache: Path, per_episode, limit, min_coverage,
 class Session:
     """Frames to label, what has been done to them, and the model that seeds them."""
 
-    def __init__(self, cache: Path, output: Path, model_path, device, seed_threshold,
+    def __init__(self, cache: Path, output: Path, source: str, model_path, device, seed_threshold,
                  carry=True, carry_jitter=CARRY_JITTER_PX, carry_similarity=CARRY_SIMILARITY):
         self.cache = cache
         self.output = Path(output)
+        self.source = source
+        # frame -> whether a pre-source-tag label of that frame is a label of this picture.
+        self._legacy: dict[str, bool] = {}
         self.output.mkdir(parents=True, exist_ok=True)
         self.frames = [p.stem for p in sorted(cache.glob("*.jpg"))]
         if not self.frames:
@@ -211,8 +215,37 @@ class Session:
         self._first_save = None
         self._saved_since = 0
 
+    def label_name(self, frame_id):
+        return f"{self.source}-{frame_id}"
+
     def label_path(self, frame_id):
+        """This frame's label file, or a matching one from before names carried a source."""
+        path = self.output / f"user-{self.label_name(frame_id)}.parquet"
+        if not path.exists() and self._legacy_matches(frame_id):
+            return self.legacy_path(frame_id)
+        return path
+
+    def legacy_path(self, frame_id):
         return self.output / f"user-{frame_id}.parquet"
+
+    def _legacy_matches(self, frame_id):
+        """Whether an untagged label of this frame id holds this picture. Untagged names say
+        only episode and offset, so one may be a frame of some other dataset entirely."""
+        if frame_id not in self._legacy:
+            match = False
+            legacy = self.legacy_path(frame_id)
+            ours = cv2.imread(str(self.image_path(frame_id)), cv2.IMREAD_GRAYSCALE)
+            if legacy.exists() and ours is not None:
+                import pyarrow.parquet as pq
+
+                blob = pq.read_table(legacy, columns=["image"]).column("image")[0].as_py()
+                theirs = cv2.imdecode(np.frombuffer(blob, np.uint8), cv2.IMREAD_GRAYSCALE)
+                if theirs is not None and theirs.shape == ours.shape:
+                    diff = np.abs(theirs.astype(np.float32) - ours.astype(np.float32))
+                    # Re-encoding moves a pixel a few levels; a moved object moves a patch 80+.
+                    match = float(cv2.blur(diff, (5, 5)).max()) < 12.0
+            self._legacy[frame_id] = match
+        return self._legacy[frame_id]
 
     def image_path(self, frame_id):
         return self.cache / f"{frame_id}.jpg"
@@ -360,7 +393,11 @@ class Session:
         with self.lock:
             path, count = ot.write_user_labels(
                 cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), targets_m,
-                output_root=self.output, name=frame_id, allow_empty=allow_empty)
+                output_root=self.output, name=self.label_name(frame_id), allow_empty=allow_empty)
+            # The tagged file replaces an untagged one of the same picture, not joins it.
+            if path is not None and self._legacy_matches(frame_id):
+                self.legacy_path(frame_id).unlink(missing_ok=True)
+                self._legacy[frame_id] = False
             self.skipped.discard(frame_id)
             self._last_saved = (frame_id, [(float(u), float(v)) for u, v in points])
             now = time.time()
@@ -473,10 +510,13 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0],
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--repo_id", default=DEFAULT_REPO_ID)
+    parser.add_argument("--repo_id", default=None,
+                        help=f"dataset to label (default {DEFAULT_REPO_ID}). Its id is part of "
+                             f"every label's name, so frames of different datasets never collide")
     parser.add_argument("--root", default=None,
                         help="local LeRobot dataset directory, for a dataset not on the hub yet")
-    parser.add_argument("--cache", default=str(DEFAULT_CACHE), help="where extracted frames live")
+    parser.add_argument("--cache", default=None,
+                        help=f"where extracted frames live (default {DEFAULT_CACHE}/<source>)")
     parser.add_argument("--refresh", action="store_true", help="re-extract frames before serving")
     parser.add_argument("--add", type=int, default=0, metavar="N",
                         help="extract N more frames that are not already cached or labelled, "
@@ -501,19 +541,30 @@ def main():
     parser.add_argument("--device", default=None)
     args = parser.parse_args()
 
-    cache = Path(args.cache)
+    # A --root alone is named for its directory, since the default repo id would misname it.
+    if args.repo_id or not args.root:
+        source = ot.source_tag(args.repo_id or DEFAULT_REPO_ID)
+    else:
+        source = ot.source_tag(Path(args.root).expanduser().resolve().name)
+    repo_id = args.repo_id or DEFAULT_REPO_ID
+    cache = Path(args.cache) if args.cache else DEFAULT_CACHE / source
     output = Path(args.output)
+    logging.info(f"Labels are named for source '{source}'")
     if args.refresh or args.add or not any(cache.glob("*.jpg")):
         # Frames already labelled are never worth extracting again, and with --add the ones
         # already sitting in the cache are not either: N means N to work on, not N drawn.
-        skip = {p.stem[len("user-"):] for p in output.glob("user-*.parquet")}
+        # Untagged labels are skipped too: they may be another dataset's, but that costs a
+        # frame not drawn, where drawing it could show someone else's label as done.
+        prefix = f"user-{source}-"
+        skip = {p.stem[len(prefix):] for p in output.glob(f"{prefix}*.parquet")}
+        skip |= {p.stem[len("user-"):] for p in output.glob("user-??????-??????.parquet")}
         if args.add:
             skip |= {p.stem for p in cache.glob("*.jpg")}
-        extract_frames(args.repo_id, args.root, cache, args.frames_per_episode,
+        extract_frames(repo_id, args.root, cache, args.frames_per_episode,
                        args.add or args.limit, args.min_coverage, skip=skip)
 
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
-    session = Session(cache, output, args.model_path, device, args.seed_threshold,
+    session = Session(cache, output, source, args.model_path, device, args.seed_threshold,
                       carry=not args.no_carry, carry_jitter=args.carry_jitter_px,
                       carry_similarity=args.carry_similarity)
 

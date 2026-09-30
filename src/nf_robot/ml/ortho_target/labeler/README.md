@@ -12,7 +12,7 @@ python -m nf_robot.ml.ortho_target.labeler --root ~/data/combined_targets_reblen
 python -m nf_robot.ml.ortho_target.labeler --repo_id naavox/combined_targets_reblend
 ```
 
-Open the printed URL. Frames extract once into `ortho_labeler_frames/` (gitignored), so restarts are
+Open the printed URL. Frames extract once into `ortho_labeler_frames/<source>/` (gitignored), so restarts are
 instant; `--refresh` re-extracts.
 
 ## Which frames you get
@@ -83,8 +83,11 @@ be checked in a way an exact copy does not. The jitter is a random walk, so acce
 point unchanged across many frames lets it drift — roughly 5√n px after n frames — which
 is the cue to drag it back onto its object.
 
-Labels land in `ortho_target_user_labels/`, one parquet per frame named for the frame, so
-re-labelling one overwrites it. Feed them to training the ordinary way:
+Labels land in `ortho_target_user_labels/`, one parquet per frame named for the source
+dataset and the frame (`user-naavox_combined_targets_reblend-000012-000340.parquet`), so
+re-labelling one overwrites it and the same episode and offset of another dataset does
+not. Labels from before the source was in the name are still shown as saved, but only on a
+frame whose picture they match; saving over one replaces it with the new name. Feed them to training the ordinary way:
 
 ```
 python -m nf_robot.ml.ortho_target merge_labels

@@ -53,3 +53,4 @@ park_reference/
 MUJOCO_LOG.TXT
 spool_diag_*.jsonl
 derail_event_*.jsonl
+audit_previews

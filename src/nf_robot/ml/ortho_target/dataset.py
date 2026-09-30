@@ -58,6 +58,11 @@ NEGATIVE_INTERVAL_S = 4.0
 STATE_COMPONENTS = ("gripper_pos_x", "gripper_pos_y", "gripper_pos_z", "finger_pressure")
 
 
+def source_tag(repo_id: str) -> str:
+    """A dataset id as one dash-free token, so it can lead a dash-separated label name."""
+    return repo_id.replace("/", "_").replace("-", "_")
+
+
 def is_complete(sample) -> bool:
     return int(sample["episode_index"]) < 0
 
@@ -332,7 +337,8 @@ def sample_group(sample):
     """What a row's near-duplicates share: its episode, or its labelling run."""
     if not is_complete(sample):
         return ("episode", int(sample["episode_index"]))
-    # user-<contributor>-<run>-<frame>.jpg, so everything up to the frame is the run
+    # Everything up to the last field is the run: user-<source>-<episode>-<offset> from the
+    # labeler, user-<date>-<time>-<nonce> from the UI.
     return ("run", sample["file_name"].rsplit(".", 1)[0].rsplit("-", 1)[0])
 
 
@@ -556,6 +562,114 @@ def resize_rows(rows, size):
     return out
 
 
+# The same picture stored twice: close at SIGNATURE_THUMB to find candidates, then confirmed
+# by the largest local difference at SIGNATURE_FINE. A mean hides one moved object; the local
+# peak is ~2 grey levels for a re-encoded frame and 80+ once anything has moved.
+SIGNATURE_THUMB = 32
+SIGNATURE_FINE = 128
+CANDIDATE_RMS = 4.0
+SAME_PICTURE_PEAK = 12.0
+
+
+def picture_signature(gray):
+    """(coarse, fine) grey copies of a frame, for same_picture_pairs."""
+    fine = cv2.resize(gray, (SIGNATURE_FINE, SIGNATURE_FINE), interpolation=cv2.INTER_AREA)
+    coarse = cv2.resize(fine, (SIGNATURE_THUMB, SIGNATURE_THUMB), interpolation=cv2.INTER_AREA)
+    return coarse.astype(np.float64).ravel(), fine.astype(np.float32)
+
+
+def jpeg_signature(blob):
+    gray = cv2.imdecode(np.frombuffer(blob, np.uint8), cv2.IMREAD_REDUCED_GRAYSCALE_2)
+    if gray is None:
+        raise ValueError("undecodable frame")
+    return picture_signature(gray)
+
+
+def same_picture_pairs(signatures, others=None):
+    """Index pairs (i, j) of frames showing the same picture: within one list with i < j, or
+    between two with i indexing signatures and j others."""
+    within = others is None
+    others = signatures if within else others
+    if not signatures or not others:
+        return []
+
+    def centred(sigs):
+        coarse = np.stack([s[0] for s in sigs])
+        return coarse - coarse.mean(axis=1, keepdims=True)
+
+    a, b = centred(signatures), centred(others)
+    sq_a, sq_b = (a ** 2).sum(axis=1), (b ** 2).sum(axis=1)
+    limit = (CANDIDATE_RMS ** 2) * a.shape[1]
+    pairs = []
+    chunk = 1024
+    for start in range(0, len(a), chunk):
+        # macOS Accelerate raises spurious floating point flags on large matmuls.
+        with np.errstate(all="ignore"):
+            dist = sq_a[start:start + chunk, None] + sq_b[None, :] - 2.0 * a[start:start + chunk] @ b.T
+        for i, j in zip(*np.nonzero(dist < limit)):
+            i += start
+            if within and j <= i:
+                continue
+            diff = np.abs(signatures[i][1] - others[j][1])
+            if cv2.blur(diff, (3, 3)).max() < SAME_PICTURE_PEAK:
+                pairs.append((int(i), int(j)))
+    return pairs
+
+
+# A replaced teleop grasp further than this from every hand label is worth reporting.
+GRASP_AGREE_M = 0.10
+
+
+def drop_superseded_rows(split_dir: Path, labelled_rows):
+    """Delete distilled rows that show the same picture as a hand-labelled row.
+
+    Both label the same frame, and the hand label is the complete one: it marks the grasped
+    object and every other, where the distilled row marks only the grasp and trains the rest
+    of the floor on nothing. Keeping both would also put one picture on both sides of a split.
+    Returns (rows dropped, of them how many had a grasp no hand label was near).
+    """
+    import pyarrow as pa
+
+    labelled = [r for r in labelled_rows if is_complete(r)]
+    if not labelled:
+        return 0, 0
+    label_sigs = [jpeg_signature(r["image"]) for r in labelled]
+
+    dropped, disputed, episodes = 0, 0, set()
+    for shard in sorted(split_dir.glob("shard-*.parquet")):
+        table = pq.read_table(shard).cast(shard_schema())
+        rows = table.select(list(LABEL_COLUMNS)).to_pylist()
+        candidates = [i for i, row in enumerate(rows) if not is_complete(row)]
+        if not candidates:
+            continue
+        images = table.column("image")
+        sigs = [jpeg_signature(images[i].as_py()) for i in candidates]
+        matches = {}
+        for i, j in same_picture_pairs(sigs, label_sigs):
+            matches.setdefault(candidates[i], j)
+        if not matches:
+            continue
+        for index, j in matches.items():
+            grasp = np.asarray(rows[index]["contacts_m"], dtype=float).reshape(-1, 3)[:, :2]
+            hand = np.asarray(labelled[j]["contacts_m"], dtype=float).reshape(-1, 3)[:, :2]
+            if len(grasp) and (not len(hand) or np.linalg.norm(hand - grasp[0], axis=1).min() > GRASP_AGREE_M):
+                disputed += 1
+            episodes.add(rows[index]["episode_index"])
+        keep = pa.array([i not in matches for i in range(len(rows))])
+        kept = table.filter(keep)
+        if kept.num_rows:
+            pq.write_table(kept, shard)
+        else:
+            shard.unlink()
+        dropped += len(matches)
+
+    if dropped:
+        logging.info(f"Dropped {dropped} distilled frame(s) from {len(episodes)} episode(s) that "
+                     f"show the same picture as a hand-labelled one; in {disputed} of them the "
+                     f"grasp is more than {GRASP_AGREE_M * 100:.0f}cm from every hand label")
+    return dropped, disputed
+
+
 def merged_label_name(path, tag=None):
     """Destination filename for one submission, namespaced by contributor tag so
     contributors don't overwrite each other."""
@@ -584,6 +698,7 @@ def merge_user_labels(source_root, output_root=LOCAL_DATASET_ROOT, split=POOL_SP
 
     schema = shard_schema()
     merged = 0
+    all_rows = []
     for path in files:
         # Cast rather than trust, so a drifted column from another machine fails loudly.
         rows = pq.read_table(path).cast(schema).to_pylist()
@@ -592,7 +707,10 @@ def merge_user_labels(source_root, output_root=LOCAL_DATASET_ROOT, split=POOL_SP
         pq.write_table(pa.Table.from_pylist(rows, schema=schema),
                        split_dir / merged_label_name(path, tag))
         merged += sum(len(row["points"]) for row in rows)
+        all_rows.extend(rows)
 
+    # Compared after resizing, so both sides of the comparison are at the stored size.
+    drop_superseded_rows(split_dir, all_rows)
     write_dataset_readme(output_root)
     logging.info(f"Merged {len(files)} submission(s), {merged} label(s), into {split_dir}"
                  + (f" at {target_size[0]}x{target_size[1]}" if target_size else ""))
@@ -801,8 +919,9 @@ def translate(img, u, v, max_px: int, rng):
 # DATASET
 # ==========================================
 
-# Labels kept per frame, padded so the default collate can stack them.
-MAX_TARGETS = 16
+# Labels kept per frame, padded so the default collate can stack them. Above the densest
+# hand-labelled frame, since a dropped target in a complete frame trains as floor.
+MAX_TARGETS = 64
 
 
 class OrthoTargetDataset(torch.utils.data.Dataset):
