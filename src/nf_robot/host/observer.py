@@ -162,7 +162,7 @@ GRIPPER_FINGER_LEN_M = 0.18
 # near enough that the item fills the frame, far enough that the fingers are not across it.
 # The drop point model was trained on frames from this band (placer
 # mine_teleop.SNAPSHOT_RANGE_M).
-CLEAR_ITEM_RANGE_M = (0.12, 0.25)
+CLEAR_ITEM_RANGE_M = (0.12, 0.4)
 CLEAR_ITEM_INTERVAL_S = 0.25
 
 # feature key -> minimum nf_robot version every connected component must run to use it
