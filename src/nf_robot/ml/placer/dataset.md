@@ -38,10 +38,13 @@ basket is hidden from one side by a dark blanket on the bed). So a drop point is
 see at the moment it matters. The item, on the other hand, is in plain view just before it
 is grasped - which is when to decide where it goes.
 
-Rows are item snapshots: up to `--snapshots` (4) gripper frames, evenly spread over the
-frames before the last grasp where the laser reads 0.12-0.25m and the close has not yet
-started - near enough that the item fills the frame, early enough that the fingers are not
-across it. Every row of an episode shares that episode's drop.
+Rows are item snapshots: gripper frames from the descent onto the item before the last
+grasp, taken before the close starts so the fingers are not across it. The laser range
+0.12-0.50m is cut into `--snapshots` (8) equal bands and each band the descent passes
+through gives one frame, the latest in it, so the item is seen from a spread of heights -
+usually 3 to 8 per episode. The descent is the frames leading up to the close with the laser
+at or below 0.50m, allowing gaps above it of up to 0.5s. Every row of an episode shares that
+episode's drop.
 
 | column | type | meaning |
 | --- | --- | --- |

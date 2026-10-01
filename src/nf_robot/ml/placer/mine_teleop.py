@@ -50,10 +50,15 @@ DEFAULT_OFFSET_METHOD = "room-delta"
 PREVIEW_OFFSETS_S = (-4.0, -2.0, -1.0, -0.5, 0.0, 0.5, 1.0)
 
 # Pairs: gripper snapshots of the item taken while the laser reads this range, before the
-# close begins - close enough to fill the frame, far enough that nothing covers it yet.
-SNAPSHOT_RANGE_M = (0.12, 0.25)
-SNAPSHOTS_PER_EPISODE = 4
+# close begins - near enough to see the item well, far enough that nothing covers it yet.
+SNAPSHOT_RANGE_M = (0.12, 0.50)
+# The range is cut into this many equal bands and each band the descent passes through
+# gives one snapshot, so an episode yields one per height it was seen from.
+SNAPSHOTS_PER_EPISODE = 8
 SNAPSHOT_SEARCH_SECONDS = 10.0
+# The descent is the run of frames up to the close with the laser at or below the top of
+# the range; readings above it for longer than this end the run (an earlier approach).
+DESCENT_GAP_SECONDS = 0.5
 # The empty gripper's view of the drop point, this long after the opening ends.
 DROP_VIEW_DELAY_S = 0.3
 
@@ -286,12 +291,25 @@ def mine_pair_episode(rows, fps, snapshots=SNAPSHOTS_PER_EPISODE,
     close = close_onset(rows, grasp) or grasp
     first = max(0, grasp - int(round(SNAPSHOT_SEARCH_SECONDS * fps)))
     low, high = snapshot_range
-    candidates = [i for i in range(first, close)
-                  if low <= rows[i]["laser_rangefinder"] <= high]
-    if not candidates:
+    max_gap = int(round(DESCENT_GAP_SECONDS * fps))
+    start, gap = close, 0
+    for i in range(close - 1, first - 1, -1):
+        if rows[i]["laser_rangefinder"] <= high:
+            start, gap = i, 0
+        else:
+            gap += 1
+            if gap > max_gap:
+                break
+    # one snapshot per height band, the latest in it: the view nearest the grasp
+    edges = np.linspace(low, high, snapshots + 1)
+    by_band = {}
+    for i in range(start, close):
+        laser = rows[i]["laser_rangefinder"]
+        if low <= laser <= high:
+            by_band[min(int(np.searchsorted(edges, laser, side="right")) - 1, snapshots - 1)] = i
+    if not by_band:
         return None, "no_snapshot"
-    picks = sorted({candidates[int(round(k))]
-                    for k in np.linspace(0, len(candidates) - 1, min(snapshots, len(candidates)))})
+    picks = sorted(by_band.values())
 
     release_pos, pickup_pos = rows[onset]["gripper_pos"], rows[grasp]["gripper_pos"]
     drop_view = min(len(rows) - 1, end + int(round(DROP_VIEW_DELAY_S * fps)))
@@ -629,7 +647,7 @@ def main():
                              "frame of the carry with release labels. The two have different "
                              "schemas, so give each its own --output_root")
     parser.add_argument("--snapshots", type=int, default=SNAPSHOTS_PER_EPISODE,
-                        help="pairs: item snapshots per episode")
+                        help="pairs: most item snapshots per episode, one per laser height band")
     parser.add_argument("--offset_method", choices=OFFSET_METHODS, default=DEFAULT_OFFSET_METHOD,
                         help="carry: how release_offset_m is computed")
     parser.add_argument("--post_seconds", type=float, default=POST_SECONDS,

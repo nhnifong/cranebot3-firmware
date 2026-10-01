@@ -41,6 +41,9 @@ class PickAndPlace(Maneuver):
         self.last_snapshot_hash = None # to spare the UI from too many updates
         # pending auto-submit of manually edited targets; see _schedule_target_submit
         self._target_submit_task = None
+        # the target the pick and place loop is going after, and set when the operator deletes it
+        self._pursued_target_id = None
+        self._pursued_target_deleted = asyncio.Event()
 
     async def start(self):
         self.spawn(self._find_targets_forever(), name='find_targets')
@@ -67,9 +70,13 @@ class PickAndPlace(Maneuver):
         if item.clear_all:
             self.target_queue.remove_all_targets()
             self._schedule_target_submit()
+            if self._pursued_target_id is not None:
+                self._pursued_target_deleted.set()
         elif item.target_id is not None:
             self.target_queue.remove_target(item.target_id);
             self._schedule_target_submit()
+            if item.target_id == self._pursued_target_id:
+                self._pursued_target_deleted.set()
         self.send_tq_to_ui()
         await self.ob.flush_tele_buffer()
 
@@ -377,6 +384,8 @@ class PickAndPlace(Maneuver):
                         continue
                     target_seen_t = time.time()
 
+                    self._pursued_target_id = next_target.id
+                    self._pursued_target_deleted.clear()
                     self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SELECTED)
                     self.send_tq_to_ui()
 
@@ -392,6 +401,7 @@ class PickAndPlace(Maneuver):
 
                 elif src in ROUTE_POINT_TAG_NAMES or src == common.RoutePoint.ORIGIN:
                     next_target = None
+                    self._pursued_target_id = None
                     source = ob.route_point_position(src)
                     if source is None:
                         logger.warning(f'No saved position for the route source '
@@ -414,10 +424,20 @@ class PickAndPlace(Maneuver):
                     logger.warning('Pick and place aborted because we lost the gripper connection')
                     break
 
-                # when we reach this point we arrived over the item. commit to it unless it proves impossible to pick up.
+                if next_target is not None and self._pursued_target_deleted.is_set():
+                    logger.info('Target was deleted on the way to it; moving on')
+                    continue
+
+                # when we reach this point we arrived over the item. commit to it unless it
+                # proves impossible to pick up, or the operator deletes it.
                 logger.info('Attempt grasp')
                 start = time.time()
-                success = await ob.grasp()
+                success = await self._grasp_unless_deleted()
+                if success is None:
+                    logger.info(f'Target was deleted mid grasp; abandoned it after {time.time() - start:.2f}s')
+                    # let go of whatever the fingers may have closed on
+                    asyncio.create_task(ob.set_finger_angle(RELAXED_OPEN))
+                    continue
                 logger.info(f'Grasp succeeded={success} took {time.time() - start:.2f}s')
                 if not success:
                     if next_target is not None:
@@ -476,7 +496,29 @@ class PickAndPlace(Maneuver):
             logger.info('Pick and place cancelled')
             raise
         finally:
+            self._pursued_target_id = None
             if drop_point_maneuver is not None:
                 drop_point_maneuver.stop_watch()
             ob.slow_stop_all_spools()
             await ob.clear_goal()
+
+    async def _grasp_unless_deleted(self):
+        """
+        Grasp, but give up the moment the operator deletes the target being grasped.
+        Returns the grasp result, or None if it was abandoned.
+        """
+        if self._pursued_target_id is None:
+            return await self.ob.grasp()
+        grasp = asyncio.create_task(self.ob.grasp())
+        deleted = asyncio.create_task(self._pursued_target_deleted.wait())
+        try:
+            await asyncio.wait([grasp, deleted], return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            deleted.cancel()
+            if not grasp.done():
+                grasp.cancel()
+                # the grasp stops the spools on its way out; wait for that before moving on
+                await asyncio.gather(grasp, return_exceptions=True)
+        if grasp.cancelled():
+            return None
+        return grasp.result()

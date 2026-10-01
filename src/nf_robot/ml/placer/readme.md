@@ -15,3 +15,26 @@ we may also predict the altitude at which an operator would try to drop somethin
 ### drop success probability head
 
 If negative examples were collected, we coudld predict from camera views of whether, if dropped now, the object would land in the container or not.
+
+
+## Commands
+
+Mine teleop
+
+```
+python -m nf_robot.ml.placer.mine_teleop --repo_id naavox/nick-sep14 \
+        --output_root datasets/drop_pairs --preview_dir datasets/drop_pairs/previews
+```
+
+train
+
+```
+python -m nf_robot.ml.placer.train --data_root datasets/drop_pairs --epochs 30
+```
+
+publish
+
+```
+hf upload naavox/drop_point models/drop_point.pth drop_point.pth
+python -m nf_robot.ml.pin_latest_model --drop_point
+```

@@ -199,7 +199,7 @@ Then train it into a checkpoint of its own, and score it against the ordinary on
 
 ```
 python -m nf_robot.ml.ortho_target train --data_root datasets/ortho_target_complete \
-    --model_path models/ortho_target_complete.pth --epochs 400
+    --model_path models/ortho_target_complete.pth --epochs 60
 python -m nf_robot.ml.ortho_target evaluate --data_root datasets/ortho_target_complete \
     --model_path models/ortho_target_complete.pth --preview_dir previews_complete
 ```
