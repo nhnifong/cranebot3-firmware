@@ -290,6 +290,7 @@ class TestBuiltins(ManeuverTestCase):
             'droppoint': 'drop_point', 'fingerplates': 'plates', 'floorplates': 'plates',
             'objectplates': 'plates', 'linear': 'diagnostics', 'goalseek': 'diagnostics',
             'ferry': 'ferry',
+            'cluster': 'cluster_sort',
         })
         controls = {field: handler.__self__.name for field, handler in ob._maneuver_controls.items()}
         self.assertEqual(controls, {

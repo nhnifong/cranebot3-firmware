@@ -241,15 +241,17 @@ class TargetQueue:
                 safe_index = max(0, min(new_index, len(self._queue)))
                 self._queue.insert(safe_index, target)
 
-    def get_best_target(self) -> Optional[Target]:
+    def get_best_target(self, accept=None) -> Optional[Target]:
         """
         Selects the best target for the robot.
-        Proximity logic removed: simply returns the first PENDING target in the queue.
+        Proximity logic removed: simply returns the first PENDING target in the queue
+        (that accept(target) is true of, if given).
         """
         with self._lock:
             return next((
                 t for t in self._queue
                 if (t.status == telemetry.TargetStatus.SELECTED or t.status == telemetry.TargetStatus.SEEN)
+                and (accept is None or accept(t))
                 ), None)
 
     def set_target_status(self, target_id: str, status: telemetry.TargetStatus) -> bool:

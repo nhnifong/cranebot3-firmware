@@ -172,7 +172,7 @@ Things worth copying from it:
 | `set_startup_sequence(names)` | Startup step names an `auto_start` robot runs in order once every component connects. The default is `['unpark', 'pick_and_place', 'park']`. Names are checked when `main()` starts. |
 | `await main()` | Runs until shutdown, then closes everything. |
 
-Built-in maneuvers are `parking`, `drop_point`, `lerobot`, `pick_and_place`, `plates`, `diagnostics` and `ferry`. Built-in startup steps are `unpark`, `park` and `pick_and_place`.
+Built-in maneuvers are `parking`, `drop_point`, `lerobot`, `pick_and_place`, `plates`, `diagnostics`, `ferry` and `cluster_sort`. Built-in startup steps are `unpark`, `park` and `pick_and_place`.
 
 ### `nf_robot.host.maneuver`
 
