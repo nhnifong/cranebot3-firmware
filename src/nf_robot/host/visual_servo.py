@@ -352,6 +352,9 @@ class VisualServo:
         # began on the last one says nothing about this one.
         self.close_started_at = None
         self.close_arrived = False
+        # (time, lateral offset in metres or None when no target is confidently seen) from
+        # the newest pass of the centering loop
+        self.center_offset = None
 
     def reset_close(self):
         self.close_started_at = None
@@ -727,6 +730,7 @@ class VisualServo:
                     if steering else 'watching only, commanding nothing')
         self.filter.reset()
         self.wrist_filter.reset()
+        self.center_offset = None
         next_log = 0.0
         while self.ob.run_command_loop:
             prediction = await self.predict()
@@ -740,6 +744,7 @@ class VisualServo:
             turned = None
             if steering:
                 confident = self.target_found(prediction)
+                self.center_offset = (time.time(), error if confident else None)
                 lateral = error_xy * LATERAL_GAIN if confident else np.zeros(2)
                 lateral_speed = float(np.linalg.norm(lateral))
                 if lateral_speed > LATERAL_SPEED_MAX:

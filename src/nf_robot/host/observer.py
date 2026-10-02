@@ -5395,6 +5395,27 @@ class AsyncObserver:
         if self.run_ortho:
             ortho_floor_vs.stop()
 
+    async def servo_center(self):
+        """Steer the gripper sideways over the object the visual servoing model sees, and
+        turn the wrist to its grasp axis, never descending or touching the fingers. Runs
+        until cancelled. Returns False at once if no model could be loaded.
+
+        Its velocity goes under the default key, so a vertical velocity under a key of
+        your own is added to it rather than replacing it."""
+        if not await self.servo.ensure_model():
+            logger.warning('No visual servoing model loaded; cannot center')
+            return False
+        return await self.servo.run(mode=SERVO_MODE_CENTER)
+
+    def servo_center_offset(self, max_age=0.5):
+        """How far, horizontally in metres, the jaws are from the object servo_center is
+        steering for, as of its newest pass. None while no object is confidently seen, or
+        if servo_center has not reported within max_age seconds."""
+        latest = self.servo.center_offset
+        if latest is None or time.time() - latest[0] > max_age:
+            return None
+        return latest[1]
+
     async def grasp(self):
         """Try to grasp whatever is directly below the gripper. True if it is now held."""
         lerobot = self.maneuvers.get('lerobot')

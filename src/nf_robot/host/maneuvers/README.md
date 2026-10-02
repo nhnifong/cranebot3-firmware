@@ -316,6 +316,8 @@ Coroutines marked *motion* move the robot and may be cancelled at any `await`.
 | `await trim_altitude_to_range(target_range_m, tol_m=0.02, max_steps=4, ceiling_z=None, max_travel_m=None)` | *Motion.* Adjust height until the laser reads `target_range_m`. Returns the final reading. |
 | `await tension_and_wait()` | Tighten all lines and wait until they read tight. |
 | `await grasp()` | *Motion.* Grasp whatever is under the gripper. Returns `True` if it is held. |
+| `await servo_center()` | *Motion.* Steer sideways over the object the visual servoing model sees and turn the wrist to it, never descending. Runs until cancelled. Its velocity is summed with your own keys, so you can set the height alongside it. |
+| `servo_center_offset(max_age=0.5)` | Metres between the jaws and the object `servo_center` is steering for, or `None` if no object is confidently seen or it is not running. |
 | `prefer_swing_cancellation()` | An async context manager: swing cancellation on for the block, if verified. |
 | `set_swing_cancellation(enabled)` | Returns whether it was on. |
 | `await half_auto_calibration()` | *Motion.* Re-tension and re-reference the lines from the cameras' view of the gantry. |
