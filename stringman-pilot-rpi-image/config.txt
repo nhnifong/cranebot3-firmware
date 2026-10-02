@@ -59,12 +59,6 @@ dtoverlay=dwc2,dr_mode=host
 enable_uart=1
 dtoverlay=disable-bt
 
-# Hardware PWM0 for the cooling fan, driven by fan_control.py. The pin differs per board.
-# func is the pin's ALT mode that carries PWM0: GPIO18 = ALT5 (2), GPIO12 = ALT0 (4).
-[pi02]
+# Hardware PWM0 for the cooling fan, driven by fan_control.py. GPIO18 is only a boot default:
+# fan_control.py moves PWM0 to the pin the fan is actually on (GPIO12 on anchor hats).
 dtoverlay=pwm,pin=18,func=2
-
-[pi3+]
-dtoverlay=pwm,pin=12,func=4
-
-[all]

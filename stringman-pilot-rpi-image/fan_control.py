@@ -2,15 +2,21 @@
 """Temperature-controlled cooling fan for Stringman components.
 
 Drives the fan from the hardware PWM block through the kernel's sysfs PWM
-interface, so the carrier is steady and costs no CPU. config.txt routes PWM0 to
-the right pin per board with the `pwm` overlay:
+interface, so the carrier is steady and costs no CPU. The fan pin depends only
+on the hat:
 
-    Raspberry Pi Zero 2 W  -> GPIO 18
-    Raspberry Pi 3 A+      -> GPIO 12
+    anchor hat -> GPIO 12
+    otherwise  -> GPIO 18
 
-Both pins are PWM0, so this daemon always drives pwmchip0 channel 0; the board
-check is there to log which pin is in use and to refuse to run on a board the
-overlay was not set up for.
+The anchor hat is recognized by its MCP2515 CAN controller: can0 only exists when
+that chip answers on SPI. Both pins can carry PWM0, so this daemon always drives
+pwmchip0 channel 0 and muxes PWM0 onto the chosen pin itself with pinctrl,
+returning the other one to an input. The `pwm` overlay in config.txt is still
+needed to enable the PWM block, but the pin it picks is only a boot default.
+
+can0 appears some seconds into boot, possibly after this service starts, so the
+pin is re-checked every sample and moved if the answer changes. Until the pin is
+muxed the fan's PWM line floats high, which a 4-wire fan treats as full speed.
 
 Duty cycle follows SoC temperature linearly between MIN_DUTY at or below
 TEMP_LOW_C and MAX_DUTY at or above TEMP_HIGH_C. If the temperature can't be
@@ -25,13 +31,13 @@ To run it by hand:
 import argparse
 import os
 import signal
-import sys
+import subprocess
 import time
 
-MIN_DUTY = 0.5
+MIN_DUTY = 0.3
 MAX_DUTY = 1.0
 TEMP_LOW_C = 35.0   # at or below: MIN_DUTY
-TEMP_HIGH_C = 48.0  # at or above: MAX_DUTY
+TEMP_HIGH_C = 50.0  # at or above: MAX_DUTY
 
 PWM_FREQUENCY_HZ = 25000  # Intel 4-wire fan spec
 DEFAULT_INTERVAL = 2.0    # seconds between temperature samples
@@ -39,32 +45,27 @@ DEFAULT_INTERVAL = 2.0    # seconds between temperature samples
 PWM_CHIP = "/sys/class/pwm/pwmchip0"
 PWM_CHANNEL = 0
 THERMAL_ZONE = "/sys/class/thermal/thermal_zone0/temp"
-DT_MODEL = "/proc/device-tree/model"
+CAN_DEVICE = "/sys/class/net/can0"
 
-# Substring of /proc/device-tree/model -> GPIO the overlay puts PWM0 on.
-BOARD_PINS = {
-    "Raspberry Pi Zero 2 W": 18,
-    "Raspberry Pi 3 Model A Plus": 12,
-}
+# GPIO -> pinctrl alt function that carries PWM0 on it.
+PWM0_ALT = {12: "a0", 18: "a5"}
 
 
 def log(message):
     print(message, flush=True)
 
 
-def read_model():
-    try:
-        with open(DT_MODEL) as f:
-            return f.read().strip("\x00\n ")
-    except OSError:
-        return None
+def fan_pin():
+    """GPIO the fan's PWM line is wired to: 12 on the anchor hat, else 18."""
+    return 12 if os.path.exists(CAN_DEVICE) else 18
 
 
-def fan_pin_for(model):
-    for name, pin in BOARD_PINS.items():
-        if model and name in model:
-            return pin
-    return None
+def route_pwm0_to(pin):
+    """Mux PWM0 onto pin and return the other PWM0-capable pin to an input."""
+    for other in PWM0_ALT:
+        if other != pin:
+            subprocess.run(["pinctrl", "set", str(other), "ip"], check=True)
+    subprocess.run(["pinctrl", "set", str(pin), PWM0_ALT[pin]], check=True)
 
 
 def read_soc_temp_c():
@@ -138,21 +139,22 @@ def main():
                     help=f"PWM carrier frequency in Hz (default {PWM_FREQUENCY_HZ})")
     args = ap.parse_args()
 
-    model = read_model()
-    pin = fan_pin_for(model)
-    if pin is None:
-        sys.exit(f"fan_control: unsupported board {model!r}, no fan pin configured")
-
     pwm = SysfsPwm(PWM_CHIP, PWM_CHANNEL, args.frequency)
-    log(f"fan_control: {model}, fan on GPIO {pin} at {args.frequency:g} Hz, "
+    log(f"fan_control: {args.frequency:g} Hz, "
         f"duty {MIN_DUTY:g}-{MAX_DUTY:g} over {TEMP_LOW_C:g}-{TEMP_HIGH_C:g}C")
 
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
 
     last_logged = None
+    routed_pin = None
     try:
         while _running:
+            pin = fan_pin()
+            if pin != routed_pin:
+                route_pwm0_to(pin)
+                log(f"fan_control: fan PWM on GPIO {pin}")
+                routed_pin = pin
             temp = read_soc_temp_c()
             duty = duty_for_temp(temp)
             pwm.set_duty(duty)
