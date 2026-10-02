@@ -112,6 +112,12 @@ install -m 755 wifi_thermal_watchdog.py "$ROOTFS_DIR/usr/local/bin/wifi_thermal_
 install -m 644 wifi-thermal-watchdog.service "$ROOTFS_DIR/etc/systemd/system/wifi-thermal-watchdog.service"
 run_in_chroot "systemctl enable wifi-thermal-watchdog.service"
 
+# Cooling fan: hardware PWM duty cycle follows SoC temperature.
+# config.txt routes PWM0 to GPIO18 on the Zero 2 W and GPIO12 on the 3A+.
+install -m 755 fan_control.py "$ROOTFS_DIR/usr/local/bin/fan_control.py"
+install -m 644 fan-control.service "$ROOTFS_DIR/etc/systemd/system/fan-control.service"
+run_in_chroot "systemctl enable fan-control.service"
+
 # Install a one time filesystem resize service on first boot to expand to fill the SD card
 install -m 755 resize-rootfs.sh "$ROOTFS_DIR/usr/local/sbin/resize-rootfs.sh"
 install -m 644 resize-rootfs.service "$ROOTFS_DIR/etc/systemd/system/resize-rootfs.service"

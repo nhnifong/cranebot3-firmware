@@ -1,0 +1,13 @@
+[Unit]
+Description=Temperature-controlled cooling fan
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# Runs as root to export and drive /sys/class/pwm/pwmchip0.
+ExecStart=/usr/bin/python3 /usr/local/bin/fan_control.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
