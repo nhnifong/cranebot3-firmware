@@ -81,12 +81,12 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     config.camera_cal_wide = nf_config.CameraCalibration()
     config.camera_cal_wide.resolution = nf_config.Resolution(width=684, height=384)
     intrinsic_np = np.array([
-        [300.4527505,   0.,          342.],
-        [  0.,          301.95273353, 192.],
-        [  0.,            0.,           1.]
+        [301.6880,   0.,       342.0],
+        [  0.,       302.8422, 192.0],
+        [  0.,         0.,         1.]
     ])
     config.camera_cal_wide.intrinsic_matrix = intrinsic_np.flatten().tolist()
-    distortion_np = np.array([-0.06959185, 0.1807256, -0.00037444, 0.00120041, -0.11564514])
+    distortion_np = np.array([-0.00655450, 0.05416844, -0.00211128, 0.00140262, -0.05193820])
     config.camera_cal_wide.distortion_coeff = distortion_np.flatten().tolist()
 
     # Gripper

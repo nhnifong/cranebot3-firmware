@@ -4,6 +4,14 @@ import time
 import glob
 import argparse
 import logging
+import asyncio
+import concurrent.futures
+import json
+import queue
+import threading
+
+import av
+import websockets
 
 from nf_robot.robot.spools import SpiralCalculator
 from nf_robot.common.pose_functions import *
@@ -83,6 +91,25 @@ def is_blurry(image, threshold=6.0):
     laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
     return laplacian_var < threshold
 
+def fit_intrinsics(opts, ipts, image_shape):
+    """cv2.calibrateCamera with the principal point held at the image centre.
+    Returns (rms reprojection error, intrinsic matrix, distortion, rvecs, tvecs)."""
+    # Initialize the Matrix with the Image Center
+    # This tells OpenCV: "Start assuming the lens is perfectly centered"
+    w, h = image_shape
+    intrinsic_matrix = np.array([
+        [1000.0, 0.0,    w / 2.0], # f_x estimate, 0, c_x
+        [0.0,    1000.0, h / 2.0], # 0, f_y estimate, c_y
+        [0.0,    0.0,    1.0    ]
+    ], dtype=np.float32)
+
+    # Use Flags to Lock the Center
+    # CALIB_USE_INTRINSIC_GUESS: Use the matrix above as the starting point
+    # CALIB_FIX_PRINCIPAL_POINT: Do NOT move c_x and c_y during optimization
+    flags = cv2.CALIB_USE_INTRINSIC_GUESS | cv2.CALIB_FIX_PRINCIPAL_POINT
+
+    return cv2.calibrateCamera(opts, ipts, image_shape, intrinsic_matrix, None, flags=flags)
+
 # calibrate interactively
 class CalibrationInteractive:
     def __init__(self, config_file, board_w=board_w, board_h=board_h, board_dim=board_dim, cal_field='camera_cal', display=True):
@@ -149,26 +176,8 @@ class CalibrationInteractive:
         # ret, self.intrinsic_matrix, self.distCoeff, rvecs, tvecs = cv2.calibrateCamera(
         #     self.opts, self.ipts, self.image_shape, None, None)
 
-        # Initialize the Matrix with the Image Center
-        # This tells OpenCV: "Start assuming the lens is perfectly centered"
-        w, h = self.image_shape
-        self.intrinsic_matrix = np.array([
-            [1000.0, 0.0,    w / 2.0], # f_x estimate, 0, c_x
-            [0.0,    1000.0, h / 2.0], # 0, f_y estimate, c_y
-            [0.0,    0.0,    1.0    ]
-        ], dtype=np.float32)
-
-        # Use Flags to Lock the Center
-        # CALIB_USE_INTRINSIC_GUESS: Use the matrix above as the starting point
-        # CALIB_FIX_PRINCIPAL_POINT: Do NOT move c_x and c_y during optimization
-        flags = cv2.CALIB_USE_INTRINSIC_GUESS | cv2.CALIB_FIX_PRINCIPAL_POINT
-
-        ret, self.intrinsic_matrix, self.distCoeff, rvecs, tvecs = cv2.calibrateCamera(
-            self.opts, self.ipts, self.image_shape, 
-            self.intrinsic_matrix, # Pass our initialized matrix
-            None, 
-            flags=flags # Pass our locking flags
-        )
+        ret, self.intrinsic_matrix, self.distCoeff, rvecs, tvecs = fit_intrinsics(
+            self.opts, self.ipts, self.image_shape)
 
         #Save matrices
         logging.info(f"Camera calibration performed with image resolution: {self.image_shape[0]}x{self.image_shape[1]}.")
@@ -224,18 +233,233 @@ def calibrate_from_stream(address, config_file):
     ce.calibrate()
     ce.save()
 
+class ComponentVideoSession:
+    """A websocket client of a component server, held open only so the server streams
+    video. Runs its own event loop in a thread and hands each video_ready port to the
+    caller through a queue. The server kills rpicam-vid when this disconnects."""
+    def __init__(self, address, ws_port):
+        self.uri = f'ws://{address}:{ws_port}'
+        self.video_ports = queue.Queue()
+        self.loop = None
+        self.task = None
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self.thread.start()
+
+    def _run(self):
+        self.loop = asyncio.new_event_loop()
+        self.task = self.loop.create_task(self._session())
+        try:
+            self.loop.run_until_complete(self.task)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self.loop.close()
+
+    async def _session(self):
+        async with websockets.connect(self.uri, max_size=None, open_timeout=10) as ws:
+            logging.info(f'Connected to {self.uri}, waiting for video_ready')
+            # measurements arrive many times a second and are drained here unread
+            async for message in ws:
+                update = json.loads(message)
+                if 'video_ready' in update:
+                    self.video_ports.put(int(update['video_ready'][0]))
+
+    def stop(self):
+        if self.loop is not None and self.loop.is_running():
+            self.loop.call_soon_threadsafe(self.task.cancel)
+        self.thread.join(timeout=5)
+
+
+class LatestFrameReader(threading.Thread):
+    """Decodes a video stream as fast as it arrives, keeping only the newest frame, so a
+    consumer slower than the stream sees the present rather than a growing backlog."""
+    OPEN_ATTEMPTS = 5
+    OPEN_RETRY_S = 1.5
+
+    def __init__(self, uri):
+        super().__init__(daemon=True)
+        self.uri = uri
+        self.stop_event = threading.Event()
+        self.lock = threading.Lock()
+        self.frame = None
+        self.frame_seq = 0
+
+    def run(self):
+        options = {'fflags': 'nobuffer', 'flags': 'low_delay', 'fast': '1'}
+        container = None
+        try:
+            # the socket may not be accepting yet when video_ready arrives
+            for attempt in range(self.OPEN_ATTEMPTS):
+                try:
+                    container = av.open(self.uri, options=options, mode='r')
+                    break
+                except (av.error.ConnectionRefusedError, av.error.TimeoutError):
+                    if attempt == self.OPEN_ATTEMPTS - 1:
+                        raise
+                    time.sleep(self.OPEN_RETRY_S)
+            logging.info(f'Receiving video from {self.uri}')
+            for frame in container.decode(video=0):
+                if self.stop_event.is_set():
+                    break
+                image = frame.to_ndarray(format='bgr24')
+                with self.lock:
+                    self.frame = image
+                    self.frame_seq += 1
+        except av.error.FFmpegError as e:
+            logging.warning(f'Video stream ended: {e}')
+        finally:
+            if container is not None:
+                container.close()
+
+    def latest(self):
+        """(sequence number, frame); the number changes only when a new frame arrives."""
+        with self.lock:
+            return self.frame_seq, self.frame
+
+    def stop(self):
+        self.stop_event.set()
+        self.join(timeout=3)
+
+
+def format_calibration_source(K, dist, image_shape):
+    """The fit as the camera_cal_wide block of create_default_config, ready to paste."""
+    w, h = image_shape
+    return (
+        f"    config.camera_cal_wide.resolution = nf_config.Resolution(width={w}, height={h})\n"
+        f"    intrinsic_np = np.array([\n"
+        f"        [{K[0, 0]:.4f},   0.,       {K[0, 2]:.1f}],\n"
+        f"        [  0.,       {K[1, 1]:.4f}, {K[1, 2]:.1f}],\n"
+        f"        [  0.,         0.,         1.]\n"
+        f"    ])\n"
+        f"    config.camera_cal_wide.intrinsic_matrix = intrinsic_np.flatten().tolist()\n"
+        f"    distortion_np = np.array([{', '.join(f'{d:.8f}' for d in np.ravel(dist))}])\n"
+        f"    config.camera_cal_wide.distortion_coeff = distortion_np.flatten().tolist()")
+
+
+def calibrate_continuous(address, ws_port=8765, board_w=board_w, board_h=board_h,
+                         board_dim=board_dim, min_motion_px=10.0):
+    """Calibrate a component's camera from its live stream until stopped with q, Esc or
+    Ctrl-C, refitting in the background as boards are collected.
+
+    Connects as an ordinary client, so the component streams in its default mode: the
+    one the robot runs in, which is the one worth calibrating. Nothing else may be
+    connected to the component, or the two clients' rpicam-vid launches fight over the
+    camera.
+
+    A board is collected when its corners have moved at least min_motion_px on average
+    since the last one collected, so holding the board still does not pile up copies of
+    one view and outweigh the rest.
+    """
+    objp = np.zeros((board_w * board_h, 3), np.float32)
+    objp[:, :2] = np.mgrid[0:board_w, 0:board_h].T.reshape(-1, 2) * board_dim
+
+    ipts = []
+    image_shape = None
+    best = None  # (rms, K, dist, number of boards fitted)
+    fitter = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    fit_future = None
+
+    def harvest(future):
+        nonlocal best
+        rms, K, dist, _, _ = future.result()
+        best = (rms, K, dist, future.n_boards)
+        logging.info(f'{future.n_boards} boards: fx={K[0, 0]:.2f} fy={K[1, 1]:.2f} '
+                     f'rms={rms:.3f}px dist={np.round(np.ravel(dist), 4).tolist()}')
+
+    session = ComponentVideoSession(address, ws_port)
+    session.start()
+    reader = None
+    window = 'calibration'
+    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+    try:
+        last_seq = 0
+        while True:
+            if reader is None or not reader.is_alive():
+                # wait out a missing or ended stream until the component announces one
+                try:
+                    port = session.video_ports.get(timeout=0.1)
+                except queue.Empty:
+                    if not session.thread.is_alive():
+                        raise RuntimeError(f'Lost the websocket connection to {session.uri}')
+                    if cv2.waitKey(1) & 0xFF in (ord('q'), 27):
+                        break
+                    continue
+                reader = LatestFrameReader(f'tcp://{address}:{port}')
+                reader.start()
+
+            seq, frame = reader.latest()
+            if frame is None or seq == last_seq:
+                if cv2.waitKey(1) & 0xFF in (ord('q'), 27):
+                    break
+                continue
+            last_seq = seq
+
+            grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            image_shape = grey.shape[::-1]
+            found, corners = cv2.findChessboardCornersSB(
+                grey, (board_w, board_h), cv2.CALIB_CB_EXHAUSTIVE + cv2.CALIB_CB_ACCURACY)
+            if found:
+                corners = corners.reshape(-1, 1, 2)
+                novel = not ipts or np.linalg.norm(corners - ipts[-1], axis=2).mean() >= min_motion_px
+                if novel:
+                    ipts.append(corners)
+                cv2.drawChessboardCorners(frame, (board_w, board_h), corners, found)
+
+            if fit_future is not None and fit_future.done():
+                harvest(fit_future)
+                fit_future = None
+            # a fit needs a handful of views to be determined at all
+            if fit_future is None and len(ipts) >= 5 and (best is None or best[3] < len(ipts)):
+                fit_future = fitter.submit(fit_intrinsics, [objp] * len(ipts), list(ipts), image_shape)
+                fit_future.n_boards = len(ipts)
+
+            status = f'boards {len(ipts)}'
+            if best is not None:
+                status += f'  fx {best[1][0, 0]:.1f}  fy {best[1][1, 1]:.1f}  rms {best[0]:.3f}px ({best[3]})'
+            cv2.putText(frame, status, (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3)
+            cv2.putText(frame, status, (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            cv2.imshow(window, frame)
+            if cv2.waitKey(1) & 0xFF in (ord('q'), 27):
+                break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if reader is not None:
+            reader.stop()
+        session.stop()
+        cv2.destroyAllWindows()
+        fitter.shutdown(wait=True)
+
+    if len(ipts) < 5:
+        logging.error(f'Only {len(ipts)} boards collected; not enough to fit')
+        return
+    # the background fit may have stopped short of the last boards collected
+    logging.info(f'Final fit over all {len(ipts)} boards...')
+    rms, K, dist, _, _ = fit_intrinsics([objp] * len(ipts), ipts, image_shape)
+    logging.info(f'Final: {len(ipts)} boards, fx={K[0, 0]:.4f} fy={K[1, 1]:.4f} rms={rms:.4f}px')
+    print(format_calibration_source(K, dist, image_shape))
+
+
 def main():
     parser = argparse.ArgumentParser(description='Run robot calibration functions. Use --help for more details on each command.')
     parser.add_argument('--mode', type=str, choices=[
         'collect-images-stream',
         'calibrate-from-files',
         'collect-images-locally-raspi',
-        'calibrate-from-stream'
+        'calibrate-from-stream',
+        'continuous'
     ], required=True, help='Choose the calibration function to run:\n \
             "collect-images-stream" to capture a specified number of images from a network stream; \
             "calibrate-from-files" to run camera calibration on a local set of images; \
             "collect-images-locally-raspi" to capture a specified number of images from a connected camera on a Raspberry Pi; \
-            "calibrate-from-stream" to run camera calibration directly from a network stream until 20 images are collected.')
+            "calibrate-from-stream" to run camera calibration directly from a network stream until 20 images are collected; \
+            "continuous" to connect to the component at --pi as a client, collect boards from its default stream until stopped, and print the fit as source.')
+    parser.add_argument('--pi', type=str,
+                        help='IP address of the component to calibrate (used with "continuous").')
+    parser.add_argument('--ws-port', type=int, default=8765,
+                        help='Websocket port of the component server (used with "continuous").')
     parser.add_argument('--address', type=str, default='tcp://192.168.1.151:8888',
                         help='The network address for the video stream (used with stream modes).')
     parser.add_argument('--num-images', type=int, default=50,
@@ -256,6 +480,7 @@ def main():
                         help='Save the result to the config\'s wide camera calibration field (camera_cal_wide) instead of camera_cal.')
 
     args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
     cal_field = 'camera_cal_wide' if args.wide else 'camera_cal'
 
     if args.mode == 'collect-images-locally-raspi':
@@ -273,6 +498,16 @@ def main():
         )
     elif args.mode == 'calibrate-from-stream':
         calibrate_from_stream(args.address, args.config)
+    elif args.mode == 'continuous':
+        if not args.pi:
+            parser.error('--pi is required with --mode continuous')
+        calibrate_continuous(
+            args.pi,
+            ws_port=args.ws_port,
+            board_w=args.board_width,
+            board_h=args.board_height,
+            board_dim=args.square_size / 1000.0,
+        )
 
 if __name__ == "__main__":
     main()
