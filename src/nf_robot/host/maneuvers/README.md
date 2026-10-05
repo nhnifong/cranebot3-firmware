@@ -2,7 +2,7 @@
 
 A maneuver is one high-level behavior of a Stringman robot, such as parking, pick and place or anything you write yourself, kept in its own class and registered with the `AsyncObserver`. The observer owns the connections, telemetry, config, calibration and motion primitives. A maneuver drives the robot only through the observer's public methods.
 
-A maneuver is *not* a program that drives the robot through it's telemetry link. The main UI and lerobot/strigman.py are examples of code that communicates that way.
+A maneuver is *not* a program that drives the robot through its telemetry link. The main UI and lerobot/stringman.py are examples of code that communicates that way.
 
 ## Getting started
 
@@ -310,7 +310,8 @@ Coroutines marked *motion* move the robot and may be cancelled at any `await`.
 | `await move_direction_speed(uvec, speed=None, starting_pos=None, downward_bias=-0.04, key=...)` | Command a velocity under a source key; pass `key=self.velocity_key()`. Velocities from all keys are summed, and a key expires 2 s after its last command. Zero your key when done. |
 | `slow_stop_all_spools()` | Bring every spool to rest. |
 | `await settle_wrist(target, tol=2.0, timeout=6.0)` | Move the wrist and wait for it to arrive. |
-| `await settle_wrist_to_heading(angle_deg, tol=2.0, peak_dps=90.0)` | The same, choosing the nearest equivalent angle and easing in and out. |
+| `await ease_wrist(target, tol=2.0, peak_dps=90.0)` | Walk the wrist to an absolute angle, easing in and out so the gripper is not set swinging, and wait for it to arrive. |
+| `await settle_wrist_to_heading(angle_deg, tol=2.0, peak_dps=90.0)` | Like `ease_wrist`, choosing whichever equivalent angle faces the same way and is nearest. |
 | `await settle_fingers(target, tol=2.0, timeout=6.0)` | Move the fingers and wait for them to arrive. |
 | `await set_finger_angle(angle)` / `await set_wrist_angle(angle)` / `await set_wrist_speed(dps)` | Command without waiting. The wrist speed has to be repeated to keep turning. |
 | `await trim_altitude_to_range(target_range_m, tol_m=0.02, max_steps=4, ceiling_z=None, max_travel_m=None)` | *Motion.* Adjust height until the laser reads `target_range_m`. Returns the final reading. |
