@@ -15,14 +15,14 @@ Note that Pytorch and CUDA are dependencies which is around 5.5GB
 
 #### Linux
 
-    sudo apt install python3-dev python3-virtualenv python3-pip ffmpeg
+    sudo apt install python3-dev python3-virtualenv python3-pip
     python3.13 -m virtualenv venv
     source venv/bin/activate
     pip install "nf_robot[host]"
 
 #### Mac
 
-    brew install ffmpeg python@3.13
+    brew install python@3.13
     python3.13 -m venv venv
     source venv/bin/activate
     pip install "nf_robot[host]"

@@ -31,6 +31,8 @@ host = [
     "torchvision",
     "pupil-apriltags",
     "av",
+    # bundles a static ffmpeg binary, so users needn't install one
+    "imageio-ffmpeg",
     "huggingface_hub",
     "tzlocal",
     # the DINOv2-with-registers backbone both pinned models run on

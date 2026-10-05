@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import signal
 import sys
-import shutil
 import faulthandler
 import threading
 import time
@@ -39,6 +38,7 @@ import json
 import re
 import subprocess
 import zipfile
+from imageio_ffmpeg import get_ffmpeg_exe
 from packaging.version import parse as parse_version, InvalidVersion
 
 from nf_robot.common.model_revisions import pinned_revision
@@ -5503,12 +5503,11 @@ def main():
     )
     args = parser.parse_args()
 
-    if shutil.which("ffmpeg") is None:
-        if sys.platform == "darwin":
-            install_cmd = "brew install ffmpeg"
-        else:
-            install_cmd = "sudo apt install ffmpeg"
-        print(f"ffmpeg is required but was not found on your PATH. Install it with:\n\n    {install_cmd}\n", file=sys.stderr)
+    # imageio-ffmpeg only bundles a binary for common platforms; elsewhere it falls back to PATH
+    try:
+        get_ffmpeg_exe()
+    except RuntimeError as e:
+        print(f"ffmpeg is required but was not found: {e}", file=sys.stderr)
         sys.exit(1)
 
     if args.prod:

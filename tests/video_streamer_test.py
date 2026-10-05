@@ -24,12 +24,12 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import av
+from imageio_ffmpeg import get_ffmpeg_exe
 
 from nf_robot.host.video_streamer import CompressedStreamer, NfVideoStreamer, RTMPStreamer
 
 from port_utils import free_ports
 
-FFMPEG_AVAILABLE = shutil.which('ffmpeg') is not None
 
 
 def _receive_options():
@@ -56,7 +56,7 @@ class _SourceBackedTestCase(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp(prefix="video_streamer_test_")
         self.source_proc = subprocess.Popen(
             [
-                'ffmpeg', '-y', '-re', '-f', 'lavfi', '-i', 'testsrc=size=640x480:rate=20',
+                get_ffmpeg_exe(), '-y', '-re', '-f', 'lavfi', '-i', 'testsrc=size=640x480:rate=20',
                 '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-g', '20',
                 '-b:v', '520k',
                 '-f', 'mpegts', f'tcp://127.0.0.1:{self.source_port}?listen=1',
@@ -85,7 +85,6 @@ class _SourceBackedTestCase(unittest.TestCase):
         raise last_error
 
 
-@unittest.skipUnless(FFMPEG_AVAILABLE, "ffmpeg CLI not installed")
 class TestRTMPStreamerPassthrough(_SourceBackedTestCase):
     """Real ffmpeg source -> PyAV demux -> RTMPStreamer(passthrough=True) -> real ffmpeg remux."""
 
@@ -137,7 +136,6 @@ class TestRTMPStreamerPassthrough(_SourceBackedTestCase):
         self.assertEqual(streamer.connection_status, 'ok')
 
 
-@unittest.skipUnless(FFMPEG_AVAILABLE, "ffmpeg CLI not installed")
 class TestCompressedStreamer(_SourceBackedTestCase):
     """Real ffmpeg source -> PyAV demux -> CompressedStreamer -> multiple real PyAV clients
     over raw TCP, for the LAN/same-machine passthrough path (e.g. a lerobot recorder).

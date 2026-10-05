@@ -11,6 +11,7 @@ from socketserver import ThreadingMixIn
 import io
 import cv2
 from urllib.parse import urlparse
+from imageio_ffmpeg import get_ffmpeg_exe
 
 from nf_robot.common.util import get_local_ip
 
@@ -313,7 +314,7 @@ class RTMPStreamer:
 
         if self.passthrough:
             command = [
-                'ffmpeg',
+                get_ffmpeg_exe(),
                 '-y',
                 '-use_wallclock_as_timestamps', '1',
                 '-f', 'h264',
@@ -325,7 +326,7 @@ class RTMPStreamer:
             gop_size = max(1, int(self.fps * 2))
             bitrate = self._calculate_bitrate()
             command = [
-                'ffmpeg',
+                get_ffmpeg_exe(),
                 '-y',
                 '-use_wallclock_as_timestamps', '1',
                 '-f', 'rawvideo',
