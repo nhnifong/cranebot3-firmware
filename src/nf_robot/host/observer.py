@@ -4865,16 +4865,7 @@ class AsyncObserver:
         # Every thread's Python stack. This reveals the main thread even when it
         # is blocked in synchronous code holding up the event loop.
         faulthandler.dump_traceback()
-        # Suspended coroutines won't show up above (they aren't on any thread's
-        # stack), so also list the pending asyncio tasks and where each parked.
-        try:
-            for task in asyncio.all_tasks(loop):
-                if task.done():
-                    continue
-                print(f'--- pending task {task!r} ---', file=sys.stderr, flush=True)
-                task.print_stack(file=sys.stderr)
-        except Exception as e:
-            print(f'  could not enumerate asyncio tasks: {e!r}', file=sys.stderr, flush=True)
+        _dump_pending_tasks(loop)
 
     async def _async_close_impl(self) -> None:
         # persist the last observed named positions (e.g. hamper, parking_location) so they survive a restart
@@ -5436,6 +5427,33 @@ class AsyncObserver:
         async with self.prefer_swing_cancellation():
             return await self.servo.run(mode=SERVO_MODE_GRASP)
 
+def _dump_pending_tasks(loop) -> None:
+    # Suspended coroutines aren't on any thread's stack, so list the pending
+    # asyncio tasks and where each parked.
+    try:
+        for task in asyncio.all_tasks(loop):
+            if task.done():
+                continue
+            print(f'--- pending task {task!r} ---', file=sys.stderr, flush=True)
+            task.print_stack(file=sys.stderr)
+    except Exception as e:
+        print(f'  could not enumerate asyncio tasks: {e!r}', file=sys.stderr, flush=True)
+
+
+def _register_stack_dump_signal() -> None:
+    """kill -USR1 <pid> prints every thread's stack and every pending asyncio task to stderr."""
+    def dump_tasks(signum, frame):
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # still starting up, before the event loop exists
+        _dump_pending_tasks(loop)
+    signal.signal(signal.SIGUSR1, dump_tasks)
+    # faulthandler dumps from the C signal handler, so the thread stacks appear even when the
+    # main thread is stuck in C code; chain=True then lets dump_tasks run once it can.
+    faulthandler.register(signal.SIGUSR1, all_threads=True, chain=True)
+
+
 def main():
     """
     Run stringman in a headless manner
@@ -5502,6 +5520,9 @@ def main():
              "clearance of the bottom (starting) point. Defaults to %s." % (tuple(DIAMOND_SIZE),)
     )
     args = parser.parse_args()
+
+    if sys.platform != "win32":
+        _register_stack_dump_signal()
 
     # imageio-ffmpeg only bundles a binary for common platforms; elsewhere it falls back to PATH
     try:

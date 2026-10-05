@@ -2,7 +2,9 @@
 comes up and serves the UI. The rest of the suite drives AsyncObserver directly, so nothing
 else catches a failure in main() itself: a missing ffmpeg, a platform-specific signal API,
 a console script that doesn't resolve."""
+import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -37,6 +39,8 @@ def test_stringman_headless_starts(tmp_path):
             [exe, '--no_ortho', '--config', str(tmp_path / 'configuration.json'),
              '--ui_port', str(ui_port)],
             cwd=tmp_path, stdout=log, stderr=subprocess.STDOUT,
+            # otherwise its prints sit in a buffer that the kill below throws away
+            env={**os.environ, 'PYTHONUNBUFFERED': '1'},
         )
         try:
             deadline = time.monotonic() + STARTUP_TIMEOUT
@@ -49,6 +53,11 @@ def test_stringman_headless_starts(tmp_path):
                 except OSError:
                     time.sleep(1)
             exited = proc.poll()
+            if exited is None and not served and hasattr(signal, 'SIGUSR1'):
+                # main() dumps every thread's stack and pending asyncio task on SIGUSR1,
+                # which shows where startup hung
+                proc.send_signal(signal.SIGUSR1)
+                time.sleep(3)
         finally:
             proc.kill()
             proc.wait()
