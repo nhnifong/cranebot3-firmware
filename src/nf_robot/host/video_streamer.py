@@ -409,9 +409,17 @@ class RTMPStreamer:
     def stop(self):
         if self.process:
             try:
-                if self.process.stdin: self.process.stdin.close()
-                self.process.terminate()
-                self.process.wait(timeout=2)
+                try:
+                    if self.process.stdin: self.process.stdin.close()
+                except OSError:
+                    pass
+                # EOF on stdin lets ffmpeg flush and finalize its output. terminate() is only a
+                # fallback: on Windows it's TerminateProcess, which would truncate the output.
+                try:
+                    self.process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self.process.terminate()
+                    self.process.wait(timeout=2)
             except Exception:
                 pass
             finally:
