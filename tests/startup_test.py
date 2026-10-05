@@ -1,7 +1,7 @@
 """Launch the installed stringman-headless command the way a user would and check that it
-comes up and serves the UI. The rest of the suite drives AsyncObserver directly, so nothing
-else catches a failure in main() itself: a missing ffmpeg, a platform-specific signal API,
-a console script that doesn't resolve."""
+comes up and opens its local telemetry websocket. The rest of the suite drives AsyncObserver
+directly, so nothing else catches a failure in main() itself: a missing ffmpeg, a
+platform-specific signal API, a console script that doesn't resolve."""
 import os
 import shutil
 import signal
@@ -9,14 +9,13 @@ import socket
 import subprocess
 import sys
 import time
-import urllib.request
 
 import pytest
 
-from port_utils import free_port
-
 # torch and friends import slowly on a cold Windows runner
 STARTUP_TIMEOUT = 120
+# the local telemetry websocket, opened near the end of AsyncObserver.main()'s startup
+TELEMETRY_PORT = 4245
 
 
 def _port_in_use(port):
@@ -29,15 +28,15 @@ def test_stringman_headless_starts(tmp_path):
     if exe is None:
         pytest.skip('stringman-headless is not installed (pip install ".[host]")')
     # the local telemetry websocket's port is fixed; a real observer on this machine holds it
-    if _port_in_use(4245):
-        pytest.skip('port 4245 is in use, probably by a running observer')
+    if _port_in_use(TELEMETRY_PORT):
+        pytest.skip(f'port {TELEMETRY_PORT} is in use, probably by a running observer')
 
-    ui_port = free_port()
     log_path = tmp_path / 'observer.log'
     with open(log_path, 'w') as log:
         proc = subprocess.Popen(
             [exe, '--no_ortho', '--config', str(tmp_path / 'configuration.json'),
-             '--ui_port', str(ui_port)],
+             # CI has no built playroom-ui to serve
+             '--no_serve_ui'],
             cwd=tmp_path, stdout=log, stderr=subprocess.STDOUT,
             # otherwise its prints sit in a buffer that the kill below throws away
             env={**os.environ, 'PYTHONUNBUFFERED': '1'},
@@ -46,12 +45,10 @@ def test_stringman_headless_starts(tmp_path):
             deadline = time.monotonic() + STARTUP_TIMEOUT
             served = False
             while time.monotonic() < deadline and proc.poll() is None:
-                try:
-                    with urllib.request.urlopen(f'http://127.0.0.1:{ui_port}/', timeout=2) as r:
-                        served = r.status == 200
+                if _port_in_use(TELEMETRY_PORT):
+                    served = True
                     break
-                except OSError:
-                    time.sleep(1)
+                time.sleep(1)
             exited = proc.poll()
             if exited is None and not served and hasattr(signal, 'SIGUSR1'):
                 # main() dumps every thread's stack and pending asyncio task on SIGUSR1,
@@ -64,4 +61,4 @@ def test_stringman_headless_starts(tmp_path):
 
     output = log_path.read_text(errors='replace')
     assert exited is None, f'stringman-headless exited with {exited} on {sys.platform}:\n{output}'
-    assert served, f'UI never came up on port {ui_port} within {STARTUP_TIMEOUT}s:\n{output}'
+    assert served, f'telemetry port {TELEMETRY_PORT} never opened within {STARTUP_TIMEOUT}s:\n{output}'
