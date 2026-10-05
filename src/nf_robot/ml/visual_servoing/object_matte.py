@@ -32,7 +32,7 @@ PRINCIPAL_NORM = (342.0 / 684.0, 192.0 / 384.0)
 # not object.
 VIGNETTE_DIAMETER_M = 0.5
 # Normalized focal length from camera_cal_wide, valid at any capture resolution.
-FOCAL_NORM = (439.31834658631243 / 684.0, 461.5621083718772 / 384.0)
+FOCAL_NORM = (284.84 / 684.0, 286.27 / 384.0)
 
 MANIFEST_NAME = "objects.jsonl"
 

@@ -47,7 +47,7 @@ CLOSE_POOL = (4, 6)
 # pressure.
 STATE_DIM = 3
 # Intrinsics of the 684x384 wide gripper stream, as fractions of the frame.
-FOCAL_NORM = (439.31834658631243 / 684.0, 461.5621083718772 / 384.0)
+FOCAL_NORM = (284.84 / 684.0, 286.27 / 384.0)
 PRINCIPAL_NORM = (342.0 / 684.0, 192.0 / 384.0)
 
 

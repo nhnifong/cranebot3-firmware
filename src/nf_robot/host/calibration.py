@@ -182,7 +182,7 @@ class CalibrationInteractive:
         tot_error = 0
         for i in range(len(self.opts)):
             imgpoints2, _ = cv2.projectPoints(self.opts[i], rvecs[i], tvecs[i], self.intrinsic_matrix, self.distCoeff)
-            error = cv2.norm(self.ipts[i], imgpoints2, cv2.NORM_L2)/len(imgpoints2)
+            error = cv2.norm(self.ipts[i].reshape(-1, 2), imgpoints2.reshape(-1, 2), cv2.NORM_L2)/len(imgpoints2)
             tot_error += error
         terr = tot_error/len(self.opts)
         logging.info(f"Total reprojection error: {terr}")

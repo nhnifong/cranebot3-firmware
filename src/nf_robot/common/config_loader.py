@@ -75,17 +75,18 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     config.camera_cal.distortion_coeff = distortion_np.flatten().tolist()
 
     # Camera Calibration Wide
-    # Chessboard calibration of the 684x384 full-sensor-FOV wide camera stream (the whole
-    # 16:9 field of view, no longer a center crop). Copied from conf_playroom_special.json.
+    # Chessboard calibration of the Camera Module 3 Wide in the gripper_control stream: sensor
+    # mode 2304x1296 scaled to 684x384, the whole 16:9 field of view. The 2.75mm lens over
+    # ~9.4um effective pixels predicts f ~292px, which this agrees with.
     config.camera_cal_wide = nf_config.CameraCalibration()
     config.camera_cal_wide.resolution = nf_config.Resolution(width=684, height=384)
     intrinsic_np = np.array([
-        [439.31834658631243,   0.,                342.],
-        [  0.,                461.5621083718772,  192.],
-        [  0.,                  0.,                 1.]
+        [300.4527505,   0.,          342.],
+        [  0.,          301.95273353, 192.],
+        [  0.,            0.,           1.]
     ])
     config.camera_cal_wide.intrinsic_matrix = intrinsic_np.flatten().tolist()
-    distortion_np = np.array([-0.026228587204545444, -0.012309725227594465, -0.00033204923591180567, 0.0015432535264626682, 0.10759316594344916])
+    distortion_np = np.array([-0.06959185, 0.1807256, -0.00037444, 0.00120041, -0.11564514])
     config.camera_cal_wide.distortion_coeff = distortion_np.flatten().tolist()
 
     # Gripper
@@ -159,9 +160,8 @@ def load_config(path: Path=DEFAULT_CONFIG_PATH) -> nf_config.StringmanPilotConfi
             c = nf_config.StringmanPilotConfig().from_json(f.read(), ignore_unknown_fields=True)
             if c.camera_cal is None:
                 c.camera_cal = create_default_config().camera_cal
-            # This version requires the new full-FOV (684x384) wide camera calibration. Older
-            # configs hold the 384x384 center-crop intrinsics, so always override whatever wide
-            # cal was saved with the current default rather than only filling it in when missing.
+            # Saved wide calibrations in the field are wrong for the current gripper stream, so
+            # the default always replaces whatever was saved rather than only filling it in.
             c.camera_cal_wide = create_default_config().camera_cal_wide
             if c.park_data is None:
                 c.park_data = nf_config.ParkData()
