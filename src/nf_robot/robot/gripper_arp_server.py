@@ -17,6 +17,8 @@ from adafruit_ads1x15 import ADS1015, AnalogIn, ads1x15 # analog2digital convert
 
 from nf_robot.robot.component_server import RobotComponentServer
 from nf_robot.robot.simple_st3215 import SimpleSTS3215
+from nf_robot.robot.gripper_i2c import (
+    VL53L1X_ADDR, ADS1015_ADDR, MPU6050_ADDR, LSM6DS3TRC_ADDRS, IMU_LSM6DS3TRC, find_imu)
 from nf_robot.common.util import remap, clamp, PID
 import nf_robot.common.definitions as model_constants
 
@@ -38,6 +40,17 @@ RAW_GYRO_MAX_SAMPLES = 6000
 # How many samples one message carries, so a backlog drains over several sends rather than
 # in one outsized frame.
 RAW_GYRO_PER_MESSAGE = 200
+
+def make_imu(i2c, i2c_addrs):
+    """The IMU on this hat, whichever kind it carries. Both expose .acceleration in m/s^2
+    and .gyro in rad/s. i2c_addrs of None assumes the original MPU6050."""
+    found = find_imu(i2c_addrs) if i2c_addrs is not None else None
+    if found is not None and found[0] == IMU_LSM6DS3TRC:
+        # imported here so hosts and tests without the library can still load this module
+        from adafruit_lsm6ds.lsm6ds3trc import LSM6DS3TRC as LSM6DS3TRCDriver
+        logging.info(f'using {IMU_LSM6DS3TRC} IMU at 0x{found[1]:02X}')
+        return LSM6DS3TRCDriver(i2c, address=found[1])
+    return MPU6050(i2c, address=MPU6050_ADDR)
 
 # values that can be overridden by the controller
 default_gripper_conf = {
@@ -106,7 +119,9 @@ gripper_stream_modes = ('gripper_control', 'gripper_capture')
 
 
 class GripperArpServer(RobotComponentServer):
-    def __init__(self):
+    def __init__(self, i2c_addrs=None):
+        """i2c_addrs is the set of addresses found by scanning the bus, used to pick which
+        IMU this hat carries. None assumes the original MPU6050."""
         super().__init__()
         self.conf.update(default_gripper_conf)
         self.stream_modes = gripper_stream_modes
@@ -115,21 +130,55 @@ class GripperArpServer(RobotComponentServer):
 
         self.stream_command = stream_command
 
+        # Every part is brought up on its own, so one that is missing or broken leaves the
+        # rest working and is named in the error state rather than stopping the server.
+        problems = []
         i2c = busio.I2C(board.SCL, board.SDA)
 
-        self.rangefinder = VL53L1X(i2c)
-        model_id, module_type, mask_rev = self.rangefinder.model_info
-        logging.info(f'Rangefinder Model ID: 0x{model_id:0X} Module Type: 0x{module_type:0X} Mask Revision: 0x{mask_rev:0X}')
-        self.rangefinder.distance_mode = 2 # LONG, reports centimeters
-        self.rangefinder.start_ranging()
+        self.rangefinder = None
+        try:
+            self.rangefinder = VL53L1X(i2c)
+            model_id, module_type, mask_rev = self.rangefinder.model_info
+            logging.info(f'Rangefinder Model ID: 0x{model_id:0X} Module Type: 0x{module_type:0X} Mask Revision: 0x{mask_rev:0X}')
+            self.rangefinder.distance_mode = 2 # LONG, reports centimeters
+            self.rangefinder.start_ranging()
+        except (OSError, ValueError, RuntimeError):
+            logging.exception('rangefinder init failed')
+            self.rangefinder = None
+            problems.append(f'rangefinder (VL53L1X at 0x{VL53L1X_ADDR:02X}) not responding')
 
-        self.ads = ADS1015(i2c)
-        self.pressure_sensor = AnalogIn(self.ads, ads1x15.Pin.A0)
+        self.pressure_sensor = None
+        try:
+            self.ads = ADS1015(i2c)
+            self.pressure_sensor = AnalogIn(self.ads, ads1x15.Pin.A0)
+        except (OSError, ValueError, RuntimeError):
+            logging.exception('pressure ADC init failed')
+            problems.append(f'finger pressure ADC (ADS1015 at 0x{ADS1015_ADDR:02X}) not responding')
 
-        self.imu = MPU6050(i2c)
+        self.imu = None
+        try:
+            self.imu = make_imu(i2c, i2c_addrs)
+        except (OSError, ValueError, RuntimeError):
+            logging.exception('IMU init failed')
+            lsm = '/'.join(f'0x{a:02X}' for a in LSM6DS3TRC_ADDRS)
+            problems.append(f'IMU (MPU6050 at 0x{MPU6050_ADDR:02X} or LSM6DS3TR-C at {lsm}) not responding')
 
-        self.motors = SimpleSTS3215()
-        self.motors.configure_multiturn(WRIST)
+        # False when the servo bus can't be used at all; every motor touch is skipped then
+        self.motors_ok = False
+        try:
+            self.motors = SimpleSTS3215()
+            missing = [name for sid, name in ((FINGER, 'finger'), (WRIST, 'wrist')) if not self.motors.ping(sid)]
+            if missing:
+                problems.append(f'{" and ".join(missing)} servo (STS3215) not responding on the servo bus')
+            else:
+                self.motors.configure_multiturn(WRIST)
+                self.motors_ok = True
+        except (OSError, TimeoutError, ValueError) as e:
+            logging.exception('servo init failed')
+            problems.append(f'could not communicate with the STS3215 servos: {e}')
+
+        if problems:
+            self.set_error_state('; '.join(problems))
 
         # RobotComponentServer expects this attribute; a gripper has no spool
         self.spooler = None
@@ -413,7 +462,7 @@ class GripperArpServer(RobotComponentServer):
     def readOtherSensors(self):
         t = time.time()
         finger_angle = self.getFingerAngle()
-        wrist_angle = self.getWristAngle()
+        wrist_angle = self.getWristAngle() if self.motors_ok else 0
 
         self.update['grip_sensors'] = {
             'time': t,
@@ -426,9 +475,10 @@ class GripperArpServer(RobotComponentServer):
         # Streamed every cycle rather than only on request. The swing model the host fits
         # from the gyro assumes a free pendulum, which is exactly what is untrue when the
         # fingers are resting on something, so the host needs the accelerometer's own answer.
-        self.update['angle_from_vertical'] = self.getAngleFromVertical()
+        if self.imu is not None:
+            self.update['angle_from_vertical'] = self.getAngleFromVertical()
 
-        if self.rangefinder.data_ready:
+        if self.rangefinder is not None and self.rangefinder.data_ready:
             distance = self.rangefinder.distance
             # None when the floor is out of range
             if distance:
@@ -482,7 +532,10 @@ class GripperArpServer(RobotComponentServer):
         # The FSR's resistance falls logarithmically with force - a big voltage drop on a
         # light touch, very little on a hard press - so the exponent flattens the
         # oversensitive light end into something usable as a force proxy.
-        norm_pressure = clamp((max(0.0, 3.3 - self.pressure_sensor.voltage) / 3.3) ** 2.5, 0.0, 1.0)
+        if self.pressure_sensor is not None:
+            norm_pressure = clamp((max(0.0, 3.3 - self.pressure_sensor.voltage) / 3.3) ** 2.5, 0.0, 1.0)
+        else:
+            norm_pressure = 0.0
 
         # low-pass, or sensor noise reaches the PID's derivative term as jitter
         weighted_sum = (norm_pressure * self.conf['PRESSURE_WEIGHT']) + (norm_load * (1-self.conf['PRESSURE_WEIGHT']))
@@ -498,6 +551,8 @@ class GripperArpServer(RobotComponentServer):
     async def updateMotors(self):
         """The 60Hz loop that owns both motors: applies commanded speeds, runs the finger
         force controller, and saves state once movement stops."""
+        if not self.motors_ok:
+            return
         try:
             self.motors.torque_enable(FINGER, True)
             self.motors.torque_enable(WRIST, True)
@@ -610,6 +665,11 @@ class GripperArpServer(RobotComponentServer):
                         self.save_state()
                 
                 await asyncio.sleep(DT)
+        except TimeoutError as e:
+            logging.exception("lost communication with servos in motor tracking loop")
+            # stop everything else touching the bus, which would only hit the same timeout
+            self.motors_ok = False
+            self.set_error_state(f'lost communication with the STS3215 servos: {e}')
         except Exception as e:
             logging.exception("problem in motor tracking loop")
 
@@ -624,6 +684,8 @@ class GripperArpServer(RobotComponentServer):
         Sending the model rather than raw gyro lets the host project it forward to cover
         control latency; see arp_gripper_client.compute_swing_correction.
         """
+        if self.imu is None:
+            return
         while True:
             now = time.time()
             dt = now - self.last_time_imu
@@ -759,14 +821,19 @@ class GripperArpServer(RobotComponentServer):
         if 'set_wrist_speed' in update and not self.wrist_busy:
             self.setWristSpeed(float(update['set_wrist_speed']))
         if 'measure_finger_contact' in update:
-            asyncio.create_task(self.measureFingerContact())
-        if 'query_angle_from_vertical' in update:
+            if self.motors_ok and self.pressure_sensor is not None:
+                asyncio.create_task(self.measureFingerContact())
+            else:
+                # calibration feels for contact with the pad, so it needs both
+                logging.warning('finger contact calibration needs the servos and the pressure sensor')
+                self.update['finger_contact_calibration_complete'] = None
+        if 'query_angle_from_vertical' in update and self.imu is not None:
             self.update['angle_from_vertical'] = self.getAngleFromVertical()
         if 'identify' in update:
             self.identify()
-        if 'reset_wrist' in update and not self.wrist_busy:
+        if 'reset_wrist' in update and not self.wrist_busy and self.motors_ok:
             asyncio.create_task(self.resetWrist())
-        if 'untwist' in update and not self.wrist_busy:
+        if 'untwist' in update and not self.wrist_busy and self.motors_ok:
             asyncio.create_task(self.untwistWrist(update['untwist']))
         if 'record_gyro' in update:
             self.record_gyro = bool(update['record_gyro'])
@@ -778,6 +845,8 @@ class GripperArpServer(RobotComponentServer):
 
     def identify(self):
         """Twitch the fingers, so an operator can tell which gripper this is."""
+        if not self.motors_ok:
+            return
         self.motor_loop_pause = True
         pos = self.motors.get_position(FINGER)
         self.motors.set_position(FINGER, pos + 60)

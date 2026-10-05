@@ -5,6 +5,7 @@ import board
 import busio
 
 from nf_robot.robot.connect_wifi import ensure_connection
+from nf_robot.robot.gripper_i2c import ADS1015_ADDR, VL53L1X_ADDR, IMU_ADDRS
 
 # todo maybe there is a better solution to this but systemctl starts us too early and some zeroconf things dont work
 time.sleep(3)
@@ -38,9 +39,13 @@ async def asyncmain():
     except ValueError:
         addrs = set([])
 
-    if set([0x48, 0x29, 0x68]).issubset(addrs): # arpeggio_gripper
+    # arpeggio_gripper: pressure ADC, rangefinder and an IMU (MPU6050, or LSM6DS3TR-C on newer
+    # hats). Two of the three is enough to know this is a gripper; the server reports
+    # whichever one is missing as its error state.
+    gripper_parts = [ADS1015_ADDR in addrs, VL53L1X_ADDR in addrs, bool(IMU_ADDRS & addrs)]
+    if sum(gripper_parts) >= 2:
         from nf_robot.robot.gripper_arp_server import GripperArpServer
-        gs = GripperArpServer()
+        gs = GripperArpServer(addrs)
         if new_connection_configured:
             gs.identify()
         r = await gs.main()

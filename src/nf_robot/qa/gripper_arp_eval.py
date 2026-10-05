@@ -6,23 +6,27 @@ import subprocess
 import board
 import busio
 import json
+import math
 from adafruit_vl53l1x import VL53L1X # rangefinder
 from adafruit_ads1x15 import ADS1015, AnalogIn, ads1x15 # analog2digital converter for pressure
 
 from nf_robot.robot.simple_st3215 import SimpleSTS3215
+from nf_robot.robot.gripper_i2c import VL53L1X_ADDR, ADS1015_ADDR, IMU_ADDRS, find_imu
+from nf_robot.robot.gripper_arp_server import make_imu
 from nf_robot.qa.set_hostname import set_component_hostname
 
 FINGER_MOTOR_ID = 1
 WRIST_MOTOR_ID = 2
-# Expected I2C devices: 0x29 rangefinder (VL53L1X), 0x48 pressure ADC (ADS1015), 0x68 IMU
-EXPECTED_I2C_ADDRESSES = {0x29, 0x48, 0x68}
+# Expected I2C devices besides the IMU, which is one of IMU_ADDRS depending on the hat
+EXPECTED_I2C_ADDRESSES = {VL53L1X_ADDR, ADS1015_ADDR}
 STEPS_PER_REV = 4096
 GEAR_RATIO = 10/45 # a finger lever makes this many revolutions per revolution of the drive gear
 FINGER_TRAVEL_DEG = 59 # actually 60 but need small margin of space at wide open. 
 FINGER_TRAVEL_STEPS = FINGER_TRAVEL_DEG / 360 / GEAR_RATIO * STEPS_PER_REV
 
 def verify_i2c_bus(i2c):
-    """Scan the I2C bus and confirm exactly the expected devices are present.
+    """Scan the I2C bus and confirm exactly the expected devices are present, plus one
+    IMU of either supported type. Returns the set of addresses found.
 
     A hung scan (e.g. a reversed connector holding the bus) or a mismatch in
     addresses is reported clearly instead of failing deep inside a sensor read.
@@ -35,10 +39,18 @@ def verify_i2c_bus(i2c):
     finally:
         i2c.unlock()
 
-    missing = EXPECTED_I2C_ADDRESSES - found
-    unexpected = found - EXPECTED_I2C_ADDRESSES
+    imu = find_imu(found)
+    if imu is None:
+        imu_str = " or ".join(f"0x{a:02x}" for a in sorted(IMU_ADDRS))
+        raise SystemExit(f"I2C bus check failed. No IMU found (expected one of {imu_str}).")
+    imu_type, imu_addr = imu
+    print(f"Found {imu_type} IMU at 0x{imu_addr:02x}.")
+    expected = EXPECTED_I2C_ADDRESSES | {imu_addr}
+
+    missing = expected - found
+    unexpected = found - expected
     if missing or unexpected:
-        expected_str = ", ".join(f"0x{a:02x}" for a in sorted(EXPECTED_I2C_ADDRESSES))
+        expected_str = ", ".join(f"0x{a:02x}" for a in sorted(expected))
         found_str = ", ".join(f"0x{a:02x}" for a in sorted(found)) or "none"
         msg = f"I2C bus check failed. Expected [{expected_str}], found [{found_str}]."
         if missing:
@@ -48,6 +60,19 @@ def verify_i2c_bus(i2c):
         msg += " Check I2C connectors (a reversed connector can hold the bus) and wiring."
         raise SystemExit(msg)
     print("I2C bus check passed.")
+    return found
+
+
+def verify_imu(i2c, addrs):
+    """Read the IMU and confirm it reports gravity while the gripper sits still."""
+    imu = make_imu(i2c, addrs)
+    ax, ay, az = imu.acceleration
+    g = math.sqrt(ax * ax + ay * ay + az * az)
+    print(f"IMU acceleration = ({ax:.2f}, {ay:.2f}, {az:.2f}) m/s^2, magnitude {g:.2f}")
+    assert 8.0 < g < 11.6, f"IMU reads {g:.2f} m/s^2 at rest, expected about 9.8. IMU may not be functioning."
+    gx, gy, gz = imu.gyro
+    print(f"IMU gyro = ({gx:.3f}, {gy:.3f}, {gz:.3f}) rad/s")
+    print('IMU readings normal')
 
 
 def main():
@@ -56,7 +81,9 @@ def main():
     set_component_hostname("gripper")
 
     i2c = busio.I2C(board.SCL, board.SDA)
-    verify_i2c_bus(i2c)
+    addrs = verify_i2c_bus(i2c)
+    input("Set the gripper down so it is still, then press Enter to check the IMU...")
+    verify_imu(i2c, addrs)
     sts = SimpleSTS3215()
 
     def wiggle_motor(mid):
