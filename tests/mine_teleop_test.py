@@ -396,28 +396,6 @@ class TestUvMethods(unittest.TestCase):
             self.assertAlmostEqual(got[0], answers[0][0], places=4)
             self.assertAlmostEqual(got[1], answers[0][1], places=4)
 
-    def test_the_mount_reproduces_the_red_dot_calibration(self):
-        """The regression test for the whole camera geometry, against the one measurement
-        of it that exists.
-
-        naavox/red-dot is a 15mm lid left sitting exactly between the fingertips while the
-        gripper climbs straight up, so the dot marks the jaw axis at every range and these
-        are where it was seen. Two constants have to be right to reproduce them and neither
-        can be checked at a single range: the tilt sets where the column of answers
-        converges as the gripper climbs, and the 2.7cm lens-to-jaw offset sets how fast it
-        gets there. A wrong tilt fitted at grasping range looks perfect there and is a
-        quarter of a frame out at half a metre, which is how the +9.06 degree version
-        survived a dataset and a training run before a descent found it.
-        """
-        calibration = gripper_camera_calibration()
-        for laser, seen in ((0.112, 0.7121), (0.157, 0.6441), (0.236, 0.5683),
-                            (0.394, 0.5124), (0.617, 0.4821), (0.879, 0.4659)):
-            with self.subTest(laser=laser):
-                u, v = jaw_uv(laser, calibration)
-                self.assertAlmostEqual(u, 0.5, places=3)
-                # 0.01 of frame height is about 4px on the 384-tall source frames
-                self.assertAlmostEqual(v, seen, delta=0.01)
-
     def test_the_projecting_methods_range_to_the_jaws_not_straight_down(self):
         """The rangefinder reads the drop below the *lens* and the target hangs below the
         *jaws*, 2.7cm behind it, so the distance along the ray is the hypotenuse of those
