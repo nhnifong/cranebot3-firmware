@@ -149,7 +149,8 @@ Merge them from that directory, or from any hub repo full of them:
 
 ```
 python -m nf_robot.ml.ortho_target merge_labels
-python -m nf_robot.ml.ortho_target merge_labels --repo_id you/ortho-target-user-labels
+python -m nf_robot.ml.ortho_target merge_labels --repo_id naavox/ortho-target-user-labels
+python -m nf_robot.ml.ortho_target merge_labels --repo_id justink04/ortho-target-user-labels
 ```
 
 A merged frame that is the same picture as a distilled teleop frame replaces it: the hand
@@ -187,6 +188,7 @@ directory, so the ordinary one stays where it is:
 ```
 python -m nf_robot.ml.ortho_target merge_labels --output datasets/ortho_target_complete
 python -m nf_robot.ml.ortho_target merge_labels --repo_id naavox/ortho-target-user-labels --output datasets/ortho_target_complete
+python -m nf_robot.ml.ortho_target merge_labels --repo_id justink04/ortho-target-user-labels --output datasets/ortho_target_complete
 python -m nf_robot.ml.ortho_target distill_negatives --output datasets/ortho_target_complete
 python -m nf_robot.ml.ortho_target split --data_root datasets/ortho_target_complete
 ```
