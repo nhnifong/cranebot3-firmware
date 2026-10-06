@@ -1,4 +1,4 @@
-"""Training plumbing shared by ortho_target and visual_servoing."""
+"""Training plumbing shared by the models under ml/."""
 
 import logging
 import math
@@ -37,3 +37,22 @@ def warmup_cosine(optimizer, steps, warmup_fraction=0.05):
         (s + 1) / warmup if s < warmup
         else 0.5 * (1.0 + math.cos(math.pi * (s - warmup) / max(1, steps - warmup)))
     ))
+
+
+def format_metrics(metrics):
+    return "  ".join(
+        f"{k} {v:.3f}" if abs(v) < 1000 else f"{k} {v:.0f}" for k, v in metrics.items())
+
+
+def upload_model(path, model_id, metrics=None):
+    """Push a trained checkpoint to the hub, creating the repo if needed."""
+    from huggingface_hub import HfApi, create_repo
+
+    path = Path(path)
+    create_repo(model_id, repo_type="model", exist_ok=True)
+    HfApi().upload_file(
+        path_or_fileobj=str(path), path_in_repo=path.name,
+        repo_id=model_id, repo_type="model",
+        commit_message=f"{path.stem} checkpoint ({format_metrics(metrics or {})})",
+    )
+    logging.info(f"uploaded {path.name} to {model_id}")

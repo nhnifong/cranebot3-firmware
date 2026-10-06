@@ -291,6 +291,8 @@ class TestBuiltins(ManeuverTestCase):
             'objectplates': 'plates', 'linear': 'diagnostics', 'goalseek': 'diagnostics',
             'ferry': 'ferry',
             'cluster': 'cluster_sort',
+            'basketdata': 'basket_episodes', 'findbasket': 'find_basket',
+            'fixdrops': 'pick_and_place',
         })
         controls = {field: handler.__self__.name for field, handler in ob._maneuver_controls.items()}
         self.assertEqual(controls, {

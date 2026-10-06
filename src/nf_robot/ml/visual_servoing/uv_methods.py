@@ -168,15 +168,21 @@ def _deltas_dead_reckon_observed(rows, grasp, calibration, jaw_uv):
                                field="vel_obs", room_frame=True)
 
 
-def range_to_floor(u, v, row, calibration):
-    """Distance along the (u, v) ray to a level floor, given the rangefinder's perpendicular
-    reading."""
+def range_to_depth(u, v, below_m, calibration):
+    """Distance along the (u, v) ray to a level plane below_m under the camera, or None if
+    the ray never reaches it."""
     ray = unproject(u, v, 1.0, calibration)
     ray = ray / np.linalg.norm(ray)
     cosine = float(ray @ CAMERA_ROT_BODY.inv().apply([0.0, 0.0, -1.0]))
     if cosine <= 1e-3:
         return None
-    return float(row["laser_rangefinder"]) / cosine
+    return float(below_m) / cosine
+
+
+def range_to_floor(u, v, row, calibration):
+    """Distance along the (u, v) ray to a level floor, given the rangefinder's perpendicular
+    reading."""
+    return range_to_depth(u, v, row["laser_rangefinder"], calibration)
 
 
 def _flow_step(prev_gray, next_gray, uv):
@@ -203,27 +209,47 @@ def _flow_step(prev_gray, next_gray, uv):
     return (uv[0] + float(moved[0]) / w, uv[1] + float(moved[1]) / h)
 
 
-def _track_optical_flow(rows, grasp, calibration, jaw_uv, frames):
-    """The target tracked through the pixels outwards from the jaws at the grasp, ending
-    where it is lost."""
+def gray_frames(frames, rows, keep=2):
+    """A function from row index to that row's frame in grayscale, caching only the few
+    nearest the last one asked for, since flow only ever compares neighbours."""
     import cv2
-
-    if frames is None:
-        raise SystemExit(
-            "--uv_method optical-flow needs the frames, and this caller did not offer "
-            "them. It is the one method that reads pixels.")
 
     gray = {}
 
     def at(i):
         if i not in gray:
-            image = frames(rows[i]["frame_index"])
-            gray[i] = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            # Only two frames are ever compared, so cache a window rather than the episode.
-            for stale in [k for k in gray if abs(k - i) > 2]:
+            gray[i] = cv2.cvtColor(frames(rows[i]["frame_index"]), cv2.COLOR_BGR2GRAY)
+            for stale in [k for k in gray if abs(k - i) > keep]:
                 del gray[stale]
         return gray[i]
 
+    return at
+
+
+def flow_track(at, start, uv, end, step=1):
+    """Follow the patch at `uv` in frame `start` through the frames towards `end`
+    (exclusive), one at a time. {index: uv} for every frame it held on in, ending where it
+    was lost."""
+    track = {}
+    k = start + step
+    while k != end:
+        uv = _flow_step(at(k - step), at(k), uv)
+        if uv is None:
+            break
+        track[k] = uv
+        k += step
+    return track
+
+
+def _track_optical_flow(rows, grasp, calibration, jaw_uv, frames):
+    """The target tracked through the pixels outwards from the jaws at the grasp, ending
+    where it is lost."""
+    if frames is None:
+        raise SystemExit(
+            "--uv_method optical-flow needs the frames, and this caller did not offer "
+            "them. It is the one method that reads pixels.")
+
+    at = gray_frames(frames, rows)
     track = [None] * len(rows)
     anchor = tuple(jaw_uv) if jaw_uv is not None else _jaw_uv_of(rows[grasp], calibration)
     if anchor is None:
@@ -231,15 +257,9 @@ def _track_optical_flow(rows, grasp, calibration, jaw_uv, frames):
             "the rangefinder read nothing at the grasp frame, so there is no anchor to "
             "track from. mine_episode screens these out as 'no_range' before getting here.")
     track[grasp] = anchor
-    for step in (-1, 1):
-        uv = track[grasp]
-        k = grasp + step
-        while 0 <= k < len(rows):
-            uv = _flow_step(at(k - step), at(k), uv)
-            if uv is None:
-                break
+    for step, end in ((-1, -1), (1, len(rows))):
+        for k, uv in flow_track(at, grasp, anchor, end, step).items():
             track[k] = uv
-            k += step
 
     out = []
     for uv, row in zip(track, rows):

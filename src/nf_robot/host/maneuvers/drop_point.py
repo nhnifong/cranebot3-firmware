@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 
 import numpy as np
 
@@ -22,6 +23,8 @@ class DropPoint(Maneuver):
         # the model and the task that runs it, both lazy
         self.model = None
         self.watch_task = None
+        # (time it was made, floor position) of the newest prediction, or None
+        self.last_prediction = None
 
     async def ensure_model(self):
         """Load the drop point model if it is not loaded. True if there is one to run.
@@ -125,6 +128,7 @@ class DropPoint(Maneuver):
                 u, v = await self.run_in_thread(self._predict, seen.image_rgb, ortho_rgb)
                 x, y = ortho_px_to_room(u, v, 1.0, 1.0)
                 self.ob.set_named_position(PREDICTED_DROP_NAME, np.array([x, y, 0.0]), save=False)
+                self.last_prediction = (time.time(), np.array([x, y, 0.0]))
         except asyncio.CancelledError:
             raise
         except Exception as e:

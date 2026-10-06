@@ -172,7 +172,7 @@ Things worth copying from it:
 | `set_startup_sequence(names)` | Startup step names an `auto_start` robot runs in order once every component connects. The default is `['unpark', 'pick_and_place', 'park']`. Names are checked when `main()` starts. |
 | `await main()` | Runs until shutdown, then closes everything. |
 
-Built-in maneuvers are `parking`, `drop_point`, `lerobot`, `pick_and_place`, `plates`, `diagnostics`, `ferry` and `cluster_sort`. Built-in startup steps are `unpark`, `park` and `pick_and_place`.
+Built-in maneuvers are `parking`, `drop_point`, `lerobot`, `pick_and_place`, `plates`, `diagnostics`, `ferry`, `cluster_sort`, `basket_episodes` and `find_basket`. Built-in startup steps are `unpark`, `park` and `pick_and_place`.
 
 ### `nf_robot.host.maneuver`
 
@@ -280,6 +280,8 @@ Positions are room-frame numpy arrays in metres, with z up and the floor at z=0.
 | `gripper_connected()` | |
 | `laser_range()` | The rangefinder's distance, in metres, to whatever is under the gripper, or `None` if stale. |
 | `wrist_angle()` | Degrees, 0 to 1080. |
+| `gripper_spin(timestamp=None)` | Radians the gripper camera is turned from the room's axes; the spin the gripper camera models are trained in. |
+| `grip_target_force()` | The grip force the fingers were last told to hold, 0 to 1. |
 | `finger_angle()` | Degrees, -90 open to 90 closed. |
 | `finger_pad_voltage()` | The finger pressure pad reading. |
 | `reset_finger_pressure_rising()` / `finger_pressure_rose()` | Whether the finger pressure has risen since the reset. |
@@ -289,7 +291,7 @@ Positions are room-frame numpy arrays in metres, with z up and the floor at z=0.
 | `gripper_camera_to_room(vec)` | Rotate a vector from the camera's optical frame (x right, y down, z forward) into the room frame. |
 | `await gripper_frame(after=None, timeout=3.0)` | An RGB frame captured after `after` (now, by default), or `None`. `after=0` takes the newest frame. |
 | `await gripper_capture(after=None, timeout=3.0, expect_size=None)` | `(timestamp, RGB frame)`, optionally only at a given `(width, height)`. |
-| `last_clear_item_image()` | The newest `ItemImage` taken while the laser read 12 to 25 cm: an item under the gripper, in view, before the fingers close. |
+| `last_clear_item_image()` | The newest `ItemImage` taken while the laser read 12 to 40 cm and, if the visual servo model is running, it saw the item in the inner third of the frame: an item under the gripper, centred, before the fingers close. |
 | `latest_ortho()` | The newest orthographic floor view (RGB), or `None`. |
 | `ortho_enabled()` | Whether the floor view is being rendered. |
 | `anchor_pixel_to_floor(anchor_num, norm_xy)` | Where a normalized point in an anchor camera image lands on the floor. |

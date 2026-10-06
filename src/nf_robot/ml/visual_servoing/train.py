@@ -23,18 +23,18 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from nf_robot.ml.train_common import param_groups, resolve_data_root, warmup_cosine
+from nf_robot.ml.grid_head import masked_mean, window_average
+from nf_robot.ml.gripper_grid import CELL_SIGMA, position_losses
+from nf_robot.ml.train_common import (
+    format_metrics as _format, param_groups, resolve_data_root, upload_model, warmup_cosine,
+)
 from nf_robot.ml.visual_servoing.dataset import VisualServoDataset
 from nf_robot.ml.visual_servoing.model import (
     DEFAULT_BACKBONE,
     DEFAULT_IMAGE_SIZE,
     VisualServoNet,
     decode,
-    gather_cells,
     load_checkpoint,  # noqa: F401  (re-exported for callers that only import this module)
-    local_centroid,
-    uv_to_cell,
-    window_average,
 )
 
 DEFAULT_MODEL_PATH = "models/visual_servo.pth"
@@ -51,9 +51,6 @@ DEFAULT_WEIGHTS = {
     # pressure's small raw magnitude needs the weight
     "close": 0.2, "pressure": 1.0,
 }
-# Width in cells (~18px) of the Gaussian the cell head trains against, matched to label
-# precision; 0 is one-hot.
-CELL_SIGMA = 1.0
 
 # Ten-degree angle bins used to re-weight the axis loss.
 AXIS_BINS = 18
@@ -61,12 +58,6 @@ AXIS_BINS = 18
 AXIS_WEIGHT_CAP = 10.0
 # Largest concentration the axis head may claim, so the axis term can't dominate.
 KAPPA_MAX = 50.0
-
-
-def masked_mean(values, mask):
-    """Mean over rows weighted by `mask`; zero when there are none."""
-    total = mask.sum()
-    return (values * mask).sum() / total.clamp(min=1.0), total
 
 
 def axis_bin(angle, bins=AXIS_BINS):
@@ -105,56 +96,13 @@ def von_mises_axis_loss(predicted, angle, kappa_max=KAPPA_MAX):
     return log_i0 - (bounded * target).sum(dim=1)
 
 
-def soft_cell_target(cell, grid, sigma):
-    """A normalized Gaussian over the cell grid centred on the true position."""
-    rows, cols = grid
-    xs = torch.arange(cols, device=cell.device, dtype=cell.dtype).view(1, 1, cols) + 0.5
-    ys = torch.arange(rows, device=cell.device, dtype=cell.dtype).view(1, rows, 1) + 0.5
-    squared = ((xs - cell[:, 0].view(-1, 1, 1)) ** 2
-               + (ys - cell[:, 1].view(-1, 1, 1)) ** 2)
-    target = torch.exp(-0.5 * squared / (sigma * sigma))
-    return target.flatten(1) / target.flatten(1).sum(dim=1, keepdim=True).clamp(min=1e-12)
-
-
-def cell_loss(logits, cell, grid, index, sigma):
-    """KL divergence of the cell head against a hard or softened target."""
-    if sigma <= 0:
-        return F.cross_entropy(logits.flatten(1), index, reduction="none")
-    target = soft_cell_target(cell, grid, sigma)
-    log_probs = F.log_softmax(logits.flatten(1), dim=1)
-    entropy = -(target * target.clamp(min=1e-12).log()).sum(dim=1)
-    return -(target * log_probs).sum(dim=1) - entropy
-
-
 def servo_loss(outputs, batch, grid, weights=None, cell_sigma=CELL_SIGMA,
                axis_loss="vonmises", axis_bin_weight=None):
     """Total loss and its parts, each averaged only over rows that carry that label."""
     weights = {**DEFAULT_WEIGHTS, **(weights or {})}
-    logits = outputs["logits"]
-    rows, cols = grid
-
-    cell = uv_to_cell(batch["target_uv"], grid)
-    cx = cell[:, 0].floor().clamp(0, cols - 1).long()
-    cy = cell[:, 1].floor().clamp(0, rows - 1).long()
-    index = cy * cols + cx
-    has_uv = batch["has_uv"]
-
-    parts = {}
-    # Only the cell head is softened.
-    parts["cell"], _ = masked_mean(
-        cell_loss(logits, cell, grid, index, cell_sigma), has_uv)
-
-    # Train the windowed centre of mass directly, clamped to the outermost cell centres.
-    centroid, window_weights, window = local_centroid(logits, index)
-    reachable = cell.clamp(min=0.5).minimum(cell.new_tensor([cols - 0.5, rows - 0.5]))
-    parts["centroid"], _ = masked_mean(
-        F.smooth_l1_loss(centroid, reachable, reduction="none").mean(dim=1), has_uv)
-
-    # Log metres, since range error is relative.
-    predicted_log = gather_cells(outputs["log_distance"].unsqueeze(1), index).squeeze(-1)
-    target_log = batch["target_range_m"].clamp(min=1e-3).log()
-    parts["distance"], _ = masked_mean(
-        F.smooth_l1_loss(predicted_log, target_log, reduction="none"), has_uv)
+    parts, window_weights, window = position_losses(
+        outputs["logits"], outputs["log_distance"], batch["target_uv"],
+        batch["target_range_m"], batch["has_uv"], grid, cell_sigma)
 
     angle = batch["grasp_axis_rad"]
     # Average the axis over decode's window with detached weights, so the axis loss can't
@@ -290,25 +238,6 @@ def constant_baseline(train_set, eval_set, image_size, radii_px=(10, 25, 50)):
     for radius in radii_px:
         out[f"recall@{radius}px"] = float((errors <= radius).mean())
     return out
-
-
-def _format(metrics):
-    return "  ".join(
-        f"{k} {v:.3f}" if abs(v) < 1000 else f"{k} {v:.0f}" for k, v in metrics.items())
-
-
-def upload_model(path, model_id, metrics=None):
-    """Push a trained checkpoint to the hub, creating the repo if needed."""
-    from huggingface_hub import HfApi, create_repo
-
-    path = Path(path)
-    create_repo(model_id, repo_type="model", exist_ok=True)
-    HfApi().upload_file(
-        path_or_fileobj=str(path), path_in_repo=path.name,
-        repo_id=model_id, repo_type="model",
-        commit_message=f"visual servoing checkpoint ({_format(metrics or {})})",
-    )
-    logging.info(f"uploaded {path.name} to {model_id}")
 
 
 def checkpoint_payload(model, args, metrics, epoch):

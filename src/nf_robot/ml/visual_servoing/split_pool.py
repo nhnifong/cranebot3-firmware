@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
-"""Deal the mined pool into train and eval, one row at a time and at random.
+"""Deal the mined pool into train and eval, one row at a time and at random, or one
+episode at a time with --by_episode.
 
     python -m nf_robot.ml.visual_servoing.split_pool \
         --data_root datasets/visual_servoing_pool_252
@@ -32,11 +33,11 @@ def pool_shards(root: Path):
     return shards
 
 
-def normalized(table):
+def normalized(table, schema=None):
     """One shard under the canonical schema, with missing label columns filled as nulls."""
     import pyarrow as pa
 
-    schema = row_schema()
+    schema = schema if schema is not None else row_schema()
     columns = [
         table.column(field.name).cast(field.type) if field.name in table.schema.names
         else pa.nulls(table.num_rows, field.type)
@@ -87,9 +88,35 @@ class ShardBuffer:
         self.pending = 0
 
 
-def split_pool(root, eval_fraction=DEFAULT_EVAL_FRACTION, seed=0):
+def eval_rows_by_group(shards, eval_fraction, seed):
+    """Which rows go to eval when whole groups (episodes, plates) are dealt rather than rows:
+    groups at random until eval_fraction of the rows is reached."""
+    import pyarrow.parquet as pq
+
+    keys = []
+    for shard in shards:
+        provenance = pq.read_table(
+            shard, columns=["split_source", "source_repo_id", "episode_index"]).to_pylist()
+        keys += [sample_group(r) for r in provenance]
+    unique = sorted(set(keys), key=repr)
+    order = np.random.default_rng(seed).permutation(len(unique))
+    sizes = {}
+    for key in keys:
+        sizes[key] = sizes.get(key, 0) + 1
+    chosen, taken = set(), 0
+    for i in order:
+        if taken >= len(keys) * eval_fraction:
+            break
+        chosen.add(unique[i])
+        taken += sizes[unique[i]]
+    return np.array([key in chosen for key in keys], dtype=bool)
+
+
+def split_pool(root, eval_fraction=DEFAULT_EVAL_FRACTION, seed=0, schema=None,
+               by_episode=False):
     """Deal every row of the pool into train and eval a shard at a time, returning (train
-    rows, eval rows)."""
+    rows, eval rows). by_episode keeps every episode whole on one side, so eval measures
+    episodes the model never saw a frame of."""
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -100,10 +127,14 @@ def split_pool(root, eval_fraction=DEFAULT_EVAL_FRACTION, seed=0):
     if not total:
         raise SystemExit(f"{root / POOL_SPLIT} holds {len(shards)} shard(s) and no rows")
 
-    cut = int(round(total * eval_fraction))
-    chosen = np.random.default_rng(seed).permutation(total)[:cut]
-    is_eval = np.zeros(total, dtype=bool)
-    is_eval[chosen] = True
+    if by_episode:
+        is_eval = eval_rows_by_group(shards, eval_fraction, seed)
+        cut = int(is_eval.sum())
+    else:
+        cut = int(round(total * eval_fraction))
+        chosen = np.random.default_rng(seed).permutation(total)[:cut]
+        is_eval = np.zeros(total, dtype=bool)
+        is_eval[chosen] = True
     logging.info(f"{total} row(s) in {len(shards)} pool shard(s): "
                  f"{total - cut} train, {cut} eval (fraction {eval_fraction:g}, seed {seed})")
 
@@ -118,7 +149,7 @@ def split_pool(root, eval_fraction=DEFAULT_EVAL_FRACTION, seed=0):
     groups = {"train": set(), "eval": []}
     at = 0
     for shard, count in zip(shards, counts):
-        table = normalized(pq.read_table(shard))
+        table = normalized(pq.read_table(shard), schema)
         mask = is_eval[at:at + count]
         at += count
         provenance = table.select(["split_source", "source_repo_id", "episode_index"]).to_pylist()
@@ -155,8 +186,12 @@ def main():
                         help="The same seed over the same pool deals the same split. Adding "
                              "to the pool re-deals all of it, so metrics either side of a "
                              "rebuild compare two different eval sets")
+    parser.add_argument("--by_episode", action="store_true",
+                        help="Deal whole episodes rather than rows, so no eval frame has a "
+                             "near-duplicate in train")
     args = parser.parse_args()
-    split_pool(Path(args.data_root), args.eval_fraction, args.seed)
+    split_pool(Path(args.data_root), args.eval_fraction, args.seed,
+               by_episode=args.by_episode)
 
 
 if __name__ == "__main__":

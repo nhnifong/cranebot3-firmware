@@ -2,15 +2,11 @@
 
 """Loader for the visual servoing parquet shards, with a mask beside every nullable label."""
 
-import logging
-from pathlib import Path
-
-import cv2
 import numpy as np
 import torch
 
-from nf_robot.ml.image_input import normalize, photometric_jitter, to_tensor
-from nf_robot.ml.visual_servoing.mine_teleop import POOL_SPLIT
+from nf_robot.ml.image_input import normalize, photometric_jitter
+from nf_robot.ml.shard_dataset import ShardDataset
 
 # Scales that put each state component roughly in -1..1 before it reaches the FiLM MLP.
 STATE_SCALES = {
@@ -31,50 +27,10 @@ def state_vector(state: dict) -> np.ndarray:
     return np.array([float(state[k]) / STATE_SCALES[k] for k in STATE_KEYS], dtype=np.float32)
 
 
-class VisualServoDataset(torch.utils.data.Dataset):
+class VisualServoDataset(ShardDataset):
     """Rows of one split, as (image, state, labels, masks)."""
 
-    def __init__(self, root: Path, split: str, augment: bool, keep=None):
-        import pyarrow.parquet as pq
-
-        self.dir = Path(root) / split
-        shards = sorted(self.dir.glob("*.parquet"))
-        if not shards:
-            # Most often a pool that was built but never dealt.
-            pool = Path(root) / POOL_SPLIT
-            hint = (f". {pool} holds shards that have not been dealt yet: run "
-                    f"`python -m nf_robot.ml.visual_servoing.split_pool --data_root {root}`"
-                    if any(pool.glob("*.parquet")) else "")
-            raise FileNotFoundError(f"No parquet shards at {self.dir}{hint}")
-
-        self.images: list[bytes] = []
-        self.rows: list[dict] = []
-        for shard in shards:
-            table = pq.read_table(shard)
-            images = table.column("image").to_pylist()
-            # A shard without a label column means that label is null.
-            present = [c for c in LABEL_COLUMNS if c in table.schema.names]
-            missing = [c for c in LABEL_COLUMNS if c not in present]
-            labels = table.select(present).to_pylist()
-            if missing:
-                for row in labels:
-                    row.update(dict.fromkeys(missing))
-            for blob, row in zip(images, labels):
-                if keep is not None and not keep(row):
-                    continue
-                self.images.append(blob)
-                self.rows.append(row)
-
-        self.augment = augment
-        total = sum(len(b) for b in self.images)
-        logging.info(f"{self.dir}: {len(self.rows)} rows, {total / 1e6:.0f} MB of frames in memory")
-
-    def __len__(self):
-        return len(self.rows)
-
-    def groups(self):
-        """(source, episode) for every row, for splitting without leaking an episode."""
-        return [(r["source_repo_id"], r["episode_index"]) for r in self.rows]
+    LABEL_COLUMNS = LABEL_COLUMNS
 
     def labelled_uv(self):
         """Every present target_uv, for the constant-prediction baseline."""
@@ -91,10 +47,7 @@ class VisualServoDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         row = self.rows[idx]
-        bgr = cv2.imdecode(np.frombuffer(self.images[idx], np.uint8), cv2.IMREAD_COLOR)
-        if bgr is None:
-            raise ValueError(f"row {idx} has an undecodable image")
-        img = to_tensor(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+        img = self.image(idx)
 
         uv = row["target_uv"]
         uv = [float(uv[0]), float(uv[1])] if uv is not None else [0.0, 0.0]

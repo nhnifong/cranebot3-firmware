@@ -12,7 +12,7 @@ from nf_robot.common.util import tonp
 from nf_robot.generated.nf import common, control, telemetry
 from nf_robot.host.fake_progress import FakeProgress
 from nf_robot.host.maneuver import (ROUTE_POINT_TAG_NAMES, Maneuver, command, control_item,
-                                    prefer_swing_cancellation, startup_step)
+                                    prefer_swing_cancellation, startup_step, verb)
 from nf_robot.host.target_queue import TargetQueue
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,20 @@ PREDICTED_DROP_HEIGHT_M = 0.0
 FIND_TARGETS_INTERVAL_S = 0.5
 # targets this close to the route destination, horizontally, are left where they are
 DROPOFF_EXCLUSION_M = 0.10
+# (metres) side of the room grid squares predicted drop points are pooled into, so that a
+# fix found for one prediction serves every later one that lands in the same square.
+DROP_FIX_CELL_M = 0.3
+# Destinations never visited for a fix: the recorded drop position was put there by hand
+# and is as good as a fix already, and the origin is not a basket.
+UNFIXED_DESTINATIONS = (common.RoutePoint.DROP_POSITION, common.RoutePoint.ORIGIN)
+# What _grasp_unless_deleted returns when the grasp was set aside for a detour.
+DETOUR = object()
+
+
+def drop_fix_cell(point):
+    """(key, centre) of the DROP_FIX_CELL_M room grid square a floor point falls in."""
+    i, j = (int(np.floor(c / DROP_FIX_CELL_M)) for c in np.asarray(point)[:2])
+    return f'cell_{i}_{j}', np.array([(i + 0.5) * DROP_FIX_CELL_M, (j + 0.5) * DROP_FIX_CELL_M, 0.0])
 
 
 class PickAndPlace(Maneuver):
@@ -44,6 +58,17 @@ class PickAndPlace(Maneuver):
         # the target the pick and place loop is going after, and set when the operator deletes it
         self._pursued_target_id = None
         self._pursued_target_deleted = asyncio.Event()
+        # Optional: visit each destination with find_basket for an exact fix on it before
+        # dropping there. Off unless switched on with the fixdrops debug command.
+        self.fix_drops = False
+        # keys find_basket failed on this run, so a place with no basket is not retried on
+        # every item
+        self._fix_failed = set()
+        # The grid cell of the first drop prediction made during this item's grasp. It
+        # decides where the item goes: the model keeps predicting all through the grasp,
+        # and a later prediction drifting into the next cell must not lose the fix just
+        # found for this one.
+        self._item_drop_cell = None
 
     async def start(self):
         self.spawn(self._find_targets_forever(), name='find_targets')
@@ -62,6 +87,83 @@ class PickAndPlace(Maneuver):
         if current_hash != self.last_snapshot_hash:
             self.ob.send_ui(target_list=snapshot)
             self.last_snapshot_hash = current_hash
+
+    # -- fixes on destinations ------------------------------------------------
+
+    @verb('fixdrops')
+    async def set_fix_drops(self, action=None):
+        """Debug: 'fixdrops' toggles visiting destinations with find_basket for an exact fix
+        before dropping on them; 'fixdrops on' and 'fixdrops off' set it, and 'fixdrops
+        forget' throws away every fix found so far."""
+        finder = self.ob.maneuvers.get('find_basket')
+        if action == 'forget':
+            if finder is not None:
+                finder.forget_fixes()
+            self._fix_failed.clear()
+            self.notify('Forgot every drop fix')
+            return
+        if action not in (None, 'on', 'off'):
+            self.notify("Usage: fixdrops, fixdrops on, fixdrops off, or fixdrops forget")
+            return
+        self.fix_drops = (not self.fix_drops) if action is None else action == 'on'
+        self.notify(f'Drop fixes {"on" if self.fix_drops else "off"}')
+
+    def _named_destination(self, dst, target):
+        """(key, coarse floor position) of a destination that is a named place worth a fix,
+        or None. Predicted drops are handled by grid cell instead."""
+        if dst == common.RoutePoint.NA:
+            if target is None or not isinstance(target.dropoff, str):
+                return None
+            coarse = self.ob.named_position(target.dropoff)
+            return None if coarse is None else (target.dropoff, coarse)
+        if dst in UNFIXED_DESTINATIONS or dst == common.RoutePoint.PREDICTED_DROP:
+            return None
+        if dst not in ROUTE_POINT_TAG_NAMES:
+            return None
+        coarse = self.ob.route_point_position(dst)
+        return None if coarse is None else (ROUTE_POINT_TAG_NAMES[dst], coarse)
+
+    async def _ensure_fix(self, key, guess, coarse=None):
+        """Visit guess with find_basket for a fix stored under key, unless there is one or
+        it already failed this run. This is a motion task."""
+        finder = self.ob.maneuvers.get('find_basket')
+        if finder is None or key in self._fix_failed:
+            return
+        if finder.fix_for(key, coarse) is not None:
+            return
+        logger.info(f'Getting a fix on drop destination {key}')
+        if await finder.fix_location(key, guess, coarse) is None:
+            logger.warning(f'No fix found for drop destination {key}; dropping on the coarse '
+                           f'position')
+            self._fix_failed.add(key)
+
+    def _drop_fix(self, dst, target, drop_point):
+        """The stored gantry position to drop from for this destination, or None."""
+        finder = self.ob.maneuvers.get('find_basket')
+        if finder is None:
+            return None
+        if dst == common.RoutePoint.PREDICTED_DROP:
+            key = self._item_drop_cell or drop_fix_cell(drop_point)[0]
+            return finder.fix_for(key)
+        named = self._named_destination(dst, target)
+        return None if named is None else finder.fix_for(*named)
+
+    async def _wait_for_unfixed_prediction(self, since):
+        """The first drop point prediction made after since, if its grid cell has no fix
+        and has not failed one. Waits forever if it has: this item's destination is settled.
+        Either way that cell becomes the item's _item_drop_cell."""
+        drop_point = self.ob.maneuvers.get('drop_point')
+        finder = self.ob.maneuvers.get('find_basket')
+        while True:
+            await asyncio.sleep(0.1)
+            latest = drop_point.last_prediction
+            if latest is None or latest[0] <= since:
+                continue
+            key, _ = drop_fix_cell(latest[1])
+            self._item_drop_cell = key
+            if key in self._fix_failed or finder.fix_for(key) is not None:
+                await asyncio.Event().wait()
+            return latest[1]
 
     # -- targets placed by hand ------------------------------------------------
 
@@ -369,6 +471,8 @@ class PickAndPlace(Maneuver):
 
         drop_point = np.zeros(3)
         target_seen_t = time.time()
+        self._fix_failed.clear()
+        finder = ob.maneuvers.get('find_basket')
         try:
             while True:
                 src, dst = ob.route()
@@ -412,6 +516,12 @@ class PickAndPlace(Maneuver):
                     logger.warning(f'Pick and place cannot pick up from {src!r}')
                     return
 
+                # A named destination with no fix yet is visited before the item is picked
+                # up, while the gripper is empty and the camera has a clear view.
+                if self.fix_drops and (named := self._named_destination(dst, next_target)):
+                    key, coarse = named
+                    await self._ensure_fix(key, coarse, coarse)
+
                 # re-aims the seek already in flight onto the newly chosen target. If it does
                 # not arrive in one second, run target selection again since a better one might
                 # have appeared or the user might have put one in their queue
@@ -432,7 +542,29 @@ class PickAndPlace(Maneuver):
                 # proves impossible to pick up, or the operator deletes it.
                 logger.info('Attempt grasp')
                 start = time.time()
-                success = await self._grasp_unless_deleted()
+                detoured = False
+                self._item_drop_cell = None
+                while True:
+                    # A predicted drop is only known once the item is seen up close, mid
+                    # grasp. The first prediction to land in a grid cell with no fix sets the
+                    # grasp aside for one detour to get that fix, then the grasp resumes.
+                    interrupt = None
+                    if (self.fix_drops and not detoured and finder is not None
+                            and drop_point_maneuver is not None
+                            and dst == common.RoutePoint.PREDICTED_DROP):
+                        interrupt = asyncio.create_task(
+                            self._wait_for_unfixed_prediction(time.time()))
+                    success = await self._grasp_unless_deleted(interrupt)
+                    if success is not DETOUR:
+                        break
+                    detoured = True
+                    asyncio.create_task(ob.set_finger_angle(RELAXED_OPEN))
+                    resume_at = ob.gantry_position()
+                    key, centre = drop_fix_cell(interrupt.result())
+                    logger.info(f'Setting the grasp aside to get a fix on predicted drop {key}')
+                    await self._ensure_fix(key, centre)
+                    logger.info(f'Back to the grasp at {np.round(resume_at, 3)}')
+                    await ob.seek_goal(resume_at)
                 if success is None:
                     logger.info(f'Target was deleted mid grasp; abandoned it after {time.time() - start:.2f}s')
                     # let go of whatever the fingers may have closed on
@@ -480,9 +612,13 @@ class PickAndPlace(Maneuver):
                 elif dst == common.RoutePoint.ORIGIN:
                     drop_point = np.zeros(3)
 
+                drop_goal = drop_point + GANTRY_HEIGHT_OVER_DROPOFF
+                if self.fix_drops and (fix := self._drop_fix(dst, next_target, drop_point)) is not None:
+                    drop_goal = fix
+
                 # fly to to drop point
-                logger.info(f'Flying to drop point {drop_point}')
-                await ob.seek_goal(drop_point + GANTRY_HEIGHT_OVER_DROPOFF)
+                logger.info(f'Flying to drop point {drop_point}, gantry to {np.round(drop_goal, 3)}')
+                await ob.seek_goal(drop_goal)
                 # open gripper
                 open_target = max(-90, min(RELAXED_OPEN, ob.finger_angle() - 10))
                 asyncio.create_task(ob.set_finger_angle(open_target))
@@ -502,23 +638,32 @@ class PickAndPlace(Maneuver):
             ob.slow_stop_all_spools()
             await ob.clear_goal()
 
-    async def _grasp_unless_deleted(self):
+    async def _grasp_unless_deleted(self, interrupt=None):
         """
-        Grasp, but give up the moment the operator deletes the target being grasped.
-        Returns the grasp result, or None if it was abandoned.
+        Grasp, but give up the moment the operator deletes the target being grasped, or
+        the interrupt task finishes. Returns the grasp result, None if it was abandoned for
+        a deletion, or DETOUR if it was set aside for the interrupt.
         """
-        if self._pursued_target_id is None:
+        watches = []
+        if self._pursued_target_id is not None:
+            watches.append(asyncio.create_task(self._pursued_target_deleted.wait()))
+        if interrupt is not None:
+            watches.append(interrupt)
+        if not watches:
             return await self.ob.grasp()
         grasp = asyncio.create_task(self.ob.grasp())
-        deleted = asyncio.create_task(self._pursued_target_deleted.wait())
         try:
-            await asyncio.wait([grasp, deleted], return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait([grasp, *watches], return_when=asyncio.FIRST_COMPLETED)
         finally:
-            deleted.cancel()
+            for watch in watches:
+                if not watch.done():
+                    watch.cancel()
             if not grasp.done():
                 grasp.cancel()
                 # the grasp stops the spools on its way out; wait for that before moving on
                 await asyncio.gather(grasp, return_exceptions=True)
         if grasp.cancelled():
+            if interrupt is not None and interrupt.done() and not interrupt.cancelled():
+                return DETOUR
             return None
         return grasp.result()

@@ -355,6 +355,8 @@ class VisualServo:
         # (time, lateral offset in metres or None when no target is confidently seen) from
         # the newest pass of the centering loop
         self.center_offset = None
+        # (time, prediction) of the newest frame the model was run on, in any mode
+        self.last_prediction = None
 
     def reset_close(self):
         self.close_started_at = None
@@ -492,6 +494,7 @@ class VisualServo:
             servo.predict_frame, self.model, frame, state, self.ob.torch_device(),
             gripper.get_spin(), self.ob.pe.grip_pose[1])
         prediction['captured_at'] = captured_at
+        self.last_prediction = (time.time(), prediction)
         self.ob.send_ui(grip_cam_preditions=telemetry.GripCamPredictions(
             # the overlay draws the arrow from the centre of the frame, so it wants a
             # displacement rather than a position. uv may fall outside 0..1 - that is the

@@ -21,12 +21,12 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from nf_robot.ml.grid_head import cell_loss, local_centroid
+from nf_robot.ml.gripper_grid import DEFAULT_BACKBONE
 from nf_robot.ml.placer.dataset import EVAL_FRACTION, DropPairDataset
 from nf_robot.ml.placer.model import (
     CENTROID_RADIUS, MERGE_MODES, DropPointNet, decode, uv_to_cell, uv_to_metres)
 from nf_robot.ml.train_common import param_groups, warmup_cosine
-from nf_robot.ml.visual_servoing.model import DEFAULT_BACKBONE, local_centroid
-from nf_robot.ml.visual_servoing.train import cell_loss
 
 DEFAULT_MODEL_PATH = "models/drop_point.pth"
 SELECTION_METRIC = "median_cm"

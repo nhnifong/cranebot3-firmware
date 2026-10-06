@@ -17,5 +17,11 @@
     "pinned_at": "2026-10-01",
     "title": "Upload drop_point.pth with huggingface_hub",
     "committed_at": "2026-10-01"
+  },
+  "naavox/basket_center": {
+    "revision": "4afab0e04a0f025fd8ec6810fc8a8305230b3545",
+    "pinned_at": "2026-10-06",
+    "title": "Upload basket_center.pth with huggingface_hub",
+    "committed_at": "2026-10-06"
   }
 }

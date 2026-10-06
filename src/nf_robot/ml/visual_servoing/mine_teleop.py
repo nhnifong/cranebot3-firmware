@@ -91,9 +91,11 @@ STATE_NEEDED = (
     "spin", "finger_pressure", "wrist_angle", "finger_angle",
     "laser_rangefinder", "target_force",
 )
-# Only the dead-reckoning uv methods need these, so they read as None when absent.
-VELOCITY_OPTIONAL = {"vel_cmd": ("action", ("vel_x", "vel_y", "vel_z")),
-                     "vel_obs": ("state", ("vel_x", "vel_y", "vel_z"))}
+# Only some consumers need these - the dead-reckoning uv methods the velocities, basket
+# mining the gantry position - so they read as None when absent.
+VECTORS_OPTIONAL = {"vel_cmd": ("action", ("vel_x", "vel_y", "vel_z")),
+                    "vel_obs": ("state", ("vel_x", "vel_y", "vel_z")),
+                    "gantry_pos": ("state", tuple(f"gantry_position_{a}" for a in "xyz"))}
 
 
 def row_schema():
@@ -133,12 +135,12 @@ class ShardWriter:
     DEFAULT_PREFIX = "shard"
 
     def __init__(self, split_dir: Path, target_bytes: int = SHARD_TARGET_BYTES,
-                 prefix: str = DEFAULT_PREFIX):
+                 prefix: str = DEFAULT_PREFIX, schema=None):
         self.split_dir = split_dir
         # Shards are named by producer so producers can share a split.
         self.prefix = prefix
         self.target_bytes = target_bytes
-        self.schema = row_schema()
+        self.schema = schema if schema is not None else row_schema()
         self.rows: list[dict] = []
         self.pending = 0
         self.shards = 0
@@ -207,8 +209,9 @@ def encode_frame(bgr, image_size=IMAGE_SIZE):
     return buf.tobytes()
 
 
-def read_columns(root: Path):
-    """Per-episode state and action rows, read as columns from the parquets."""
+def read_columns(root: Path, need_finger_speed=True):
+    """Per-episode state and action rows, read as columns from the parquets. finger_speed
+    reads as None in a recording without it, unless need_finger_speed refuses one."""
     import pyarrow.parquet as pq
 
     info = json.loads((root / "meta" / "info.json").read_text())
@@ -217,15 +220,15 @@ def read_columns(root: Path):
     missing = [n for n in STATE_NEEDED if n not in state_names]
     if missing:
         raise ValueError(f"{root} observation.state is missing {missing}; present: {state_names}")
-    if "finger_speed" not in action_names:
+    if need_finger_speed and "finger_speed" not in action_names:
         raise ValueError(f"{root} action has no finger_speed; present: {action_names}")
 
     si = {n: i for i, n in enumerate(state_names)}
-    finger_idx = action_names.index("finger_speed")
+    finger_idx = action_names.index("finger_speed") if "finger_speed" in action_names else None
     names = {"state": state_names, "action": action_names}
-    velocity = {
-        field: [names[where].index(n) for n in components]
-        for field, (where, components) in VELOCITY_OPTIONAL.items()
+    optional = {
+        field: (where, [names[where].index(n) for n in components])
+        for field, (where, components) in VECTORS_OPTIONAL.items()
         if all(n in names[where] for n in components)
     }
 
@@ -244,7 +247,7 @@ def read_columns(root: Path):
             table.column("observation.state").to_pylist(),
             table.column("action").to_pylist(),
         ):
-            episodes.setdefault(ep, []).append({
+            sample = {
                 "frame_index": fi,
                 "timestamp": ts,
                 "gripper_pos": np.array([state[si[f"gripper_pos_{a}"]] for a in "xyz"]),
@@ -254,12 +257,14 @@ def read_columns(root: Path):
                 "finger_angle": state[si["finger_angle"]],
                 "laser_rangefinder": state[si["laser_rangefinder"]],
                 "target_force": state[si["target_force"]],
-                "finger_speed": action[finger_idx],
-                "vel_cmd": (np.array([action[i] for i in velocity["vel_cmd"]])
-                            if "vel_cmd" in velocity else None),
-                "vel_obs": (np.array([state[i] for i in velocity["vel_obs"]])
-                            if "vel_obs" in velocity else None),
-            })
+                "finger_speed": None if finger_idx is None else action[finger_idx],
+            }
+            columns = {"state": state, "action": action}
+            for field in VECTORS_OPTIONAL:
+                where, indices = optional.get(field, (None, None))
+                sample[field] = (None if where is None
+                                 else np.array([columns[where][i] for i in indices]))
+            episodes.setdefault(ep, []).append(sample)
     for rows in episodes.values():
         rows.sort(key=lambda r: r["frame_index"])
     return episodes, float(info["fps"])

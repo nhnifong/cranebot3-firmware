@@ -172,6 +172,12 @@ GRIPPER_FINGER_LEN_M = 0.18
 # mine_teleop.SNAPSHOT_RANGE_M).
 CLEAR_ITEM_RANGE_M = (0.12, 0.4)
 CLEAR_ITEM_INTERVAL_S = 0.25
+# While the visual servo model is predicting, a clear item frame is only kept with the item
+# it sees inside this band of the frame in both u and v - the inner third - so the item is
+# centred under the gripper rather than half out of view. Predictions older than
+# CLEAR_ITEM_SERVO_MAX_AGE_S mean the model is not running, and the condition is not applied.
+CLEAR_ITEM_CENTRED_UV = (1.0 / 3.0, 2.0 / 3.0)
+CLEAR_ITEM_SERVO_MAX_AGE_S = 0.5
 
 # feature key -> minimum nf_robot version every connected component must run to use it
 VERSION_GATES = {
@@ -2876,6 +2882,16 @@ class AsyncObserver:
         """The wrist angle the gripper last reported, in degrees (0 to 1080)."""
         return float(self.datastore.winch_line_record.getLast()[1])
 
+    def gripper_spin(self, timestamp=None):
+        """How far the gripper camera is turned from the room's axes, in radians, as of
+        timestamp (now, by default): the spin a room vector is turned by to put it in the
+        gripper's frame. The angle the gripper camera models and their mined labels use."""
+        return float(self.gripper_client.get_spin(timestamp=timestamp))
+
+    def grip_target_force(self):
+        """The grip force the fingers were last told to hold, normalized 0 to 1."""
+        return float(self.gripper_client.last_target_force)
+
     def pole_tilt(self, max_age=1.0):
         """How far the pole leans off vertical, in degrees, or None when the gripper has not
         said for max_age seconds."""
@@ -3182,12 +3198,24 @@ class AsyncObserver:
 
     def last_clear_item_image(self):
         """The newest ItemImage: a gripper frame taken while the rangefinder read the distance
-        at which an item under the gripper fills the view before the fingers close over it.
-        None until there has been one."""
+        at which an item under the gripper fills the view before the fingers close over it,
+        and, while the visual servo model is running, with the item centred in it. None
+        until there has been one."""
         return self._clear_item_image
 
+    def _servo_sees_item_centred(self):
+        """False only while the visual servo model is predicting and puts the item outside
+        the inner third of the frame; True when it is centred or the model is not running."""
+        latest = self.servo.last_prediction
+        if latest is None or time.time() - latest[0] > CLEAR_ITEM_SERVO_MAX_AGE_S:
+            return True
+        low, high = CLEAR_ITEM_CENTRED_UV
+        u, v = latest[1]['uv']
+        return low <= u <= high and low <= v <= high
+
     async def _watch_for_clear_item(self, interval_s=CLEAR_ITEM_INTERVAL_S):
-        """Keep the newest gripper frame taken with the laser in CLEAR_ITEM_RANGE_M."""
+        """Keep the newest gripper frame taken with the laser in CLEAR_ITEM_RANGE_M and,
+        while the visual servo model is running, with the item centred in it."""
         low, high = CLEAR_ITEM_RANGE_M
         while self.run_command_loop:
             await asyncio.sleep(interval_s)
@@ -3200,6 +3228,8 @@ class AsyncObserver:
             taken = client.last_frame_cap_time
             last = self._clear_item_image
             if last is not None and taken is not None and taken <= last.timestamp:
+                continue
+            if not self._servo_sees_item_centred():
                 continue
             # decoded frames arrive BGR; the getters all hand out RGB
             self._clear_item_image = ItemImage(

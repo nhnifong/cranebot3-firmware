@@ -20,6 +20,7 @@ MODELS = {
     "visual_servo": ("nf_robot.ml.visual_servoing.servo", "SERVO_MODEL_REPOID"),
     "targeting": ("nf_robot.ml.ortho_target.model", "TARGETING_MODEL_REPOID"),
     "drop_point": ("nf_robot.ml.placer.model", "DROP_POINT_MODEL_REPOID"),
+    "basket_center": ("nf_robot.ml.basket.model", "BASKET_MODEL_REPOID"),
 }
 
 

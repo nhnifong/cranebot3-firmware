@@ -11,7 +11,8 @@ import unittest
 
 import torch
 
-from nf_robot.ml.visual_servoing.train import CELL_SIGMA, cell_loss, soft_cell_target
+from nf_robot.ml.grid_head import cell_loss, soft_cell_target
+from nf_robot.ml.gripper_grid import CELL_SIGMA
 
 GRID = (32, 56)          # rows, cols - the model's canvas grid
 ROWS, COLS = GRID

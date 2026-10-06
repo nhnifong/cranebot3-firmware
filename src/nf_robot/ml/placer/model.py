@@ -26,9 +26,11 @@ import torch
 import torch.nn as nn
 
 from nf_robot.ml.dino_trunk import SharedTrunkMixin, load_head_state
-from nf_robot.ml.grid_head import AttentionBlock, local_maxima
+from nf_robot.ml.grid_head import (
+    AttentionBlock, FiLM, adaptive_avg_pool2d, local_centroid, local_maxima,
+)
+from nf_robot.ml.gripper_grid import DEFAULT_BACKBONE
 from nf_robot.ml.ortho_target.model import ORTHO_EXTENT_M
-from nf_robot.ml.visual_servoing.model import DEFAULT_BACKBONE, FiLM, adaptive_avg_pool2d, local_centroid
 
 # Where a trained checkpoint is published, and where --local_models looks for it instead.
 DROP_POINT_MODEL_REPOID = "naavox/drop_point"
