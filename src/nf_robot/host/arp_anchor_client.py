@@ -131,10 +131,10 @@ class ArpeggioAnchorClient(ComponentClient):
                     offset, # the named location is out in front of the tag
                 ]))
                 position = pose.reshape(6)[3:]
-                self.ob.update_avg_named_pos(detection['n'], position)
+                self.ob.update_named_pos(detection['n'], position, timestamp, self.anchor_num)
                 # sometimes you forget your gamepad tag
                 # if detection['n'] == 'trash':
-                #     self.ob.update_avg_named_pos('gamepad', position)
+                #     self.ob.update_named_pos('gamepad', position, timestamp, self.anchor_num)
 
 
     def process_frame(self, frame_to_encode):

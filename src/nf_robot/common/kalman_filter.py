@@ -4,6 +4,12 @@ import sys
 
 if sys.platform == 'darwin':
     np.seterr(divide='ignore', invalid='ignore', over='ignore')
+    # matmul on macOS's Accelerate raises spurious divide/overflow/invalid warnings, and
+    # seterr above only covers the importing thread. Card filters update from the detector
+    # pool's callback thread, so each method silences them for whichever thread it runs on.
+    _quiet_matmul = np.errstate(divide='ignore', invalid='ignore', over='ignore')
+else:
+    _quiet_matmul = lambda f: f
 
 class KalmanFilter:
     """A Kalman Filter to estimate a 3D position, velocity, and sensor biases.
@@ -79,6 +85,7 @@ class KalmanFilter:
     def predict_present(self):
         return self.predict(time.time() - self.model_time)
 
+    @_quiet_matmul
     def predict(self, delta_time):
         """
         Predict the state and covariance forward in time.
@@ -90,6 +97,7 @@ class KalmanFilter:
         self.state_covariance = state_transition_matrix @ self.state_covariance @ state_transition_matrix.T + process_noise_covariance
         self.model_time += delta_time
 
+    @_quiet_matmul
     def update(self, measurement_vector, measurement_time, sensor_noise_covariance, measurement_type, sensor_name=None):
         """
         Update the state estimate with a new measurement.
@@ -134,6 +142,7 @@ class KalmanFilter:
         self.state_estimate = prop_F @ corrected_state_at_meas_time
         self.state_covariance = prop_F @ corrected_cov_at_meas_time @ prop_F.T + prop_Q
 
+    @_quiet_matmul
     def reset_biases(self, perfect_position):
         """
         Resets the biases and state estimate by performing a perfect update.
@@ -156,10 +165,12 @@ class KalmanFilter:
         self.state_estimate = self.state_estimate + kalman_gain @ innovation
         self.state_covariance = (np.eye(self.state_size) - kalman_gain @ perfect_measurement_matrix) @ self.state_covariance
 
-    def enforce_bias_constraint(self, constraint_strength=0.01):
+    @_quiet_matmul
+    def enforce_bias_constraint(self, constraint_strength=0.01, sensor_names=None):
         """
-        Applies a pseudo-measurement to enforce that the sum of all sensor biases
-        is approximately zero.
+        Applies a pseudo-measurement to enforce that the sum of the sensor biases
+        is approximately zero. sensor_names limits the sum to those sensors; a sensor
+        that has never measured anything would otherwise absorb the whole constraint.
         """
         # A pseudo-measurement of zero
         measurement_vector = np.zeros(3)
@@ -171,6 +182,8 @@ class KalmanFilter:
         # Construct the measurement matrix H for the bias sum constraint
         measurement_matrix = np.zeros((3, self.state_size))
         for i in range(self.num_sensors):
+            if sensor_names is not None and self.sensor_names[i] not in sensor_names:
+                continue
             # The columns corresponding to each sensor's bias
             bias_start_idx = 6 + 3 * i
             measurement_matrix[:3, bias_start_idx:bias_start_idx+3] = np.eye(3)

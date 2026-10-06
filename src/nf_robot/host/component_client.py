@@ -65,7 +65,7 @@ class ComponentClient:
         self.port = port
         self.origin_poses = defaultdict(lambda: deque(maxlen=max_origin_detections))
         self.datastore = datastore
-        self.ob = ob # instance of observer. mocks only need the update_avg_named_pos and send_ui methods
+        self.ob = ob # instance of observer. mocks only need the update_named_pos and send_ui methods
         self.websocket = None
         self.connected = False  # status of connection to websocket
         self.receive_task = None  # Task for receiving messages from websocket

@@ -5,6 +5,7 @@ import logging
 import time
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 import nf_robot.common.definitions as model_constants
 from nf_robot.generated.nf import common, control
@@ -125,7 +126,7 @@ class Diagnostics(Maneuver):
         Triggered by the debug command "goalseek". This is a motion task.
 
         Cycles through the four floor tags ("gamepad", "trash", "hamper", "toys"),
-        goal-seeking to each one's saved position in turn until every tag has been visited
+        goal-seeking over each one in turn until every tag has been visited
         VISITS_PER_TAG times.
 
         Once parked over a tag, read where it appears in the gripper camera and work out
@@ -139,11 +140,17 @@ class Diagnostics(Maneuver):
         MEASURE_WINDOW_S = 2.0   # average tag readings over this much of a window
         MEASURE_TIMEOUT_S = 5.0  # give up on a trial if the tag isn't seen in this long
 
-        # where the gantry (the point the support lines meet) is asked to sit above the tag.
-        # The gripper hangs the pole below that, so the camera is closer.
-        GANTRY_HEIGHT_OVER_TARGET = 0.9
-        IDEAL_GANTRY_OVER_TAG = np.array([0.0, 0.0, GANTRY_HEIGHT_OVER_TARGET])
+        # (m) where the gripper camera lens is asked to sit, straight above the tag
+        LENS_HEIGHT_OVER_TAG = 0.6
         ob = self.ob
+        # The gantry is where the lines meet. The pole runs from there down to the gripper
+        # origin, and the lens sits a little above that origin.
+        lens_in_body = Rotation.from_euler('x', 90, degrees=True).apply(model_constants.gripper_camera[1])
+        gantry_over_lens = ob.pole_offset()[2] - lens_in_body[2]
+        IDEAL_GANTRY_OVER_TAG = np.array([0.0, 0.0, LENS_HEIGHT_OVER_TAG + gantry_over_lens])
+        # These tags mark drop points, so each one's saved position is basket_offset out
+        # along the tag's normal from the tag itself. Lying on the floor, that is straight up.
+        SAVED_POSITION_OVER_TAG = np.array([0.0, 0.0, model_constants.basket_offset[1][2]])
 
         async def measure_gantry_over_tag(tag_name):
             """Average room-frame (gantry position - tag position) over a short window, or
@@ -175,14 +182,14 @@ class Diagnostics(Maneuver):
 
         deviations = []
         for trial, tag_name in enumerate(visit_order):
-            tag_pos = ob.named_position(tag_name)
-            if tag_pos is None:
+            saved_pos = ob.named_position(tag_name)
+            if saved_pos is None:
                 logger.warning(f'Goalseek trial {trial + 1}: no saved position for tag "{tag_name}", skipping')
                 continue
 
             logger.info(f'Goalseek trial {trial + 1}/{num_trials}: seeking to tag "{tag_name}"')
 
-            # goal-seek to the tag's saved position
+            tag_pos = saved_pos - SAVED_POSITION_OVER_TAG
             await ob.seek_goal(tag_pos + IDEAL_GANTRY_OVER_TAG, auto_altitude=True)
             await asyncio.sleep(SETTLE_S)
 

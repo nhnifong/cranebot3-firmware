@@ -47,6 +47,7 @@ from nf_robot.common.cv_common import *
 from nf_robot.common.config_loader import *
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.util import *
+from nf_robot.common.kalman_filter import KalmanFilter
 from nf_robot.generated.nf import telemetry, control, common
 import nf_robot.generated.nf.config as nf_config
 from nf_robot.common.image_motion import image_shift, heading_error, mean_heading_error, wrap_angle
@@ -146,6 +147,13 @@ SPOOL_HISTORY_S = 60.0
 # (m) below this rangefinder reading monitor_spools ignores the derail detector: with the
 # gripper this close to whatever is under it, lines are resisted without having derailed.
 DERAIL_MIN_RANGE_M = 0.20
+# Card filters: one per named card, each anchor camera a sensor with its own bias, as for
+# the gantry. Cards are still unless someone moves them.
+CARD_SENSOR_NAMES = ['v0', 'v1', 'v2', 'v3']
+CARD_ACCELERATION_STD_DEV = 0.001
+CARD_BIAS_STD_DEV = 0.0001
+# (m) a card is smaller and usually farther from the cameras than the gantry marker
+CARD_VISUAL_NOISE_COVARIANCE = np.diag([0.03**2] * 3)
 
 USER_TARGETS_DIR = "user_targets_data"
 METADATA_PATH = os.path.join(USER_TARGETS_DIR, "metadata.jsonl")
@@ -403,6 +411,9 @@ class AsyncObserver:
         self.last_user_move_time = time.time()
         # last known positions of named tags/objects live in self.config.named_positions
         # (the single source of truth). It's written to disk on shutdown, in async_close.
+        # update_named_pos keeps a filter per card behind it, and which cameras fed each.
+        self.card_filters = {}
+        self.card_sensors_seen = {}
         # Grasps with the visual servoing model, which is how grasping works unless
         # --lerobot_grasp hands it to a policy instead. Holds the checkpoint, loaded on
         # first use.
@@ -2023,12 +2034,26 @@ class AsyncObserver:
                     once_per_session=True,
                 )
 
-    def update_avg_named_pos(self, key: str, position: np.ndarray):
-        """Update the running average of the named position, keeping self.config.named_positions
-        as the single source of truth so the last known position survives a restart."""
-        if key in self.config.named_positions:
-            # exponential moving average
-            position = tonp(self.config.named_positions[key]) * 0.75 + position * 0.25
+    def update_named_pos(self, key: str, position: np.ndarray, timestamp: float, anchor_num: int):
+        """Fold one anchor camera's sighting of a named card into that card's Kalman filter,
+        keeping self.config.named_positions as the single source of truth so the last known
+        position survives a restart."""
+        kf = self.card_filters.get(key)
+        if kf is None:
+            kf = KalmanFilter(CARD_SENSOR_NAMES, CARD_ACCELERATION_STD_DEV, CARD_BIAS_STD_DEV)
+            kf.state_estimate[:3] = position
+            # still, so velocity starts known rather than free to soak up the first noise
+            kf.state_covariance[3:6, 3:6] = np.eye(3) * 1e-6
+            self.card_filters[key] = kf
+            self.card_sensors_seen[key] = set()
+        sensor = CARD_SENSOR_NAMES[anchor_num]
+        self.card_sensors_seen[key].add(sensor)
+        kf.predict_present()
+        kf.update(position, timestamp, CARD_VISUAL_NOISE_COVARIANCE, 'position', sensor)
+        # Only cameras see a card, so nothing else separates its position from their biases.
+        # Asking the biases of the cameras that see it to average zero does.
+        kf.enforce_bias_constraint(sensor_names=self.card_sensors_seen[key])
+        position = kf.state_estimate[:3].copy()
         self.config.named_positions[key] = fromnp(position)
         self.send_ui(named_position=telemetry.NamedObjectPosition(
             position=fromnp(position),
@@ -5087,7 +5112,7 @@ class AsyncObserver:
     async def _fly_to_goal(self, head_turn, auto_altitude):
         """The flight seek_goal starts: steers onto self._goal_pos, which may change under it,
         until it arrives (True) or the goal is cleared (False)."""
-        GOAL_PROXIMITY_M = 0.08
+        GOAL_PROXIMITY_M = 0.05
         MAX_SPEED = 0.4 # GANTRY_SPEED_MPS
         ACCEL = 0.15     # m/s^2
         ARRIVAL_SPEED_MPS = 0.03 # what it should still be doing when it lets go of the goal
