@@ -1,9 +1,13 @@
 """Pick and place: finding targets on the floor, and carrying them along the route."""
 
 import asyncio
+import json
 import logging
 import time
+import uuid
+from datetime import datetime, timezone
 from functools import partial
+from pathlib import Path
 
 import numpy as np
 
@@ -36,6 +40,15 @@ DROP_FIX_CELL_M = 0.3
 UNFIXED_DESTINATIONS = (common.RoutePoint.DROP_POSITION, common.RoutePoint.ORIGIN)
 # What _grasp_unless_deleted returns when the grasp was set aside for a detour.
 DETOUR = object()
+# Where every item put down is recorded: a frame of it and where it went, for building a
+# searchable record of where things are. Under the observer's output root.
+CLUTTER_RECORD_DIR = 'clutter_record'
+CLUTTER_RECORD_JPEG_QUALITY = 90
+# (seconds) after the fingers open, when the frame of the item where it landed is taken. The
+# gripper holds still over the drop until then.
+AFTER_DROP_IMAGE_S = 1.0
+# (seconds) how long past that to wait for the frame before recording without it.
+AFTER_DROP_IMAGE_TIMEOUT_S = 2.0
 
 
 def drop_fix_cell(point):
@@ -583,6 +596,7 @@ class PickAndPlace(Maneuver):
                         self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.PICKED_UP)
                         self.send_tq_to_ui()
                     logger.info('Object picked up')
+                    picked_from = ob.gripper_position()
 
                 # Choose drop point. default to origin
                 drop_point = np.zeros(3)
@@ -622,9 +636,12 @@ class PickAndPlace(Maneuver):
                 # open gripper
                 open_target = max(-90, min(RELAXED_OPEN, ob.finger_angle() - 10))
                 asyncio.create_task(ob.set_finger_angle(open_target))
+                dropped_t = time.time()
+                await self._record_drop(start, picked_from, ob.gripper_position(),
+                                        self._destination_name(dst, next_target), dropped_t)
                 if next_target is not None:
                     # don't immediately select a new target, because there's a chance it'll be the sock you're holding.
-                    await asyncio.sleep(DELAY_AFTER_DROP)
+                    await asyncio.sleep(max(0.0, DELAY_AFTER_DROP - (time.time() - dropped_t)))
                     self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.DROPPED)
                     self.send_tq_to_ui()
 
@@ -637,6 +654,84 @@ class PickAndPlace(Maneuver):
                 drop_point_maneuver.stop_watch()
             ob.slow_stop_all_spools()
             await ob.clear_goal()
+
+    # -- clutter record ------------------------------------------------------
+
+    def clutter_record_dir(self):
+        """clutter_record/<robot>/, where <robot> is the config file's name without its
+        conf_ prefix: conf_bedroom.json records under bedroom."""
+        path = self.ob.config_path
+        robot = Path(path).stem if path else 'unsaved'
+        if robot.startswith('conf_'):
+            robot = robot[len('conf_'):]
+        return self.output_dir(f'{CLUTTER_RECORD_DIR}/{robot}')
+
+    def _destination_name(self, dst, target):
+        if dst == common.RoutePoint.NA:
+            return target.dropoff if target is not None and isinstance(target.dropoff, str) else None
+        if dst == common.RoutePoint.ORIGIN:
+            return 'origin'
+        return ROUTE_POINT_TAG_NAMES.get(dst)
+
+    async def _record_drop(self, grasp_started, picked_from, dropped_at, destination, dropped_t):
+        """Record the drop in the clutter record: the item's last clear image, a frame of
+        where it landed taken AFTER_DROP_IMAGE_S after the fingers opened, and a line in
+        record.jsonl saying where it came from and went.
+
+        Waits here for the landed frame, so the gripper has not moved when it is taken; the
+        files are written in the background. Skipped, with no wait, if no clear image was
+        taken during this item's grasp, since an older one would be of something else."""
+        seen = self.ob.last_clear_item_image()
+        if seen is None or seen.timestamp < grasp_started:
+            logger.info('No clear image of the item from its grasp; not recording the drop')
+            return
+        landed_after = dropped_t + AFTER_DROP_IMAGE_S
+        landed = await self.ob.gripper_frame(
+            after=landed_after,
+            timeout=max(0.0, landed_after - time.time()) + AFTER_DROP_IMAGE_TIMEOUT_S)
+        if landed is None:
+            logger.warning('No gripper frame after the drop; recording it without one')
+        root = self.clutter_record_dir()
+        # the moment the fingers opened, not now, which is a second or more later
+        now = dropped_t
+        stamp = datetime.fromtimestamp(now, timezone.utc)
+        name = f'{stamp.strftime("%Y%m%d-%H%M%S")}-{uuid.uuid4().hex[:8]}'
+        entry = {
+            'image': f'images/{name}.jpg',
+            # the item where it landed, or None if no frame came
+            'landed_image': None if landed is None else f'images/{name}-landed.jpg',
+            'time': stamp.isoformat(),
+            'unix_time': round(now, 3),
+            'image_time': round(float(seen.timestamp), 3),
+            # gripper positions in the room frame, metres
+            'picked_from': [round(float(c), 4) for c in picked_from],
+            'dropped_at': [round(float(c), 4) for c in dropped_at],
+            'destination': destination,
+        }
+
+        def write():
+            import cv2
+
+            (root / 'images').mkdir(parents=True, exist_ok=True)
+            for relative, rgb in ((entry['image'], seen.image_rgb),
+                                  (entry['landed_image'], landed)):
+                if relative is None:
+                    continue
+                ok = cv2.imwrite(str(root / relative), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),
+                                 [cv2.IMWRITE_JPEG_QUALITY, CLUTTER_RECORD_JPEG_QUALITY])
+                if not ok:
+                    raise RuntimeError(f'could not write {root / relative}')
+            with open(root / 'record.jsonl', 'a') as f:
+                f.write(json.dumps(entry) + '\n')
+
+        async def save():
+            try:
+                await self.run_in_thread(write)
+                logger.info(f'Recorded the drop at {root / entry["image"]}')
+            except Exception:
+                logger.exception('Could not record the drop')
+
+        self.spawn(save(), name='record_drop')
 
     async def _grasp_unless_deleted(self, interrupt=None):
         """
