@@ -59,6 +59,11 @@ dtoverlay=dwc2,dr_mode=host
 enable_uart=1
 dtoverlay=disable-bt
 
+# Newer anchor hats switch both motors' power with a MOSFET on GPIO23. Drive it high from the
+# firmware, before Linux boots, so the motors are on CAN by the time cranebot.service looks for
+# them. GPIO23 is unconnected on older anchor hats.
+gpio=23=op,dh
+
 # Hardware PWM0 for the cooling fan, driven by fan_control.py. GPIO18 is only a boot default:
 # fan_control.py moves PWM0 to the pin the fan is actually on (GPIO12 on anchor hats).
 dtoverlay=pwm,pin=18,func=2

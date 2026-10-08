@@ -18,6 +18,7 @@ MOTOR_TYPE = "G6215"
 FEEDBACK_ID_REGISTER = 7  # MST_ID
 MOTOR_ID_REGISTER = 8  # ESC_ID
 MOTOR_ID_SCAN_RANGE = range(0x01, 0x11)  # motor id 0x00 is reserved and bricks the motor if set
+MOTOR_POWER_GPIO = 23  # MOSFET switching both motors' power on newer anchor hats. unconnected on older ones
 ANCHOR_MOTOR_TARGETS = [
     # (label, target motor_id, target feedback_id)
     ("lower", 1, 1),
@@ -261,8 +262,9 @@ def ensure_motor_ids(controller, motor_type=MOTOR_TYPE, targets=ANCHOR_MOTOR_TAR
     configure_feedback_in_place(
         controller, "lower", lower_motor_id, lower_feedback_id, motor_type=motor_type)
 
-    
+
     input("Unplug and re-plug the upper motor to power cycle it, then press Enter...")
+    power_cycle_motors()
 
     # This re-reads live registers, i.e. RAM, so it confirms the ids are in effect but
     # cannot prove store_parameters() committed them to flash. This only happens when the motor power cycles.
@@ -276,6 +278,19 @@ def ensure_motor_ids(controller, motor_type=MOTOR_TYPE, targets=ANCHOR_MOTOR_TAR
             return
         time.sleep(0.5)
     raise RuntimeError(f"Motor IDs still incorrect after configuration. Expected {expected}, found {found}.")
+
+
+def power_cycle_motors(off_s=0.5, settle_s=0.5):
+    """Cut and restore motor power through the MOSFET on GPIO23 of newer anchor hats.
+
+    Older hats leave GPIO23 unconnected, so this is harmless there; on those the
+    builder power cycles the upper motor by hand instead. pinctrl leaves the pin
+    driven after it exits, unlike a gpiozero device, which releases it on close.
+    """
+    subprocess.run(["sudo", "pinctrl", "set", str(MOTOR_POWER_GPIO), "op", "dl"], check=True)
+    time.sleep(off_s)
+    subprocess.run(["sudo", "pinctrl", "set", str(MOTOR_POWER_GPIO), "op", "dh"], check=True)
+    time.sleep(settle_s)
 
 
 def wind_with_ramp(motor, direction, total_revs, max_rev_per_s=4.0, accel_rev_per_s2=2.0, dt=0.02):

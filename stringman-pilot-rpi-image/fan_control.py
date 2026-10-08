@@ -8,6 +8,9 @@ on the hat:
     anchor hat -> GPIO 12
     otherwise  -> GPIO 18
 
+Both hats switch a 2-wire fan with a MOSFET. That won't spin the fan above about
+1 kHz, and 200 Hz is the quietest.
+
 The anchor hat is recognized by its MCP2515 CAN controller: can0 only exists when
 that chip answers on SPI. Both pins can carry PWM0, so this daemon always drives
 pwmchip0 channel 0 and muxes PWM0 onto the chosen pin itself with pinctrl,
@@ -15,16 +18,17 @@ returning the other one to an input. The `pwm` overlay in config.txt is still
 needed to enable the PWM block, but the pin it picks is only a boot default.
 
 can0 appears some seconds into boot, possibly after this service starts, so the
-pin is re-checked every sample and moved if the answer changes. Until the pin is
-muxed the fan's PWM line floats high, which a 4-wire fan treats as full speed.
+pin is re-checked every sample and moved if the answer changes.
 
 Duty cycle follows SoC temperature linearly between MIN_DUTY at or below
 TEMP_LOW_C and MAX_DUTY at or above TEMP_HIGH_C. If the temperature can't be
 read, or the daemon is stopped, the fan is left at MAX_DUTY: a fan stuck on full
 is loud, a fan stuck off cooks the unit.
 
-To run it by hand:
+There is one PWM channel and this daemon assumes it owns it. To run it by hand,
+stop the service first, or the two processes fight over duty_cycle:
 
+    sudo systemctl stop fan-control
     sudo stringman-pilot-rpi-image/fan_control.py --verbose
 """
 
@@ -39,8 +43,8 @@ MAX_DUTY = 1.0
 TEMP_LOW_C = 35.0   # at or below: MIN_DUTY
 TEMP_HIGH_C = 50.0  # at or above: MAX_DUTY
 
-PWM_FREQUENCY_HZ = 25000  # Intel 4-wire fan spec
-DEFAULT_INTERVAL = 2.0    # seconds between temperature samples
+PWM_FREQUENCY_HZ = 200  # quietest for the 2-wire fan behind the hat's MOSFET
+DEFAULT_INTERVAL = 2.0  # seconds between temperature samples
 
 PWM_CHIP = "/sys/class/pwm/pwmchip0"
 PWM_CHANNEL = 0
