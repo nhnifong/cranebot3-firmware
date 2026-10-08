@@ -79,7 +79,7 @@ arp_anchor_service_name = 'cranebot-anchor-arpeggio-service'
 
 N_ANCHORS = 2
 N_LINES = 4
-DEFAULT_MAX_SAFE_TENSION = 16.0  # newtons, when config.max_safe_tension says nothing
+DEFAULT_MAX_SAFE_TENSION = 28.0  # newtons, when config.max_safe_tension says nothing
 INPUT_VELOCITY_TTL_S = 2.0 # a commanded velocity keyed by a source expires this long after its last update
 INFO_REQUEST_TIMEOUT_MS = 3000 # milliseconds
 # visual centering nudges. The move is open loop (commanded speed for a computed duration), so
