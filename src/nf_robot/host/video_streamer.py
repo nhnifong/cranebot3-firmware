@@ -313,6 +313,8 @@ class RTMPStreamer:
         # Linux hosts (static glibc dlopening the host's NSS modules, e.g. mdns4_minimal), dying
         # before it ever connects. Resolve the hostname here and hand ffmpeg a bare IP instead.
         parsed = urlparse(self.rtmp_url)
+        if not parsed.hostname:
+            return self.rtmp_url  # e.g. a plain output file path
         try:
             ip = socket.gethostbyname(parsed.hostname)
         except OSError as e:
