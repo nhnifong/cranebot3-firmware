@@ -10,7 +10,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 import io
 import cv2
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 from imageio_ffmpeg import get_ffmpeg_exe
 
 from nf_robot.common.util import get_local_ip
@@ -308,10 +308,24 @@ class RTMPStreamer:
         target_bitrate = max(200000, min(raw_bitrate, 2500000))
         return f"{target_bitrate // 1000}k"
 
+    def _resolved_rtmp_url(self):
+        # The static ffmpeg build bundled by imageio_ffmpeg segfaults inside getaddrinfo on some
+        # Linux hosts (static glibc dlopening the host's NSS modules, e.g. mdns4_minimal), dying
+        # before it ever connects. Resolve the hostname here and hand ffmpeg a bare IP instead.
+        parsed = urlparse(self.rtmp_url)
+        try:
+            ip = socket.gethostbyname(parsed.hostname)
+        except OSError as e:
+            logger.warning(f"Could not resolve {parsed.hostname}, passing hostname to ffmpeg: {e}")
+            return self.rtmp_url
+        netloc = f"{ip}:{parsed.port}" if parsed.port else ip
+        return urlunparse(parsed._replace(netloc=netloc))
+
     def start(self):
         if self.process:
             return
 
+        rtmp_url = self._resolved_rtmp_url()
         if self.passthrough:
             command = [
                 get_ffmpeg_exe(),
@@ -320,7 +334,7 @@ class RTMPStreamer:
                 '-f', 'h264',
                 '-i', '-',
                 '-c:v', 'copy',
-                '-f', 'flv', self.rtmp_url
+                '-f', 'flv', rtmp_url
             ]
         else:
             gop_size = max(1, int(self.fps * 2))
@@ -340,7 +354,7 @@ class RTMPStreamer:
                 '-tune', 'zerolatency',
                 '-g', str(gop_size),
                 '-b:v', bitrate,
-                '-f', 'flv', self.rtmp_url
+                '-f', 'flv', rtmp_url
             ]
 
         # stderr must be piped to monitor for connection losses.
@@ -356,10 +370,11 @@ class RTMPStreamer:
         logger.info(f"FFmpeg streamer started to {self.rtmp_url} (passthrough={self.passthrough})")
 
     def _monitor_stderr(self):
-        if not self.process or not self.process.stderr:
+        process = self.process
+        if not process or not process.stderr:
             return
 
-        for line_bytes in iter(self.process.stderr.readline, b''):
+        for line_bytes in iter(process.stderr.readline, b''):
             line = line_bytes.decode('utf-8', errors='ignore').strip()
             if not line:
                 continue
@@ -377,6 +392,12 @@ class RTMPStreamer:
                 break
             elif "error" in lower or "fail" in lower or "denied" in lower or "unauthorized" in lower:
                 logger.error(f"FFmpeg [{self.rtmp_url}]: {line}")
+
+        # stderr hit EOF: ffmpeg exited. Report how, since a crash (negative returncode = signal)
+        # otherwise only shows up later as an unexplained broken pipe on stdin.
+        returncode = process.wait()
+        if returncode != 0:
+            logger.error(f"FFmpeg [{self.rtmp_url}] exited with code {returncode}")
 
     def send_frame(self, frame):
         """Encode and send one raw decoded/synthesized frame. Only meaningful when passthrough=False."""
