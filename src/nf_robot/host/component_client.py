@@ -6,7 +6,6 @@ import signal
 import websockets
 import time
 import json
-import cv2
 import av
 import numpy as np
 from functools import partial
@@ -454,8 +453,7 @@ class ComponentClient:
             ortho_event = getattr(self.ob, 'ortho_event', None)
             if ortho_event is not None:
                 ortho_event.set()
-            rgb = cv2.cvtColor(self.last_output_frame, cv2.COLOR_BGR2RGB)
-            vs.send_frame(rgb)
+            vs.send_frame(self.last_output_frame)
 
         # Only tear down what is still ours: if a later session got going before this
         # thread noticed its stop event, the recording and these fields are already that

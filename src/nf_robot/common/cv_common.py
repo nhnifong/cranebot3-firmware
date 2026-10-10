@@ -9,6 +9,13 @@ from scipy.spatial.transform import Rotation
 from nf_robot.generated.nf import config as nf_config
 import functools
 
+
+def write_rgb(path, rgb, quality=None):
+    """Write an RGB frame to an image file. cv2 encodes BGR, so the swap happens here and
+    nowhere else. Returns False if cv2 could not write it."""
+    params = [] if quality is None else [cv2.IMWRITE_JPEG_QUALITY, quality]
+    return cv2.imwrite(str(path), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), params)
+
 # The marker IDs will correspond to the index in this list.
 MARKER_NAMES = [
     'origin',

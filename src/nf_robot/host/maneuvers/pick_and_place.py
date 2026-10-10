@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
+from nf_robot.common.cv_common import write_rgb
 from nf_robot.common.model_revisions import pinned_revision
 from nf_robot.common.util import tonp
 from nf_robot.generated.nf import common, control, telemetry
@@ -710,16 +711,12 @@ class PickAndPlace(Maneuver):
         }
 
         def write():
-            import cv2
-
             (root / 'images').mkdir(parents=True, exist_ok=True)
             for relative, rgb in ((entry['image'], seen.image_rgb),
                                   (entry['landed_image'], landed)):
                 if relative is None:
                     continue
-                ok = cv2.imwrite(str(root / relative), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),
-                                 [cv2.IMWRITE_JPEG_QUALITY, CLUTTER_RECORD_JPEG_QUALITY])
-                if not ok:
+                if not write_rgb(root / relative, rgb, CLUTTER_RECORD_JPEG_QUALITY):
                     raise RuntimeError(f'could not write {root / relative}')
             with open(root / 'record.jsonl', 'a') as f:
                 f.write(json.dumps(entry) + '\n')

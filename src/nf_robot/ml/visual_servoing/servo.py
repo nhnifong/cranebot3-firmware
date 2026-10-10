@@ -35,16 +35,14 @@ def load_model(device, local_models=False, revision=None):
     return load_checkpoint(path, device)
 
 
-def prepare_frame(bgr, image_size, device):
-    """A live BGR gripper frame as a one-image normalized batch, the way training saw them."""
-    import cv2
-
+def prepare_frame(rgb, image_size, device):
+    """A live RGB gripper frame as a one-image normalized batch, the way training saw them."""
     from nf_robot.ml.image_input import input_batch
 
-    return input_batch(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), image_size, device)
+    return input_batch(rgb, image_size, device)
 
 
-def predict_frame(model, bgr, state, device, spin, gripper_pos=None):
+def predict_frame(model, rgb, state, device, spin, gripper_pos=None):
     """Everything one frame says, decoded into camera and room frames; blocking, so call it
     from a thread."""
     import torch
@@ -52,7 +50,7 @@ def predict_frame(model, bgr, state, device, spin, gripper_pos=None):
     from nf_robot.ml.visual_servoing.dataset import state_vector
     from nf_robot.ml.visual_servoing.model import predict
 
-    images = prepare_frame(bgr, model.image_size, device)
+    images = prepare_frame(rgb, model.image_size, device)
     state_t = torch.from_numpy(state_vector(state))[None].to(device)
     out = predict(model, images, state_t, top_k=1)  # predict is already no_grad
 

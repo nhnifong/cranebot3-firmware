@@ -19,9 +19,9 @@ import logging
 import time
 from typing import NamedTuple
 
-import cv2
 import numpy as np
 
+from nf_robot.common.cv_common import write_rgb
 from nf_robot.common.util import tonp
 from nf_robot.generated.nf import telemetry
 from nf_robot.host.maneuver import Maneuver, prefer_swing_cancellation, verb
@@ -185,7 +185,7 @@ class ClusterSort(Maneuver):
                 continue
             visited.append(shot.position)
             name = f'seed_{len(seeds):04d}.jpg'
-            cv2.imwrite(str(run_dir / name), cv2.cvtColor(shot.image_rgb, cv2.COLOR_RGB2BGR))
+            write_rgb(run_dir / name, shot.image_rgb)
             seeds.append((shot, await self.run_in_thread(embed, self.trunk, shot.image_rgb, device), name))
             self.progress(0, f'Photographed {len(seeds)} objects')
 
@@ -339,7 +339,7 @@ class ClusterSort(Maneuver):
                 nearest = int(np.argmax(seed_embeddings @ e))
                 record['image'] = f'sorted_{len(collection["sorted"]):04d}.jpg'
                 record['laser_range'] = round(float(seen.laser_range), 4)
-                cv2.imwrite(str(run_dir / record['image']), cv2.cvtColor(seen.image_rgb, cv2.COLOR_RGB2BGR))
+                write_rgb(run_dir / record['image'], seen.image_rgb)
             else:
                 # no view to go by, so trust that the object is the one photographed nearest
                 # to where it was picked up

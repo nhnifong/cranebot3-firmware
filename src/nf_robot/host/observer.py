@@ -459,7 +459,7 @@ class AsyncObserver:
         self.local_models = local_models
         # ortho projection state - written by _ortho_worker thread, read by run_perception AI task
         self.ortho_event = threading.Event()
-        # rgb24, the order the anchor clients decode to; only converted to BGR for the streamer
+        # rgb24, the order the anchor clients decode to
         self.last_ortho_rgb = None
         # see last_clear_item_image
         self._clear_item_image = None
@@ -3231,9 +3231,9 @@ class AsyncObserver:
                 continue
             if not self._servo_sees_item_centred():
                 continue
-            # decoded frames arrive BGR; the getters all hand out RGB
+            # decoded frames are already rgb24
             self._clear_item_image = ItemImage(
-                image_rgb=cv2.cvtColor(client.last_output_frame, cv2.COLOR_BGR2RGB),
+                image_rgb=client.last_output_frame.copy(),
                 timestamp=taken or time.time(),
                 laser_range=laser,
                 gantry_position=self.gantry_position(),
@@ -5374,8 +5374,7 @@ class AsyncObserver:
                 self.last_ortho_rgb = ortho_rgb
 
                 if ortho_floor_vs is not None:
-                    # the streamer's encoders take BGR
-                    ortho_floor_vs.send_frame(cv2.cvtColor(ortho_rgb, cv2.COLOR_RGB2BGR))
+                    ortho_floor_vs.send_frame(ortho_rgb)
             except Exception:
                 logger.exception('_ortho_worker iteration failed')
 

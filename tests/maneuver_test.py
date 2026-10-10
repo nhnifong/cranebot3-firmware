@@ -458,7 +458,7 @@ class TestSettingsAndHooks(ManeuverTestCase):
         ob = self.make_observer()
         gripper = type('Gripper', (), {})()
         gripper.last_output_frame = np.zeros((4, 4, 3), dtype=np.uint8)
-        gripper.last_output_frame[..., 0] = 255      # blue, in BGR
+        gripper.last_output_frame[..., 2] = 255      # blue; decoded frames are RGB
         gripper.last_frame_cap_time = 123.0
         ob.gripper_client = gripper
         ob.pe.gant_pos = np.array([1.0, 2.0, 0.5])
@@ -477,7 +477,7 @@ class TestSettingsAndHooks(ManeuverTestCase):
         seen = ob.last_clear_item_image()
         self.assertEqual(seen.laser_range, 0.2)
         self.assertEqual(seen.timestamp, 123.0)
-        self.assertEqual(seen.image_rgb[0, 0, 2], 255)   # blue, in RGB
+        self.assertEqual(seen.image_rgb[0, 0, 2], 255)   # kept as RGB
 
 
 class FakeTilt:

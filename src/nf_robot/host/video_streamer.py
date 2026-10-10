@@ -119,15 +119,14 @@ class MjpegStreamer:
 
     def send_frame(self, frame):
         """
-        Encodes the frame as JPEG and notifies waiting HTTP clients.
-        Expects BGR frame (standard OpenCV format).
+        Encodes the RGB frame as JPEG and notifies waiting HTTP clients.
         """
         with self._client_lock:
             if self.client_count == 0:
                 return
 
         # Encode frame to JPEG directly in memory
-        success, buffer = cv2.imencode('.jpg', frame) #, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+        success, buffer = cv2.imencode('.jpg', cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)) #, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
 
         if success:
             with self.frame_condition:
@@ -347,7 +346,7 @@ class RTMPStreamer:
                 '-use_wallclock_as_timestamps', '1',
                 '-f', 'rawvideo',
                 '-vcodec', 'rawvideo',
-                '-pix_fmt', 'bgr24', # Standard OpenCV format
+                '-pix_fmt', 'rgb24',
                 '-s', f'{self.width}x{self.height}',
                 '-i', '-',
                 '-c:v', 'libx264',
@@ -402,7 +401,7 @@ class RTMPStreamer:
             logger.error(f"FFmpeg [{self.rtmp_url}] exited with code {returncode}")
 
     def send_frame(self, frame):
-        """Encode and send one raw decoded/synthesized frame. Only meaningful when passthrough=False."""
+        """Encode and send one raw decoded/synthesized RGB frame. Only meaningful when passthrough=False."""
         if not self.process:
             return
 
@@ -519,7 +518,7 @@ class NfVideoStreamer:
         logger.info(f'Streaming locally at {self._local_uri}')
 
     def send_frame(self, frame):
-        """Send one decoded/synthesized (and possibly resized) frame to the local MJPEG
+        """Send one decoded/synthesized (and possibly resized) RGB frame to the local MJPEG
         stream, and to the RTMP remote too if this stream is not in passthrough mode."""
         self._local.send_frame(frame)
         if self._remote and not self._passthrough:
@@ -573,7 +572,7 @@ if __name__ == "__main__":
             frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
             # Simple color gradient based on x_pos
             # Use reshape to allow broadcasting the vertical gradient across the width
-            frame[:, :, 0] = np.linspace(0, 255, HEIGHT).reshape(-1, 1).astype(np.uint8) # Blue channel
+            frame[:, :, 2] = np.linspace(0, 255, HEIGHT).reshape(-1, 1).astype(np.uint8) # Blue channel
             frame[:, :, 1] = (x_pos % 255) # Green channel changes
             
             # 2. Moving Box
@@ -582,8 +581,8 @@ if __name__ == "__main__":
                 direction *= -1
             x_pos += (5 * direction)
             
-            # Draw box (Red) - Input is assumed BGR
-            cv2.rectangle(frame, (x_pos, 200), (x_pos + box_size, 250), (0, 0, 255), -1)
+            # Draw box (Red) - Input is RGB
+            cv2.rectangle(frame, (x_pos, 200), (x_pos + box_size, 250), (255, 0, 0), -1)
             
             # Add timestamp text
             cv2.putText(frame, f"Time: {time.time():.2f}", (10, 30), 

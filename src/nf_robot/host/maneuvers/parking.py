@@ -9,7 +9,7 @@ import numpy as np
 
 import nf_robot.common.definitions as model_constants
 import nf_robot.generated.nf.config as nf_config
-from nf_robot.common.cv_common import get_inward_wall_normal, get_wall_escape_direction
+from nf_robot.common.cv_common import get_inward_wall_normal, get_wall_escape_direction, write_rgb
 from nf_robot.common.image_motion import image_shift
 from nf_robot.common.util import fromnp, tonp
 from nf_robot.generated.nf import control, telemetry
@@ -99,8 +99,7 @@ class Parking(Maneuver):
         directory = self.output_dir(PARK_REFERENCE_DIR)
         name = (self.data.reference_image
                 or f'park_reference_{time.strftime("%Y%m%d_%H%M%S")}.jpg')
-        # frames arrive from the decoder as RGB; cv2 writes BGR
-        cv2.imwrite(str(directory / name), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+        write_rgb(directory / name, frame)
         logger.info(f'Saved park reference image {directory / name}')
         return name
 
