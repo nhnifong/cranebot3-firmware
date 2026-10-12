@@ -34,6 +34,7 @@ from nf_robot.ml.grid_head import (
 from nf_robot.ml.gripper_grid import (
     DEFAULT_BACKBONE, DEFAULT_IMAGE_SIZE, GripperGridNet, camera_point, decode_position,
 )
+from nf_robot.ml.visual_servoing.dataset import STATE_KEYS
 
 # Channels and pooled grid of the spatial close head, coarse enough to flatten but keeping
 # the jaws in their own bins.
@@ -42,6 +43,11 @@ CLOSE_POOL = (4, 6)
 # laser_rangefinder, finger_angle, target_force; deliberately not velocity or finger
 # pressure.
 STATE_DIM = 3
+# The state the close head reads beside its bins, and the state FiLM conditions every
+# spatial head's features on. Not finger_angle: once the close has begun the fingers say so,
+# which let the close head answer from the state instead of the image.
+CLOSE_STATE_KEYS = ("laser_rangefinder", "target_force")
+FILM_STATE_KEYS = ("laser_rangefinder", "target_force")
 
 
 class VisualServoNet(GripperGridNet):
@@ -49,11 +55,14 @@ class VisualServoNet(GripperGridNet):
 
     def __init__(self, backbone_id=DEFAULT_BACKBONE, image_size=DEFAULT_IMAGE_SIZE,
                  fuse_layers=4, width=256, attention_layers=3, heads=8, freeze=True,
-                 state_dim=STATE_DIM):
+                 state_dim=STATE_DIM, close_state_keys=CLOSE_STATE_KEYS,
+                 film_state_keys=FILM_STATE_KEYS):
         super().__init__(backbone_id=backbone_id, image_size=image_size,
                          fuse_layers=fuse_layers, width=width,
                          attention_layers=attention_layers, heads=heads, freeze=freeze,
-                         state_dim=state_dim)
+                         state_dim=state_dim,
+                         film_state_index=[STATE_KEYS.index(k) for k in film_state_keys])
+        self.film_state_keys = tuple(film_state_keys)
         channels = width
 
         # Head 1: one softmax over canvas cells, plus log distance.
@@ -73,8 +82,10 @@ class VisualServoNet(GripperGridNet):
         # The close question is asked of the cell grid, where the jaws are, rather than the
         # pooled vector. State also goes straight in after the pool, since the rangefinder
         # is most of "close enough".
+        self.close_state_keys = tuple(close_state_keys)
+        self.close_state_index = [STATE_KEYS.index(k) for k in self.close_state_keys]
         self.close_reduce = nn.Conv2d(channels, CLOSE_CHANNELS, 1)
-        close_dim = CLOSE_CHANNELS * CLOSE_POOL[0] * CLOSE_POOL[1] + state_dim
+        close_dim = CLOSE_CHANNELS * CLOSE_POOL[0] * CLOSE_POOL[1] + len(self.close_state_index)
         self.close_head = nn.Sequential(
             nn.LayerNorm(close_dim),
             nn.Linear(close_dim, 256), nn.GELU(), nn.Linear(256, 1))
@@ -95,7 +106,8 @@ class VisualServoNet(GripperGridNet):
             "grasp_pressure": F.softplus(flags[:, 3]),
         }
         pooled = adaptive_avg_pool2d(F.gelu(self.close_reduce(x)), CLOSE_POOL).flatten(1)
-        out["close_logit"] = self.close_head(torch.cat([pooled, state], dim=-1)).squeeze(-1)
+        close_state = state[:, self.close_state_index]
+        out["close_logit"] = self.close_head(torch.cat([pooled, close_state], dim=-1)).squeeze(-1)
         return out
 
 
@@ -153,6 +165,9 @@ def load_checkpoint(path, device):
         backbone_id=checkpoint["backbone_id"], image_size=checkpoint["image_size"],
         fuse_layers=checkpoint["fuse_layers"], attention_layers=checkpoint["attention_layers"],
         freeze=freeze,
+        # checkpoints from before these keys were recorded gave both all of the state
+        close_state_keys=checkpoint.get("close_state_keys", STATE_KEYS),
+        film_state_keys=checkpoint.get("film_state_keys", STATE_KEYS),
     ).to(device)
     load_head_state(model, checkpoint)
     model.eval()

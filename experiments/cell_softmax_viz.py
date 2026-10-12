@@ -33,9 +33,9 @@ import cv2
 import numpy as np
 import torch
 
+from nf_robot.ml.grid_head import CENTROID_RADIUS, local_centroid, window_average
+from nf_robot.ml.gripper_grid import CANVAS_SCALE
 from nf_robot.ml.visual_servoing.dataset import state_vector
-from nf_robot.ml.visual_servoing.model import (
-    CANVAS_SCALE, CENTROID_RADIUS, local_centroid, window_average)
 from nf_robot.ml.visual_servoing.servo import load_model, prepare_frame
 
 logger = logging.getLogger(__name__)

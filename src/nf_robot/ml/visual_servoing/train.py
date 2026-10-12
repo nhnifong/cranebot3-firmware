@@ -250,6 +250,8 @@ def checkpoint_payload(model, args, metrics, epoch):
         "attention_layers": args.attention_layers,
         # Whether the state dict holds a backbone at all.
         "freeze": not args.unfreeze_backbone,
+        "close_state_keys": list(model.close_state_keys),
+        "film_state_keys": list(model.film_state_keys),
         "metrics": metrics,
         "epoch": epoch,
         # not needed to rebuild the model, kept so a checkpoint says how it was trained

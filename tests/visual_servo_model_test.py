@@ -63,7 +63,8 @@ class TestSpatialCloseHead(unittest.TestCase):
             pooled = adaptive_avg_pool2d(
                 F.gelu(self.spatial.close_reduce(feature_map)), CLOSE_POOL).flatten(1)
             return self.spatial.close_head(
-                torch.cat([pooled, torch.zeros(1, 3)], dim=-1)).item()
+                torch.cat([pooled, torch.zeros(1, len(self.spatial.close_state_index))],
+                          dim=-1)).item()
 
         self.assertNotAlmostEqual(close_logit(at_jaws), close_logit(at_edge), places=5)
 
@@ -79,7 +80,8 @@ class TestCheckpointRoundTrip(unittest.TestCase):
         return {
             "backbone_id": model.backbone_id, "image_size": list(model.image_size),
             "fuse_layers": model.fuse_layers, "attention_layers": len(model.attention),
-            "freeze": model.freeze,
+            "freeze": model.freeze, "close_state_keys": list(model.close_state_keys),
+            "film_state_keys": list(model.film_state_keys),
             "state_dict": drop_trunk_weights(model.state_dict(), model.trunk, verify=False),
         }
 

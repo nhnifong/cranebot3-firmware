@@ -68,7 +68,7 @@ class GripperGridNet(SharedTrunkMixin, nn.Module):
 
     def __init__(self, backbone_id=DEFAULT_BACKBONE, image_size=DEFAULT_IMAGE_SIZE,
                  fuse_layers=4, width=256, attention_layers=3, heads=8, freeze=True,
-                 state_dim=3):
+                 state_dim=3, film_state_index=None):
         super().__init__()
         trunk = self._init_trunk(backbone_id, freeze)
         self.backbone_id = backbone_id
@@ -89,7 +89,10 @@ class GripperGridNet(SharedTrunkMixin, nn.Module):
 
         self.stem = nn.Sequential(
             nn.Conv2d(self.hidden * fuse_layers, width, 1), nn.GroupNorm(32, width), nn.GELU())
-        self.film = FiLM(state_dim, width)
+        # Which state components condition the features; None is all of them.
+        self.film_state_index = (list(range(state_dim)) if film_state_index is None
+                                 else list(film_state_index))
+        self.film = FiLM(len(self.film_state_index), width)
         # Learned position embedding for attention over the canvas.
         self.pos = nn.Parameter(torch.zeros(1, self.token_grid[0] * self.token_grid[1], width))
         nn.init.trunc_normal_(self.pos, std=0.02)
@@ -117,7 +120,7 @@ class GripperGridNet(SharedTrunkMixin, nn.Module):
     def cell_map(self, pixel_values, state):
         """The (B, width, rows, cols) map the spatial heads read, plus the global vector."""
         tokens, global_vec = self.features(pixel_values)
-        local = self.film(self.stem(tokens), state)
+        local = self.film(self.stem(tokens), state[:, self.film_state_index])
         x = self.skip_fuse(torch.cat([local, attend(local, self.pos, self.attention)], dim=1))
         return x, global_vec
 
