@@ -2962,7 +2962,11 @@ class AsyncObserver:
             'line_row': ['t', 'length_m', 'speed_mps', 'tension_n'],
             'diag_row': ['t', 'torque_nm', 'hold_nm_motor_frame', 'motor_vel_rad_s',
                          'meters_per_rev', 'aim_mps', 'mute', 'wanted_mps', 'tension_reg',
-                         'mute_tension_n'],
+                         'mute_tension_n', 'tension_n', 'reg_mode', 'target_n', 'credit_nm',
+                         'correction_mps'],
+            # reg_mode as spool_dm's REG_ constants; anchors on older firmware send only the
+            # first ten diag fields
+            'reg_modes': {'0': 'off', '1': 'floor', '2': 'payout floor', '3': 'hold'},
         }) + '\n')
         asyncio.create_task(self._set_spool_diag(True))
         logger.info(f'Spool log writing to {path}')

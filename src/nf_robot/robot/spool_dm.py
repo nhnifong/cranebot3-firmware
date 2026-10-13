@@ -12,6 +12,9 @@ from nf_robot.robot.server_conf import read_hold_torque
 # choosing which holding torque to take off the torque reading. A stopped motor reads -0.011.
 HOLD_TORQUE_MOTION_VEL = 0.1
 
+# which tension the regulator aimed for on a loop, as recorded in the SPOOL_DIAG rows
+REG_OFF, REG_FLOOR, REG_PAYOUT_FLOOR, REG_HOLD = 0, 1, 2, 3
+
 
 # values that can be overridden by the controller
 default_conf_dm = {
@@ -341,6 +344,7 @@ class DamiaoSpoolController:
                 # line speed commanded by the motion controller (meters per second)
                 wanted_line_speed = self.aim_line_speed
                 applied_mute = 1.0
+                reg_mode, target, correction = REG_OFF, None, 0.0
                 credit = min(self.conf['PAYOUT_FRICTION_CREDIT_NM'], self.payout_hold)
                 mute_tension = (-(smooth_torque - credit) * twopi) / self.meters_per_rev
 
@@ -367,11 +371,11 @@ class DamiaoSpoolController:
                     kp = self.conf['TENSION_KP']
                     max_corr = self.conf['MAX_TENSION_CORRECTION_MPS']
                     if self.tension_target is not None:
-                        target = self.tension_target
+                        reg_mode, target = REG_HOLD, self.tension_target
                     elif paying_out:
-                        target = payout_floor
+                        reg_mode, target = REG_PAYOUT_FLOOR, payout_floor
                     else:
-                        target = self.conf['TENSION_FLOOR_N'] + self.extra_tension_n
+                        reg_mode, target = REG_FLOOR, self.conf['TENSION_FLOOR_N'] + self.extra_tension_n
                     if self.last_tension < target - band:
                         correction = -min(max_corr, kp * (target - self.last_tension)) # reel in
                     elif self.tension_target is not None and self.last_tension > target + band:
@@ -385,10 +389,13 @@ class DamiaoSpoolController:
                 wanted_motor_vel = wanted_line_speed / self.meters_per_rev * twopi
 
                 if self.conf['SPOOL_DIAG']:
-                    # torque and velocity in this spool's frame, hold in the motor's
+                    # torque and velocity in this spool's frame, hold in the motor's. the tail is
+                    # what the regulator aimed for: which tension (a REG_ constant), its value,
+                    # the friction the soft mute credited, and the correction speed it added.
                     self.diag.append((loop_start, motor_torque, hold, motor_vel, self.meters_per_rev,
                                       self.aim_line_speed, applied_mute, wanted_line_speed,
-                                      int(self.tension_reg_enabled), mute_tension))
+                                      int(self.tension_reg_enabled), mute_tension,
+                                      self.last_tension, reg_mode, target, credit, correction))
                     overflow = len(self.diag) - self.conf['DATA_LEN']
                     if overflow > 0:
                         del self.diag[:overflow]
