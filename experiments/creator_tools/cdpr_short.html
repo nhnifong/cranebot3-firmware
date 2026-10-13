@@ -1,0 +1,1268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>How to build a CDPR</title>
+<!--
+YouTube short: "How do you build a CDPR". A 9:16 frame to screen capture, stepping through
+SCRIPT below with caption blocks over each scene.
+
+Run the server that serves this page with the robot models:
+
+    python experiments/creator_tools/shorts_server.py
+    open http://127.0.0.1:8000/cdpr_short.html
+
+Keys
+    space        play / pause (from the end, restarts)
+    left/right   previous / next scene
+    , .          step 1/30 s        [ ]  step 0.5 s
+    r            back to t=0, the thumbnail
+    h            show / hide this panel
+    t            tap timing mode: play, press enter as each caption line ends, durations are printed
+    f            fullscreen
+Drop an audio file on the page to play it in sync with the timeline.
+URL: ?t=12.5 opens paused at that time, ?hud=0 hides the panel.
+-->
+<style>
+@font-face { font-family: Cap; src: local('Impact'), local('DejaVu Sans Bold'), local('DejaVuSans-Bold'); }
+html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+#frame { position: absolute; overflow: hidden; container-type: size; background: #0e131c; }
+#frame canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.cap {
+  font-family: Cap, Impact, 'DejaVu Sans', sans-serif; font-weight: normal; font-synthesis: none;
+  color: #fff; -webkit-text-stroke: .17em #000; paint-order: stroke fill;
+  text-shadow: 0 .04em .14em rgba(0,0,0,.55); text-align: center; line-height: 1.08;
+}
+#caption { position: absolute; left: 6%; right: 6%; bottom: 4%; font-size: 8.4cqw; transform-origin: 50% 100%; }
+#caption.title { top: 9%; bottom: auto; font-size: 13cqw; transform-origin: 50% 50%; }
+#labels .lbl { position: absolute; white-space: nowrap; transform: translate(-50%, -50%); font-size: 4.6cqw; }
+#hud {
+  position: fixed; left: 8px; bottom: 8px; z-index: 10; max-width: 380px; padding: 8px 10px;
+  font: 12px/1.45 ui-monospace, Menlo, monospace; color: #dde; background: rgba(10,12,18,.82);
+  border: 1px solid #334; border-radius: 6px;
+}
+#hud.hidden { display: none; }
+#hud .bar { height: 4px; background: #334; margin: 6px 0; }
+#hud .bar div { height: 100%; background: #4cc9f0; }
+#hud textarea { width: 100%; height: 160px; font: 11px ui-monospace, Menlo, monospace; background: #111; color: #dde; }
+#loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #889; font: 14px system-ui; }
+</style>
+</head>
+<body>
+<div id="frame">
+  <div id="labels"></div>
+  <div id="caption" class="cap"></div>
+  <div id="loading">loading models…</div>
+</div>
+<div id="hud"></div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+
+// ======================= the script: durations are what to tune =======================
+
+// One entry per scene. Each line is a caption block shown whole, with its duration in seconds;
+// a scene lasts as long as its lines.
+const SCRIPT = [
+  { title: true, lines: [[3.0, 'How to build a CDPR']] },
+  { lines: [[4.0, 'First you need at least three anchor points with motorized spools.']] },
+  { lines: [[2.6, 'Hang a gripper in the center and it will hang stably'], [2.9, 'at a point determined by the length of the wires.']] },
+  { lines: [[3.5, 'But you can only reach areas within this triangular prism.']] },
+  { lines: [[3.2, 'Rooms are rectangles, so add another anchor.']] },
+  { lines: [[2.4, 'You need to know the locations of all the anchors,'], [3.6, 'so add fiducial markers on the gripper and the floor during calibration.']] },
+  { lines: [[1.9, 'Four anchors is a lot to install,'], [3.6, 'so combine them into pairs and route the line around eyelets.']] },
+  { lines: [[1.2, 'To move the gripper,'], [2.6, 'imagine a point just ahead of where you want to go']] },
+  { lines: [[3.8, 'Find the line lengths at your current point and that new point.']] },
+  { lines: [[4.2, 'Set each motor speed to the amount that its line needs to change.']] },
+  { lines: [[3.2, 'Now you can move the gripper anywhere in the room.']] },
+  { lines: [[4.2, 'Strings might stretch, so use high-strength braided fishing line.']] },
+  { lines: [[1.4, 'The gripper needs power,'], [2.6, 'so replace one fishing line with a power cable.']] },
+  { lines: [[2.6, 'But the power cable has to slip through a little hole'], [2.4, 'so give it a low friction teflon jacket']] },
+  { lines: [[3.4, 'The lines hit the furniture when you pick up things on the floor,'], [2.6, 'so extend the gripper with a pole']] },
+  { lines: [[1.6, 'Now the gripper can swing,'], [4.4, 'so measure the angular acceleration and cancel it with lateral motions.']] },
+  { lines: [[4.2, 'Now you’ve got a stable gripper that can move anywhere in the room,'], [1.8, 'and carry two kilos.']] },
+  { lines: [[4.0, 'What would you train it to do?']] },
+];
+
+const ASPECT = 9 / 16;
+// Caption blocks shrink until they fit in this many lines.
+const MAX_CAPTION_LINES = 3;
+
+// shorts_server.py serves the playroom models here.
+const MODELS = new URL('models/', location.href).href;
+
+// ======================= helpers =======================
+
+const $ = s => document.querySelector(s);
+const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
+const clamp01 = x => Math.min(1, Math.max(0, x));
+const lerp = (a, b, k) => a + (b - a) * k;
+const ease = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+const lin = (u, a, b) => clamp01((u - a) / (b - a));
+const seg = (u, a, b) => ease(lin(u, a, b));
+const back = x => { const c = 1.70158; return x <= 0 ? 0 : x >= 1 ? 1 : 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
+const pop = (u, a, b) => back(lin(u, a, b));
+const vl = (a, b, k) => a.clone().lerp(b, k);
+const TAU = Math.PI * 2;
+
+function canvasTex(w, h, draw, nearest = false) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  if (nearest) { t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter; t.generateMipmaps = false; }
+  return t;
+}
+
+// ======================= renderer, room =======================
+
+const HALF = 2.25, CEIL = 3.0;
+const VIS_G = 2.0, VIS_A = 1.7, VIS_E = 3.0;   // robot parts drawn larger than life so they read on a phone
+const LINE_R = 0.016;
+const COL = { line: 0xffd166, cyan: 0x4cc9f0, red: 0xff4d6d, green: 0x06d6a0, orange: 0xf8961e };
+const CSS = { y: '#ffd166', c: '#4cc9f0', r: '#ff4d6d', g: '#06d6a0', o: '#f8961e', w: '#ffffff' };
+
+const frame = $('#frame');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 3));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+frame.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0e131c);
+scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.45;
+const camera = new THREE.PerspectiveCamera(50, ASPECT, 0.02, 100);
+
+scene.add(new THREE.HemisphereLight(0xc8d8ff, 0x1a1e28, 0.7));
+const sun = new THREE.DirectionalLight(0xffffff, 2.4);
+sun.position.set(3, 9, 5);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -4, right: 4, top: 4, bottom: -4, near: 1, far: 25 });
+sun.shadow.normalBias = 0.02;
+scene.add(sun);
+const camLight = new THREE.PointLight(0xffffff, 1.2, 0, 0);
+camera.add(camLight);
+scene.add(camera);
+
+const std = (color, o = {}) => new THREE.MeshStandardMaterial({ color, roughness: .6, ...o });
+const mesh = (geo, mat, cast = true) => { const m = new THREE.Mesh(geo, mat); m.castShadow = cast; m.receiveShadow = true; return m; };
+
+const floor = mesh(new THREE.PlaneGeometry(2 * HALF, 2 * HALF), std(0x2a3244, { roughness: .92 }), false);
+floor.rotation.x = -Math.PI / 2;
+scene.add(floor);
+const grid = new THREE.GridHelper(2 * HALF, 9, 0x3b4660, 0x3b4660);
+grid.position.y = 0.002;
+scene.add(grid);
+// Single-sided walls facing in, so whichever walls stand between the camera and the room vanish.
+const wallMat = std(0x1c2433, { roughness: .95 });
+for (const [x, z, ry] of [[0, -HALF, 0], [0, HALF, Math.PI], [-HALF, 0, Math.PI / 2], [HALF, 0, -Math.PI / 2]]) {
+  const w = mesh(new THREE.PlaneGeometry(2 * HALF, CEIL), wallMat, false);
+  w.position.set(x, CEIL / 2, z);
+  w.rotation.y = ry;
+  scene.add(w);
+}
+const edges = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(2 * HALF, CEIL, 2 * HALF)),
+  new THREE.LineBasicMaterial({ color: 0x46546e }));
+edges.position.y = CEIL / 2;
+scene.add(edges);
+
+// ======================= props =======================
+
+const CORNER_XZ = [[HALF, HALF], [HALF, -HALF], [-HALF, -HALF], [-HALF, HALF]];
+const INSET = 0.17;
+const anchorSpot = c => { const [x, z] = CORNER_XZ[c]; return V(x - Math.sign(x) * INSET, CEIL - 0.15, z - Math.sign(z) * INSET); };
+const MID_WALL = V(-HALF + INSET, CEIL - 0.15, 0);
+
+const darkMat = std(0x1b1e25, { roughness: .4 });
+const blueMat = std(0x2f6fd6, { roughness: .45 });
+const spoolTex = canvasTex(64, 8, (g, w, h) => {
+  for (let i = 0; i < 8; i++) { g.fillStyle = i % 2 ? '#ffd166' : '#b8892e'; g.fillRect(i * w / 8, 0, w / 8, h); }
+});
+const spoolMat = std(0xffffff, { map: spoolTex, roughness: .5 });
+
+// One motor and spool, the single-line anchors of the early scenes.
+function makeSingle() {
+  const g = new THREE.Group();
+  const body = mesh(new THREE.BoxGeometry(0.2, 0.12, 0.13), blueMat);
+  body.position.set(0, 0.03, -0.03);
+  const spool = new THREE.Group();
+  spool.position.set(0, -0.05, 0.04);
+  const drum = mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.08, 24), spoolMat);
+  drum.rotation.z = Math.PI / 2;
+  spool.add(drum);
+  for (const x of [-0.044, 0.044]) {
+    const f = mesh(new THREE.CylinderGeometry(0.058, 0.058, 0.008, 24), darkMat);
+    f.rotation.z = Math.PI / 2; f.position.x = x;
+    spool.add(f);
+  }
+  const lens = mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.02, 16), darkMat);
+  lens.rotation.x = Math.PI / 2;
+  lens.position.set(0.065, 0.045, 0.04);
+  const exit = new THREE.Object3D(); exit.position.set(0, -0.09, 0.04);
+  const eye = new THREE.Object3D(); eye.position.set(0.065, 0.045, 0.055);
+  g.add(body, spool, lens, exit, eye);
+  g.visible = false;
+  scene.add(g);
+  return { g, spool, exit, eye };
+}
+const singles = [0, 1, 2, 3].map(makeSingle);
+
+// Line segments: unit cylinders stretched between points.
+const cylGeo = new THREE.CylinderGeometry(1, 1, 1, 12, 1, true);
+const UP = V(0, 1, 0);
+function placeCyl(m, a, b, r) {
+  const d = b.clone().sub(a);
+  const len = d.length();
+  m.position.copy(a).addScaledVector(d, .5);
+  m.quaternion.setFromUnitVectors(UP, d.normalize());
+  m.scale.set(r, Math.max(len, 1e-4), r);
+  return len;
+}
+const stripeTex = canvasTex(8, 64, (g, w, h) => {
+  g.fillStyle = '#fff'; g.fillRect(0, 0, w, h);
+  g.fillStyle = '#222'; g.fillRect(0, 0, w, h * .22);
+});
+stripeTex.wrapS = stripeTex.wrapT = THREE.RepeatWrapping;
+const lineSegs = [0, 1, 2, 3].map(i => [0, 1].map(() => {
+  const mat = std(COL.line, { roughness: .45, emissive: COL.line, emissiveIntensity: .25 });
+  if (i === 3) { mat.map = stripeTex.clone(); mat.map.needsUpdate = true; }
+  const m = mesh(cylGeo, mat);
+  m.visible = false;
+  scene.add(m);
+  return m;
+}));
+
+const fiducialTex = seed => canvasTex(8, 8, g => {
+  let s = seed * 9301 + 49297;
+  const rnd = () => (s = (s * 9301 + 49297) % 233280) / 233280;
+  g.fillStyle = '#fff'; g.fillRect(0, 0, 8, 8);
+  g.fillStyle = '#000'; g.fillRect(1, 1, 6, 6);
+  g.fillStyle = '#fff';
+  for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) if (rnd() > .5) g.fillRect(2 + x, 2 + y, 1, 1);
+}, true);
+const floorMarkers = [[-1.15, .85, .3], [1.15, 1.0, -.4], [1.0, -1.1, .9], [-0.95, -1.0, -.2]].map(([x, z, r], i) => {
+  const m = mesh(new THREE.PlaneGeometry(.34, .34), new THREE.MeshStandardMaterial({ map: fiducialTex(i + 3), transparent: true, roughness: .8 }), false);
+  m.rotation.set(-Math.PI / 2, 0, r);
+  m.position.set(x, .004, z);
+  scene.add(m);
+  return m;
+});
+
+// Reachable volume: a prism over the anchors' footprint, and the floor it leaves out in red.
+const prismMat = new THREE.MeshBasicMaterial({ color: COL.cyan, transparent: true, opacity: .16, side: THREE.DoubleSide, depthWrite: false });
+const prism = new THREE.Mesh(new THREE.BufferGeometry(), prismMat);
+const footMat = new THREE.MeshBasicMaterial({ color: 0x1f6878, transparent: true, depthWrite: false });
+const foot = new THREE.Mesh(new THREE.BufferGeometry(), footMat);
+const prismEdgeMat = new LineMaterial({ color: COL.cyan, linewidth: 3, transparent: true });
+const prismEdges = new LineSegments2(new LineSegmentsGeometry(), prismEdgeMat);
+prismEdges.frustumCulled = false;
+const redFloor = new THREE.Mesh(new THREE.PlaneGeometry(2 * HALF, 2 * HALF), new THREE.MeshBasicMaterial({ color: COL.red, transparent: true, depthWrite: false }));
+redFloor.rotation.x = -Math.PI / 2;
+redFloor.position.y = .005;
+foot.renderOrder = 1;
+scene.add(prism, foot, prismEdges, redFloor);
+
+function setPrism(pts, op) {
+  const vis = op > .005 && pts.length >= 3;
+  for (const o of [prism, foot, prismEdges]) o.visible = vis;
+  redFloor.visible = false;
+  if (!vis) return;
+  const top = CEIL - .35;
+  const side = [], f = [], e = [];
+  const n = pts.length;
+  for (let i = 0; i < n; i++) {
+    const [x0, z0] = pts[i], [x1, z1] = pts[(i + 1) % n];
+    side.push(x0, 0, z0, x1, 0, z1, x1, top, z1, x0, 0, z0, x1, top, z1, x0, top, z0);
+    e.push(x0, .01, z0, x1, .01, z1, x0, top, z0, x1, top, z1, x0, .01, z0, x0, top, z0);
+  }
+  for (let i = 1; i < n - 1; i++) {
+    const [a, b, c] = [pts[0], pts[i], pts[i + 1]];
+    side.push(a[0], top, a[1], b[0], top, b[1], c[0], top, c[1]);
+    f.push(a[0], .008, a[1], b[0], .008, b[1], c[0], .008, c[1]);
+  }
+  prism.geometry.dispose();
+  prism.geometry = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(side, 3));
+  foot.geometry.dispose();
+  foot.geometry = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(f, 3));
+  prismEdges.geometry.dispose();
+  prismEdges.geometry = new LineSegmentsGeometry().setPositions(e);
+  prismMat.opacity = .16 * op;
+  footMat.opacity = .85 * op;
+  prismEdgeMat.opacity = op;
+}
+
+// Target and lookahead point.
+const glow = (color, r, o = .9) => new THREE.Mesh(new THREE.SphereGeometry(r, 24, 16),
+  new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.2, transparent: true, opacity: o }));
+const target = new THREE.Group();
+const targetBall = glow(COL.green, .06);
+const targetRing = new THREE.Mesh(new THREE.TorusGeometry(.2, .018, 8, 48), new THREE.MeshBasicMaterial({ color: COL.green, transparent: true }));
+targetRing.rotation.x = Math.PI / 2;
+target.add(targetBall, targetRing);
+scene.add(target);
+const ghost = new THREE.Group();
+const ghostCore = glow(COL.cyan, .055);
+const ghostHalo = glow(COL.cyan, .12, .25);
+ghost.add(ghostCore, ghostHalo);
+scene.add(ghost);
+const pulse = glow(0xfff3b0, .06);
+scene.add(pulse);
+
+// Braided line close-up: two strands each way around the line.
+const braid = new THREE.Group();
+{
+  const L = .9, R = .02, turns = 7;
+  const mats = [std(0xffd166, { roughness: .5 }), std(0xd99a2b, { roughness: .5 })];
+  for (let k = 0; k < 4; k++) {
+    const dir = k < 2 ? 1 : -1, ph = (k % 2) * Math.PI;
+    const pts = [];
+    for (let j = 0; j <= 240; j++) {
+      const s = j / 240, a = dir * s * turns * TAU + ph;
+      pts.push(V(R * Math.cos(a), (s - .5) * L, R * Math.sin(a)));
+    }
+    braid.add(mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 480, .0085, 8), mats[k % 2]));
+  }
+  scene.add(braid);
+}
+
+// Furniture the lines hit.
+const furniture = new THREE.Group();
+const furnBoxes = [];
+function furnBox(w, h, d, x, y, z, mat, collide = true) {
+  const m = mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.position.set(x, y, z);
+  furniture.add(m);
+  if (collide) furnBoxes.push(new THREE.Box3(V(x - w / 2, y - h / 2, z - d / 2), V(x + w / 2, y + h / 2, z + d / 2)));
+}
+{
+  const wood = std(0x8d6748, { roughness: .7 }), cloth = std(0x5c6f8f, { roughness: .95 });
+  const TX = .45, TZ = -.25;
+  furnBox(1.3, .06, .8, TX, .72, TZ, wood);
+  for (const [dx, dz] of [[-.6, -.35], [.6, -.35], [-.6, .35], [.6, .35]]) furnBox(.05, .69, .05, TX + dx, .345, TZ + dz, wood, false);
+  const CX = -HALF + .45;
+  furnBox(.9, .42, 1.8, CX, .21, .55, cloth);
+  furnBox(.22, .42, 1.8, -HALF + .11, .63, .55, cloth);
+  furnBox(.9, .22, .2, CX, .53, -.25, cloth);
+  furnBox(.9, .22, .2, CX, .53, 1.35, cloth);
+  scene.add(furniture);
+}
+const TOY = V(.45, .08, .37);
+const toy = mesh(new THREE.SphereGeometry(.08, 24, 16), std(0xe63946, { roughness: .35 }));
+scene.add(toy);
+const BOX = .2;
+const boxTex = canvasTex(256, 256, (g, w, h) => {
+  g.fillStyle = '#c89b63'; g.fillRect(0, 0, w, h);
+  g.strokeStyle = '#8a6438'; g.lineWidth = 10; g.strokeRect(5, 5, w - 10, h - 10);
+  g.fillStyle = '#1b1b1b'; g.font = '120px Impact, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText('2 kg', w / 2, h / 2 + 6);
+});
+const box = mesh(new THREE.BoxGeometry(BOX, BOX, BOX), std(0xffffff, { map: boxTex, roughness: .8 }));
+scene.add(box);
+const extras = [
+  [new THREE.TorusKnotGeometry(.07, .025, 64, 8), 0x4cc9f0, -1.2, .1, -.9],
+  [new THREE.ConeGeometry(.09, .22, 20), 0xf8961e, 1.4, .11, 1.2],
+  [new THREE.BoxGeometry(.3, .04, .22), 0x9b5de5, -.3, .02, 1.4],
+  [new THREE.CylinderGeometry(.06, .06, .2, 20), 0x06d6a0, 1.6, .1, -1.3],
+  [new THREE.SphereGeometry(.1, 20, 14), 0xf15bb5, -1.5, .1, 1.7],
+  [new THREE.BoxGeometry(.16, .16, .16), 0xfee440, .2, .08, -1.6],
+].map(([geo, c, x, y, z]) => {
+  const m = mesh(geo, std(c, { roughness: .4 }));
+  m.position.set(x, y, z);
+  scene.add(m);
+  return m;
+});
+
+// ======================= robot models =======================
+
+const loader = new GLTFLoader();
+const load = name => loader.loadAsync(MODELS + name).catch(err => { console.error(name, err); return null; });
+
+// Stand-ins with the same named empties, used when a model fails to load.
+function fallback(kind) {
+  const s = new THREE.Group();
+  const empty = (name, x, y, z) => { const o = new THREE.Object3D(); o.name = name; o.position.set(x, y, z); s.add(o); };
+  if (kind === 'anchor') { s.add(mesh(new THREE.BoxGeometry(.26, .1, .1), blueMat)); empty('grommet0', .03, .02, .06); empty('grommet1', -.03, .02, .06); empty('wall_corner', 0, .04, -.09); }
+  if (kind === 'eyelet') { s.add(mesh(new THREE.TorusGeometry(.02, .006, 8, 20), darkMat)); empty('grommet', 0, 0, 0); empty('wall_corner', -.04, .04, -.04); }
+  if (kind === 'gripper') { const b = mesh(new THREE.BoxGeometry(.1, .1, .1), blueMat); b.position.y = .05; s.add(b); empty('grommet', 0, .117, 0); }
+  if (kind === 'gantry') { const b = mesh(new THREE.BoxGeometry(.09, .13, .09), blueMat); b.position.y = -.04; s.add(b); }
+  return { scene: s, animations: [] };
+}
+
+const ARP = [];   // per anchor corner: { root, direct, wall } world grommet positions
+const EYE = [];   // per eyelet corner: { root, grommet }
+const grip = { root: new THREE.Group(), swing: new THREE.Group(), holder: new THREE.Group(), jawTip: new THREE.Object3D() };
+let gantry, rod, gripMixer, gripAction, led, gripMarkers = [];
+let JAW_DROP = .3, BAR_DROP = .1 * VIS_G, POLE_DROP = .508 * VIS_G;
+const hang = p => JAW_DROP + p * POLE_DROP;
+
+// Turns the model so its grommets face the room center from its wall corner, then puts that
+// corner on the room's.
+function placeAtCorner(gltfScene, c, vis, grommets) {
+  const root = new THREE.Group();
+  root.add(gltfScene);
+  root.scale.setScalar(vis);
+  root.updateMatrixWorld(true);
+  const wc = V(), g = V();
+  gltfScene.getObjectByName('wall_corner')?.getWorldPosition(wc);
+  grommets.forEach(n => g.add(gltfScene.getObjectByName(n)?.getWorldPosition(V()) ?? V()));
+  g.divideScalar(grommets.length).sub(wc);
+  const [x, z] = CORNER_XZ[c];
+  root.rotation.y = Math.atan2(-x, -z) - Math.atan2(g.x, g.z);
+  root.updateMatrixWorld(true);
+  gltfScene.getObjectByName('wall_corner')?.getWorldPosition(wc);
+  root.position.set(x, CEIL, z).sub(wc);
+  root.updateMatrixWorld(true);
+  root.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  scene.add(root);
+  return root;
+}
+const worldOf = (root, name) => { const v = V(); root.getObjectByName(name)?.getWorldPosition(v); return v; };
+
+async function loadModels() {
+  const [anchorG, eyeletG, gripperG, gantryG] = await Promise.all(
+    ['arp-anchor.glb', 'eyelet.glb', 'gripper.glb', 'gantry.glb'].map(load));
+  const A = anchorG ?? fallback('anchor'), E = eyeletG ?? fallback('eyelet');
+  const Gr = gripperG ?? fallback('gripper'), Ga = gantryG ?? fallback('gantry');
+
+  // Paired anchors at corners 0 and 1; their second lines run along the wall to eyelets at 3 and 2.
+  for (const [c, eyeC] of [[0, 3], [1, 2]]) {
+    const root = placeAtCorner(c === 0 ? A.scene : A.scene.clone(), c, VIS_A, ['grommet0', 'grommet1']);
+    ARP[c] = { root, g0: worldOf(root, 'grommet0'), g1: worldOf(root, 'grommet1') };
+  }
+  for (const c of [2, 3]) {
+    const root = placeAtCorner(c === 2 ? E.scene : E.scene.clone(), c, VIS_E, ['grommet']);
+    // Own materials, so only the eyelet the cable rubs on glows.
+    root.traverse(o => { if (o.isMesh) o.material = o.material.clone(); });
+    EYE[c] = { root, grommet: worldOf(root, 'grommet') };
+  }
+  for (const [c, eyeC] of [[0, 3], [1, 2]]) {
+    const a = ARP[c], e = EYE[eyeC].grommet;
+    const g0Far = a.g0.distanceTo(e) > a.g1.distanceTo(e);
+    a.direct = g0Far ? a.g0 : a.g1;
+    a.wall = g0Far ? a.g1 : a.g0;
+  }
+
+  // Gripper: root at the point the lines pull on, swing pivots there, holder drops down the pole.
+  scene.add(grip.root);
+  grip.root.add(grip.swing);
+  grip.swing.add(grip.holder);
+  gantry = Ga.scene;
+  gantry.getObjectByName('vel_point')?.removeFromParent();
+  const gantryMeshes = [];
+  gantry.traverse(o => { if (o.isMesh) { o.castShadow = true; gantryMeshes.push(o); } });
+  if (gantryMeshes.length > 1) {
+    // The taller primitive is the stock rod; this draws its own so it can extend.
+    gantryMeshes.forEach(m => m.geometry.computeBoundingBox());
+    const h = m => m.geometry.boundingBox.max.y - m.geometry.boundingBox.min.y;
+    gantryMeshes.sort((a, b) => h(b) - h(a))[0].visible = false;
+  }
+  gantry.scale.setScalar(VIS_G);
+  grip.swing.add(gantry);
+  rod = mesh(cylGeo, std(0x9aa3b2, { metalness: .6, roughness: .35 }));
+  grip.swing.add(rod);
+
+  const gm = Gr.scene;
+  gm.scale.setScalar(VIS_G);
+  gm.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  grip.holder.add(gm);
+  if (Gr.animations?.length) {
+    gripMixer = new THREE.AnimationMixer(gm);
+    gripAction = gripMixer.clipAction(Gr.animations[0]);
+    gripAction.play();
+    gripAction.paused = true;
+  }
+  setJaw(.5);
+  grip.root.updateMatrixWorld(true);
+  const g = worldOf(gm, 'grommet');
+  gm.position.sub(g);
+  grip.root.updateMatrixWorld(true);
+  const bb = new THREE.Box3().setFromObject(gm);
+  JAW_DROP = -bb.min.y;
+  grip.jawTip.position.set(0, bb.min.y, 0);
+  grip.holder.add(grip.jawTip);
+
+  led = new THREE.Mesh(new THREE.SphereGeometry(.018, 16, 12), new THREE.MeshStandardMaterial({ color: 0x223322, emissive: COL.green, emissiveIntensity: 0 }));
+  led.position.set(0, lerp(bb.min.y, bb.max.y, .62), bb.max.z + .005);
+  grip.holder.add(led);
+  // Markers on the two faces the cameras see.
+  const ms = .11, cy = lerp(bb.min.y, bb.max.y, .6);
+  for (const [i, pos, ry] of [[0, V(bb.getCenter(V()).x, cy, bb.max.z + .004), 0], [1, V(bb.max.x + .004, cy, bb.getCenter(V()).z), Math.PI / 2]]) {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(ms, ms), new THREE.MeshBasicMaterial({ map: fiducialTex(20 + i), transparent: true }));
+    m.position.copy(pos);
+    m.rotation.y = ry;
+    grip.holder.add(m);
+    gripMarkers.push(m);
+  }
+  POLE_DROP = .508 * VIS_G;
+  BAR_DROP = .1 * VIS_G;
+}
+
+function setJaw(open) {
+  if (!gripAction) return;
+  gripAction.time = clamp01(open) * gripAction.getClip().duration;
+  gripMixer.update(0);
+}
+
+// ======================= scene state =======================
+// Every frame starts from blank and replays each scene up to now, so any time can be jumped to.
+
+function blank() {
+  return {
+    single: [0, 1, 2, 3].map(() => ({ s: 0, pos: null, jit: 0 })),
+    arp: 0, eye: 0, arpLines: false, via: [false, false, false, false],
+    lineOn: [false, false, false, false],
+    g: { on: 0, pos: V(0, 1.5, 0), pole: 0, swing: 0, jaw: .5, led: 0, markers: 0 },
+    prism: 0, redFloor: 0, markers: 0, rays: 0,
+    showLen: 0, lenMode: 'len', target: 0, targetPos: V(), ghost: 0, ghostPos: V(), ghostLines: 0, path: 0,
+    stretch: 0, braid: 0, power: 0, pulse: -1, teflon: 0, slide: 0, friction: 0,
+    furn: 0, toy: 0, box: { on: 0, pos: V(-1, BOX / 2, 1), held: false }, extras: 0,
+    spin: 0, labels: [],
+  };
+}
+
+// Labels belong to the scene that is playing; earlier scenes replay for state only.
+const label = (S, t, p, c = 'w', o = 1, s) => { if (S.active && o > .01) S.labels.push({ t, p, c, o, s }); };
+
+function finalRig(S) {
+  S.arp = 1; S.eye = 1; S.arpLines = true;
+  S.lineOn = [true, true, true, true];
+  S.g.on = 1; S.g.pole = 1;
+}
+
+const G0 = V(.6, 1.45, 0);
+const EDGE = V(-.55, 1.2, -.75);
+const CORNER_P = V(-1.25, 1.15, -1.25);
+const CAL_P = V(-.2, 1.35, .3);
+const R = V(0, 1.5, 0);
+const P0 = V(-1.05, 1.35, .95), GOAL = V(1.1, 1.0, -.95);
+const LOOKAHEAD = .55;
+const tour = new THREE.CatmullRomCurve3([GOAL, V(1.4, 1.9, 1.15), V(-1.2, .85, 1.35), V(-1.45, 1.8, -1.25), V(.5, .75, -.35), R]);
+const B0 = V(-1.0, BOX / 2, 1.0);
+const TABLE_TOP = .75, TABLE_C = V(.45, 0, -.25);
+
+const cam = (px, py, pz, lx, ly, lz, fov = 50) => ({ pos: V(px, py, pz), look: V(lx, ly, lz), fov });
+const WIDE = cam(-5.2, 4.6, 7.6, .15, 1.15, 0);
+const HIGH = cam(-5.6, 9.2, 8.2, .25, .5, 0);
+
+const SCENES = [
+  { // 0 title / thumbnail
+    cam: cam(0, .8, 5.6, 0, 2.05, 0, 60), blend: 0,
+    apply(S, u, t, active) { if (active) { finalRig(S); S.g.pos = V(0, 1.85, 0); } },
+  },
+  { // 1 three anchors
+    cam: cam(-5.6, 9.0, 8.2, .5, 1.1, 0), blend: 0,
+    apply(S, u, t) {
+      [0, 1, 2].forEach(i => { S.single[i].s = pop(u, .08 + i * .12, .3 + i * .12); S.single[i].pos = i < 2 ? anchorSpot(i) : MID_WALL.clone(); });
+      S.spin = t * 4;
+      label(S, 'MOTOR + SPOOL', anchorSpot(1).add(V(0, -.42, 0)), 'w', seg(u, .5, .65));
+    },
+  },
+  { // 2 hang a gripper
+    cam: WIDE,
+    apply(S, u, t) {
+      S.g.on = 1;
+      S.lineOn = [true, true, true, false];
+      const w = lin(u, .35, 1);
+      S.g.pos = V(G0.x + .55 * Math.sin(TAU * w), lerp(CEIL + 1.2, G0.y, pop(u, 0, .25)) + .25 * Math.sin(2 * TAU * w), G0.z - .5 * Math.sin(2 * TAU * w));
+      S.showLen = seg(u, .3, .45);
+    },
+  },
+  { // 3 triangular prism
+    cam: HIGH,
+    apply(S, u, t) {
+      S.showLen = 1 - seg(u, 0, .2);
+      S.prism = seg(u, 0, .3);
+      S.redFloor = seg(u, .15, .4);
+      S.g.pos = vl(G0, EDGE, seg(u, .3, .72)).add(V(.04 * Math.sin(t * 45) * (lin(u, .72, .78) - lin(u, .85, .95)), 0, 0));
+      for (const c of [2, 3]) label(S, 'X', V(CORNER_XZ[c][0] * .72, .2, CORNER_XZ[c][1] * .72), 'r', seg(u, .4, .55), 9);
+    },
+  },
+  { // 4 fourth anchor
+    cam: HIGH,
+    apply(S, u, t) {
+      S.single[2].pos = vl(MID_WALL, anchorSpot(2), seg(u, 0, .35));
+      S.single[3].s = pop(u, .3, .55);
+      S.single[3].pos = anchorSpot(3);
+      S.lineOn[3] = u > .42;
+      S.redFloor = 1 - seg(u, .3, .55);
+      S.g.pos = vl(EDGE, CORNER_P, seg(u, .55, .95));
+    },
+  },
+  { // 5 calibration
+    cam: cam(-4.6, 5.6, 7.0, .1, .8, 0),
+    apply(S, u, t) {
+      S.prism = 1 - seg(u, 0, .15);
+      S.redFloor = 0;
+      S.markers = seg(u, .05, .22);
+      S.g.markers = S.markers;
+      S.rays = seg(u, .2, .3) * (1 - seg(u, .88, 1));
+      const j = seg(u, .1, .22) * (1 - seg(u, .35, .82));
+      S.single.forEach(s => s.jit = j);
+      [0, 1, 2, 3].forEach(i => {
+        const p = anchorSpot(i).add(V(0, .3, 0));
+        label(S, '?', p, 'o', seg(u, .12, .2) * (1 - seg(u, .76, .8)), 7);
+        label(S, '✓', p, 'g', seg(u, .8, .86), 7);
+      });
+      const w = lin(u, .2, 1);
+      S.g.pos = vl(CORNER_P, CAL_P, seg(u, 0, .2)).add(V(.35 * Math.sin(TAU * w), .12 * Math.sin(2 * TAU * w), .3 * (1 - Math.cos(TAU * w))));
+    },
+  },
+  { // 6 pairs and eyelets
+    cam: cam(-3.6, 6.9, 7.2, .3, 1.5, 0),
+    apply(S, u, t) {
+      S.markers = 1 - seg(u, 0, .15);
+      S.g.markers = S.markers;
+      S.eye = pop(u, 0, .15);
+      S.via[2] = S.via[3] = u > .06;
+      S.single[2].pos = vl(anchorSpot(2), anchorSpot(1).add(V(-.42, 0, 0)), seg(u, .15, .55));
+      S.single[3].pos = vl(anchorSpot(3), anchorSpot(0).add(V(-.42, 0, 0)), seg(u, .15, .55));
+      S.single.forEach(s => s.s = 1 - seg(u, .6, .7));
+      S.arp = pop(u, .64, .84);
+      S.arpLines = u > .66;
+      S.g.pos = vl(CAL_P, R, seg(u, 0, .3));
+      label(S, 'EYELET', EYE[3] ? EYE[3].grommet.clone().add(V(.15, -.32, -.2)) : V(), 'w', seg(u, .08, .2) * (1 - seg(u, .9, 1)));
+      label(S, 'EYELET', EYE[2] ? EYE[2].grommet.clone().add(V(.15, -.32, .2)) : V(), 'w', seg(u, .08, .2) * (1 - seg(u, .9, 1)));
+    },
+  },
+  { // 7 lookahead point
+    cam: cam(-4.4, 7.6, 7.6, .1, .95, 0),
+    apply(S, u, t) {
+      S.g.pos = vl(R, P0, seg(u, 0, .3));
+      S.targetPos = GOAL.clone();
+      S.target = seg(u, .15, .35);
+      S.path = S.target;
+      S.ghost = seg(u, .45, .65);
+      S.ghostPos = S.g.pos.clone().add(GOAL.clone().sub(S.g.pos).setLength(LOOKAHEAD));
+      label(S, 'GOAL', GOAL.clone().add(V(0, .28, 0)), 'g', S.target);
+    },
+  },
+  { // 8 line lengths now and next
+    cam: cam(-4.4, 7.6, 7.6, .1, .95, 0),
+    apply(S, u, t) {
+      S.ghostLines = seg(u, 0, .25);
+      S.lenMode = 'next';
+      S.showLen = seg(u, .25, .45);
+    },
+  },
+  { // 9 motor speeds
+    cam: cam(-4.4, 7.6, 7.6, .1, .95, 0),
+    apply(S, u, t) {
+      S.lenMode = 'speed';
+      const p = vl(P0, GOAL, seg(u, .12, .95));
+      S.g.pos = p;
+      const d = GOAL.clone().sub(p);
+      S.ghostPos = d.length() > LOOKAHEAD ? p.clone().add(d.setLength(LOOKAHEAD)) : GOAL.clone();
+    },
+  },
+  { // 10 anywhere in the room
+    cam: WIDE,
+    apply(S, u, t) {
+      const f = 1 - seg(u, 0, .15);
+      S.target = S.path = S.ghost = S.ghostLines = S.showLen = f;
+      S.g.pos = tour.getPointAt(seg(u, 0, 1));
+    },
+  },
+  { // 11 stretch, braided line
+    cam: (u) => {
+      const k = seg(u, .42, .72);
+      const near = braidView();
+      return { pos: vl(V(-3.4, 2.6, 4.6), near.pos, k), look: vl(V(0, 1.3, 0), near.look, k), fov: 50 };
+    },
+    apply(S, u, t) {
+      const sag = seg(u, 0, .16) * (1 - seg(u, .45, .65));
+      const wob = seg(u, .04, .14) * (1 - seg(u, .3, .45));
+      S.g.pos = R.clone().add(V(0, -.32 * sag + .08 * Math.sin(t * 11) * wob, 0));
+      S.stretch = sag;
+      label(S, 'STRETCH', R.clone().add(V(.55, -.3, 0)), 'r', seg(u, .08, .16) * (1 - seg(u, .36, .44)), 6);
+      S.braid = seg(u, .45, .62);
+      label(S, 'BRAIDED PE', null, 'y', seg(u, .68, .78), 6);
+    },
+  },
+  { // 12 power cable
+    cam: cam(-3.0, 3.5, 6.4, -.2, 1.6, .5),
+    apply(S, u, t) {
+      S.braid = 0;
+      S.power = seg(u, .05, .3);
+      S.pulse = u > .35 && u < .8 ? lin(u, .35, .8) : -1;
+      S.g.led = seg(u, .78, .84);
+      S.g.pos = R.clone().add(V(0, .05 * Math.sin(t * 1.4), 0));
+      label(S, '⚡ POWER', null, 'y', seg(u, .2, .35), 6);
+    },
+  },
+  { // 13 teflon jacket
+    cam: () => eyeletView(), blend: 1.2,
+    apply(S, u, t) {
+      const tc = t * 2.2;
+      const stuck = (Math.floor(tc) + seg(tc % 1, .72, 1)) * .3;
+      // The jacket goes on as the second caption block starts.
+      const t0 = SCRIPT[13].lines[0][0];
+      S.slide = t < t0 ? stuck : (Math.floor(2.2 * t0) + 1) * .3 + (t - t0) * .7;
+      S.friction = t < t0 ? clamp01(1 - (tc % 1) / .7) * clamp01(t / .4) : 0;
+      S.teflon = seg(t, t0 - .1, t0 + .5);
+      S.g.pos = R.clone().add(V(.2 * Math.sin(t * .9), .12 * Math.sin(t * 1.3), 0));
+      label(S, 'FRICTION', null, 'r', seg(t, .3, .6) * (1 - seg(t, t0 - .3, t0)), 6);
+      label(S, 'PTFE JACKET', null, 'g', seg(t, t0 + .5, t0 + .9), 6);
+    },
+  },
+  { // 14 furniture, pole
+    cam: cam(-3.2, 2.6, 5.4, .3, .8, -.1),
+    apply(S, u, t) {
+      S.furn = pop(u, 0, .14);
+      S.toy = pop(u, .06, .18);
+      const above = V(TOY.x, 1.3, TOY.z);
+      const low = V(TOY.x, JAW_DROP, TOY.z);
+      let p = vl(R, above, seg(u, .1, .26));
+      p = vl(p, low, seg(u, .26, .4));
+      S.g.pole = seg(u, .55, .85);
+      p.y += S.g.pole * POLE_DROP;
+      S.g.pos = p;
+      S.g.jaw = 1 - .4 * seg(u, .3, .4);
+      label(S, 'POLE', null, 'c', seg(u, .7, .8), 6);
+    },
+  },
+  { // 15 swing and cancel
+    cam: cam(.05, 2.2, 6.2, .05, 1.55, .85), blend: 1.0,
+    apply(S, u, t) {
+      const dur = SCRIPT[15].dur;
+      const lift = V(-.5, hang(1) + .95, .85), right = V(.6, hang(1) + .95, .85);
+      let p = vl(V(TOY.x, hang(1), TOY.z), lift, seg(u, 0, .16));
+      p = vl(p, right, seg(u, .16, .26));
+      const ts = .24 * dur, td = .58 * dur;
+      const w = 3.0, A = .34;
+      let th = 0;
+      if (t > ts) th = -A * Math.sin(w * (t - ts)) * (t > td ? Math.exp(-1.6 * (t - td)) : 1) * clamp01((t - ts) / .5 + .5);
+      const cancel = seg(u, .58, .66);
+      p.x += cancel * 1.0 * POLE_DROP * Math.sin(th) * .9;
+      S.g.pos = p;
+      S.g.swing = th;
+      S.g.jaw = .6;
+      const alpha = w * w * th;
+      const at = p.clone().add(V(-.75, -.35, 0));
+      label(S, `α ${alpha >= 0 ? '+' : '−'}${Math.abs(alpha).toFixed(1)} rad/s²`, at, 'o', seg(u, .3, .38) * (1 - seg(u, .9, 1)), 5.2);
+      label(S, '◀ CANCEL ▶', p.clone().add(V(0, .35, 0)), 'g', seg(u, .6, .66) * (1 - seg(u, .9, 1)), 5.2);
+    },
+  },
+  { // 16 carry two kilos
+    cam: (u, t, S) => {
+      const k = seg(u, .45, .85);
+      return { pos: vl(V(-3.4, 2.7, 4.4), V(-2.4, 2.9, 4.8), k), look: vl(V(-.7, .7, .7), V(.2, .9, 0), k), fov: 50 };
+    },
+    apply(S, u, t) {
+      S.box.on = pop(u, 0, .12);
+      const H = hang(1);
+      const start = V(.6, H + .95, .85);
+      const over = V(B0.x, H + .5, B0.z), at = V(B0.x, H, B0.z);
+      const overT = V(TABLE_C.x, TABLE_TOP + H + .45, TABLE_C.z), atT = V(TABLE_C.x, TABLE_TOP + H, TABLE_C.z);
+      let p = vl(start, over, seg(u, .02, .2));
+      p = vl(p, at, seg(u, .2, .32));
+      p = vl(p, over, seg(u, .42, .55));
+      p = vl(p, overT, seg(u, .55, .78));
+      p = vl(p, atT, seg(u, .78, .88));
+      p = vl(p, overT, seg(u, .95, 1));
+      S.g.pos = p;
+      S.g.jaw = 1 - .7 * seg(u, .32, .4) + .7 * seg(u, .88, .94);
+      S.box.held = u > .38 && u < .9;
+      S.box.pos = u <= .38 ? B0.clone() : V(TABLE_C.x, TABLE_TOP + BOX / 2, TABLE_C.z);
+      label(S, '2 kg', null, 'y', seg(u, .1, .2), 6);
+    },
+  },
+  { // 17 question
+    cam: (u) => {
+      const a = .6 + .55 * u;
+      return { pos: V(-Math.sin(a) * 8.2, 4.8, Math.cos(a) * 8.2), look: V(0, 1, 0), fov: 50 };
+    },
+    apply(S, u, t) {
+      S.extras = u;
+      const H = hang(1);
+      S.g.pos = vl(V(TABLE_C.x, TABLE_TOP + H + .45, TABLE_C.z), V(0, H + .6, .2), seg(u, 0, .35)).add(V(0, .05 * Math.sin(t * 1.6), 0));
+      S.g.jaw = .7;
+    },
+  },
+];
+
+// Close-up framings that depend on where the models ended up.
+let lastFixed = [];
+function braidView() {
+  const f = lastFixed[0] ?? V(2, 2.5, 2), p = R;
+  const c = vl(p, f, .4);
+  const d = f.clone().sub(p).normalize();
+  const side = d.clone().cross(UP).normalize();
+  return { pos: c.clone().addScaledVector(side, -.85).add(V(0, .12, 0)), look: c };
+}
+function eyeletView() {
+  const e = EYE[3]?.grommet ?? V(-2, 2.6, 2);
+  return { pos: e.clone().add(V(.55, -.3, -.4)), look: e.clone().add(V(.05, -.08, -.05)), fov: 45 };
+}
+
+// ======================= render the state =======================
+
+const dashPool = [];
+function drawDashes(list, res, px) {
+  list.forEach((d, i) => {
+    let l = dashPool[i];
+    if (!l) {
+      l = new Line2(new LineGeometry(), new LineMaterial({ color: 0xffffff, linewidth: 3, dashed: true, transparent: true, depthWrite: false }));
+      l.frustumCulled = false;
+      scene.add(l);
+      dashPool[i] = l;
+    }
+    l.visible = true;
+    l.geometry.dispose();
+    l.geometry = new LineGeometry().setPositions(d.pts.flatMap(p => [p.x, p.y, p.z]));
+    l.computeLineDistances();
+    const m = l.material;
+    m.color.set(d.color);
+    m.opacity = d.o;
+    m.linewidth = (d.w ?? 3) * px;
+    m.dashSize = d.dash ?? .09;
+    m.gapSize = d.gap ?? .07;
+    m.dashOffset = -(d.flow ?? 0);
+    m.resolution.copy(res);
+  });
+  for (let i = list.length; i < dashPool.length; i++) dashPool[i].visible = false;
+}
+
+const lblPool = [];
+function drawLabels(list) {
+  list.forEach((L, i) => {
+    let el = lblPool[i];
+    if (!el) { el = document.createElement('div'); el.className = 'lbl cap'; $('#labels').appendChild(el); lblPool[i] = el; }
+    const p = L.p.clone().project(camera);
+    el.style.display = L.o > .01 && p.z < 1 && Math.abs(p.x) < 1.3 && Math.abs(p.y) < 1.3 ? '' : 'none';
+    el.style.left = (p.x + 1) * 50 + '%';
+    el.style.top = (1 - p.y) * 50 + '%';
+    if (el.textContent !== L.t) el.textContent = L.t;
+    el.style.color = CSS[L.c] ?? L.c;
+    el.style.opacity = L.o;
+    el.style.fontSize = (L.s ?? 4.6) + 'cqw';
+  });
+  for (let i = list.length; i < lblPool.length; i++) lblPool[i].style.display = 'none';
+}
+
+function segBox(a, b, bx) {
+  let t0 = 0, t1 = 1;
+  for (const k of ['x', 'y', 'z']) {
+    const d = b[k] - a[k];
+    if (Math.abs(d) < 1e-9) { if (a[k] < bx.min[k] || a[k] > bx.max[k]) return null; continue; }
+    let ta = (bx.min[k] - a[k]) / d, tb = (bx.max[k] - a[k]) / d;
+    if (ta > tb) [ta, tb] = [tb, ta];
+    t0 = Math.max(t0, ta); t1 = Math.min(t1, tb);
+    if (t0 > t1) return null;
+  }
+  return t0;
+}
+
+const jitter = (i, t) => V(Math.sin(t * 7.1 + i * 1.3) + .6 * Math.sin(t * 13.7 + i * 2.1), .4 * Math.sin(t * 9.3 + i), Math.cos(t * 6.3 + i * 2.7) + .5 * Math.sin(t * 15.1 + i)).multiplyScalar(.12);
+const lineColor = new THREE.Color(), tmp = new THREE.Color();
+
+function render(S, T, sceneT, res, px) {
+  const labels = S.labels;
+  const dashes = [];
+
+  // anchors
+  singles.forEach((a, i) => {
+    const st = S.single[i];
+    a.g.visible = st.s > .001 && !!st.pos;
+    if (!a.g.visible) return;
+    a.g.position.copy(st.pos).add(jitter(i, T).multiplyScalar(st.jit));
+    a.g.scale.setScalar(VIS_A * Math.max(st.s, .001));
+    a.g.lookAt(0, a.g.position.y, 0);
+    a.g.updateMatrixWorld(true);
+  });
+  ARP.forEach(a => { if (a) { a.root.visible = S.arp > .001; a.root.scale.setScalar(VIS_A * Math.max(S.arp, .001)); } });
+  EYE.forEach(e => { if (e?.root) { e.root.visible = S.eye > .001; e.root.scale.setScalar(VIS_E * Math.max(S.eye, .001)); } });
+
+  // gripper
+  const gs = S.g;
+  grip.root.visible = gs.on > .001;
+  grip.root.position.copy(gs.pos);
+  grip.swing.rotation.z = gs.swing;
+  const pole = gs.pole;
+  if (gantry) {
+    gantry.visible = pole > .001;
+    gantry.scale.setScalar(VIS_G * Math.max(pole, .001));
+    rod.visible = pole > .001;
+    placeCyl(rod, V(0, -BAR_DROP * pole, 0), V(0, -POLE_DROP * pole, 0), .0075 * VIS_G);
+    grip.holder.position.y = -POLE_DROP * pole;
+    setJaw(gs.jaw);
+    led.material.emissiveIntensity = 3 * gs.led;
+    led.material.color.set(gs.led > .5 ? COL.green : 0x223322);
+    gripMarkers.forEach(m => { m.visible = gs.markers > .01; m.material.opacity = gs.markers; });
+  }
+  grip.root.updateMatrixWorld(true);
+  const P = gs.pos;
+
+  // routes: anchor, maybe an eyelet, then the gripper
+  const routes = [0, 1, 2, 3].map(i => {
+    if (!S.lineOn[i] || gs.on < .001) return null;
+    if (S.arpLines && ARP[0]) {
+      if (i < 2) return [ARP[i].direct, P];
+      const a = ARP[i === 2 ? 1 : 0];
+      return [a.wall, EYE[i].grommet, P];
+    }
+    const ex = singles[i].exit.getWorldPosition(V());
+    return S.via[i] && EYE[i] ? [ex, EYE[i].grommet, P] : [ex, P];
+  });
+  lastFixed = routes.map(r => r ? r[r.length - 2] : null);
+
+  routes.forEach((r, i) => {
+    const [s0, s1] = lineSegs[i];
+    s0.visible = s1.visible = false;
+    if (!r) return;
+    let total = 0;
+    const power = i === 3 ? S.power : 0;
+    const rad = lerp(LINE_R, .024, power);
+    for (let k = 0; k < r.length - 1; k++) {
+      const m = lineSegs[i][k];
+      m.visible = true;
+      const len = placeCyl(m, r[k], r[k + 1], rad);
+      total += len;
+      const mat = m.material;
+      lineColor.set(COL.line).lerp(tmp.set(COL.red), S.stretch * .8);
+      if (power > 0) lineColor.lerp(tmp.set(0x555555), power).lerp(tmp.set(0xf2f2f2), S.teflon);
+      let hit = false;
+      if (k === r.length - 2 && S.furn > .9) {
+        for (const bx of furnBoxes) {
+          const th = segBox(r[k + 1], r[k], bx);
+          if (th !== null) { hit = true; label(S, 'X', vl(r[k + 1], r[k], th), 'r', 1, 8); break; }
+        }
+      }
+      if (hit) lineColor.set(COL.red);
+      mat.color.copy(lineColor);
+      mat.emissive.copy(lineColor);
+      mat.emissiveIntensity = hit ? .9 : power > .5 ? .05 : .25;
+      mat.roughness = lerp(.45, .15, S.teflon);
+      if (mat.map) { mat.map.repeat.set(1, len / .1); mat.map.offset.y = S.slide / .1; }
+    }
+    if (singles[i].g.visible) singles[i].spool.rotation.x = (total + S.spin) / (.04 * VIS_A);
+  });
+  if (S.lineOn.every(x => !x)) singles.forEach(s => { if (s.g.visible) s.spool.rotation.x = S.spin / (.04 * VIS_A); });
+
+  // line length labels
+  if (S.showLen > .01) {
+    routes.forEach((r, i) => {
+      if (!r) return;
+      const f = r[r.length - 2];
+      const L = f.distanceTo(P), Lq = f.distanceTo(S.ghostPos);
+      const at = vl(f, P, S.lenMode === 'len' ? .5 : .55).add(V(0, .12, 0));
+      if (S.lenMode === 'len') label(S, L.toFixed(2) + ' m', at, 'y', S.showLen, 5);
+      else if (S.lenMode === 'next') label(S, `${L.toFixed(2)} → ${Lq.toFixed(2)}`, at, 'y', S.showLen, 5);
+      else {
+        const v = (Lq - L) / LOOKAHEAD * .3;
+        label(S, (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(2) + ' m/s', at, v >= 0 ? 'o' : 'c', S.showLen, 5);
+      }
+    });
+  }
+
+  // prism over the active anchors
+  if (S.prism > .005) {
+    const pts = [];
+    for (let i = 0; i < 4; i++) {
+      const s = singles[i];
+      if (!s.g.visible) continue;
+      const p = s.exit.getWorldPosition(V());
+      if (i === 3 && S.single[3].s < 1) {
+        const a = singles[2].exit.getWorldPosition(V()), b = singles[0].exit.getWorldPosition(V());
+        p.lerp(vl(a, b, .5), 1 - clamp01(S.single[3].s));
+      }
+      pts.push([p.x, p.z]);
+    }
+    setPrism(pts, S.prism);
+  } else setPrism([], 0);
+  redFloor.visible = S.redFloor > .005;
+  redFloor.material.opacity = .45 * S.redFloor;
+
+  // calibration
+  floorMarkers.forEach(m => { m.visible = S.markers > .01; m.material.opacity = S.markers; });
+  if (S.rays > .01) {
+    const targets = floorMarkers.map(m => m.position);
+    gripMarkers.forEach(m => targets.push(m.getWorldPosition(V())));
+    singles.forEach((s, i) => {
+      if (!s.g.visible) return;
+      const e = s.eye.getWorldPosition(V());
+      targets.forEach((tp, k) => dashes.push({ pts: [e, tp], color: COL.cyan, o: S.rays * (.5 + .5 * Math.sin(T * 5 + i * 1.7 + k)), w: 2, flow: T * .6 }));
+    });
+  }
+
+  // target, lookahead
+  target.visible = S.target > .01;
+  target.position.copy(S.targetPos);
+  targetBall.material.opacity = targetRing.material.opacity = S.target;
+  targetRing.position.y = -S.targetPos.y + .02;
+  targetRing.scale.setScalar(1 + .15 * Math.sin(T * 4));
+  if (S.target > .01) dashes.push({ pts: [S.targetPos, V(S.targetPos.x, .02, S.targetPos.z)], color: COL.green, o: S.target * .8, w: 2 });
+  if (S.path > .01) dashes.push({ pts: [P, S.targetPos], color: COL.green, o: S.path, w: 3, flow: T * .4 });
+  ghost.visible = S.ghost > .01;
+  ghost.position.copy(S.ghostPos);
+  ghostCore.material.opacity = .9 * S.ghost;
+  ghostHalo.material.opacity = .25 * S.ghost;
+  ghostHalo.scale.setScalar(1 + .2 * Math.sin(T * 5));
+  if (S.ghostLines > .01) lastFixed.forEach(f => f && dashes.push({ pts: [f, S.ghostPos], color: COL.cyan, o: S.ghostLines, w: 3 }));
+
+  // braid on line 0
+  braid.visible = S.braid > .01 && !!routes[0];
+  if (braid.visible) {
+    const f = lastFixed[0];
+    braid.position.copy(vl(P, f, .4));
+    braid.quaternion.setFromUnitVectors(UP, f.clone().sub(P).normalize());
+    braid.rotateY(T * .4);
+    braid.scale.setScalar(Math.max(S.braid, .001));
+    for (const L of labels) if (L.t === 'BRAIDED PE') L.p = braid.position.clone().add(V(0, .16, 0));
+  }
+
+  // power cable labels, pulse
+  const r3 = routes[3];
+  for (const L of labels) {
+    if (!L.p && r3) {
+      if (L.t === '⚡ POWER') L.p = vl(r3[r3.length - 2], P, .45).add(V(.25, 0, 0));
+      if (L.t === 'FRICTION') L.p = r3[1].clone().add(V(.18, -.24, -.16));
+      if (L.t === 'PTFE JACKET') L.p = r3[1].clone().add(V(.18, -.24, -.16));
+    }
+    if (!L.p && L.t === 'POLE') L.p = P.clone().add(V(.3, -POLE_DROP * .55, 0));
+    if (!L.p && L.t === '2 kg') L.p = box.position.clone().add(V(0, .3, 0));
+  }
+  pulse.visible = S.pulse >= 0 && !!r3;
+  if (pulse.visible) {
+    const lens = r3.slice(1).map((p, k) => p.distanceTo(r3[k]));
+    let d = S.pulse * lens.reduce((a, b) => a + b, 0), k = 0;
+    while (k < lens.length - 1 && d > lens[k]) d -= lens[k++];
+    pulse.position.copy(vl(r3[k], r3[k + 1], d / lens[k]));
+  }
+  if (EYE[3]?.root) EYE[3].root.traverse(o => { if (o.isMesh) { o.material.emissive?.set(COL.red); if (o.material.emissive) o.material.emissiveIntensity = S.friction * .8; } });
+
+  // furniture and things to pick up
+  furniture.visible = S.furn > .001;
+  furniture.scale.set(1, Math.max(S.furn, .001), 1);
+  toy.visible = S.toy > .001;
+  toy.position.copy(TOY);
+  toy.scale.setScalar(Math.max(S.toy, .001));
+  box.visible = S.box.on > .001;
+  box.scale.setScalar(Math.max(S.box.on, .001));
+  if (S.box.held) {
+    grip.jawTip.getWorldPosition(box.position);
+    box.position.y += BOX / 2 - .02;
+  } else box.position.copy(S.box.pos);
+  extras.forEach((m, i) => { const s = pop(S.extras, .05 + i * .1, .25 + i * .1); m.visible = s > .001; m.scale.setScalar(Math.max(s, .001)); m.rotation.y = T * .5 + i; });
+  for (const L of labels) if (!L.p) { L.p = V(); L.o = 0; }
+
+  drawDashes(dashes, res, px);
+  drawLabels(labels);
+}
+
+// ======================= timeline =======================
+
+if (SCRIPT.length !== SCENES.length) console.error(`SCRIPT has ${SCRIPT.length} scenes, SCENES has ${SCENES.length}`);
+// Every caption line in order, each with its scene and start time.
+const LINES = SCRIPT.flatMap((s, beat) => s.lines.map(l => ({ beat, l })));
+let starts = [], total = 0;
+function retime() {
+  starts = []; total = 0;
+  for (const s of SCRIPT) {
+    starts.push(total);
+    for (const l of s.lines) total += l[0];
+    s.dur = total - starts[starts.length - 1];
+  }
+  let t = 0;
+  for (const L of LINES) { L.start = t; t += L.l[0]; }
+}
+retime();
+
+const lineAt = t => { let i = 0; while (i < LINES.length - 1 && t >= LINES[i + 1].start) i++; return i; };
+const beatAt = t => { let i = 0; while (i < SCRIPT.length - 1 && t >= starts[i + 1]) i++; return i; };
+
+function camFor(i, u, t, S) {
+  const c = SCENES[i].cam;
+  const v = typeof c === 'function' ? c(u, t, S) : c;
+  return { pos: v.pos.clone(), look: v.look.clone(), fov: v.fov ?? 50 };
+}
+
+function stateAt(T, beat) {
+  const S = blank();
+  for (let j = 0; j <= beat; j++) {
+    const t = j === beat ? T - starts[j] : SCRIPT[j].dur;
+    S.active = j === beat;
+    SCENES[j].apply(S, clamp01(t / SCRIPT[j].dur), t, S.active);
+  }
+  return S;
+}
+
+function cameraAt(T, beat, S) {
+  const t = T - starts[beat];
+  const now = camFor(beat, clamp01(t / SCRIPT[beat].dur), t, S);
+  const blend = SCENES[beat].blend ?? 1.0;
+  if (beat > 0 && blend > 0 && t < blend) {
+    const prev = camFor(beat - 1, 1, SCRIPT[beat - 1].dur, S);
+    const k = ease(t / blend);
+    now.pos = vl(prev.pos, now.pos, k);
+    now.look = vl(prev.look, now.look, k);
+    now.fov = lerp(prev.fov, now.fov, k);
+  }
+  // A slow sway so held shots are not frozen; none on the thumbnail.
+  if (beat > 0) {
+    const a = .05 * Math.sin(T * .35);
+    const off = now.pos.clone().sub(now.look).applyAxisAngle(UP, a);
+    now.pos = now.look.clone().add(off);
+  }
+  return now;
+}
+
+// ======================= captions =======================
+
+const capEl = $('#caption');
+let capFit = null;
+function drawCaption(beat) {
+  const s = SCRIPT[beat];
+  const L = LINES[lineAt(Math.min(T, total - 1e-4))];
+  const text = L.beat === beat ? L.l[1].trim() : s.lines[s.lines.length - 1][1].trim();
+  if (capEl.textContent !== text || capFit !== frame.clientWidth) {
+    capEl.classList.toggle('title', !!s.title);
+    capEl.textContent = text;
+    capFit = frame.clientWidth;
+    let size = s.title ? 13 : 8.4;
+    capEl.style.fontSize = size + 'cqw';
+    const lines = () => capEl.offsetHeight / (1.08 * size * frame.clientWidth / 100);
+    while (lines() > MAX_CAPTION_LINES + .3 && size > 4) { size -= .2; capEl.style.fontSize = size + 'cqw'; }
+  }
+  const since = T - L.start;
+  const sc = s.title && T === 0 ? 1 : .82 + .18 * back(clamp01(since / .16));
+  capEl.style.transform = `scale(${sc})`;
+}
+
+// ======================= playback, keys, HUD =======================
+
+const params = new URLSearchParams(location.search);
+let T = +(params.get('t') ?? 0) || 0;
+let playing = false, last = 0;
+let audio = null;
+let tap = false, tapLine = 0, tapLog = null;
+const hud = $('#hud');
+if (params.get('hud') === '0') hud.classList.add('hidden');
+let hudHidden = hud.classList.contains('hidden');
+
+function play() {
+  if (T >= total - 1e-3 && !tap) T = 0;
+  playing = true;
+  last = performance.now();
+  tapLine = lineAt(T);
+  if (audio) { audio.currentTime = T; audio.play(); }
+}
+function pause() { playing = false; if (audio) audio.pause(); }
+function seek(t) { T = Math.min(Math.max(0, t), total); tapLine = lineAt(T); if (audio) audio.currentTime = T; }
+
+function tapMark() {
+  const L = LINES[tapLine];
+  L.l[0] = Math.max(.3, Math.round((T - L.start) * 20) / 20);
+  retime();
+  if (tapLine < LINES.length - 1) { tapLine++; T = LINES[tapLine].start; return; }
+  pause();
+  const q = JSON.stringify;
+  tapLog = SCRIPT.map(s => `  { ${s.title ? 'title: true, ' : ''}lines: [${s.lines.map(l => `[${l[0].toFixed(2)}, ${q(l[1])}]`).join(', ')}] },`).join('\n');
+  console.log(tapLog);
+  hudHidden = false;
+}
+
+addEventListener('keydown', e => {
+  const k = e.key;
+  if (k === ' ') { e.preventDefault(); playing ? pause() : play(); }
+  else if (k === 'Enter' && tap && playing) tapMark();
+  else if (k === 'ArrowRight') seek(starts[Math.min(beatAt(T) + 1, SCRIPT.length - 1)]);
+  else if (k === 'ArrowLeft') { const b = beatAt(T); seek(T - starts[b] > .3 ? starts[b] : starts[Math.max(0, b - 1)]); }
+  else if (k === ',') seek(T - 1 / 30);
+  else if (k === '.') seek(T + 1 / 30);
+  else if (k === '[') seek(T - .5);
+  else if (k === ']') seek(T + .5);
+  else if (k === 'r') { pause(); seek(0); }
+  else if (k === 'h') hudHidden = !hudHidden;
+  else if (k === 't') { tap = !tap; tapLog = null; }
+  else if (k === 'f') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+});
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0];
+  if (!f) return;
+  audio = new Audio(URL.createObjectURL(f));
+  audio.currentTime = T;
+  audio.dataset.name = f.name;
+});
+
+let hudTick = 0;
+function drawHud(beat) {
+  hud.classList.toggle('hidden', hudHidden || (playing && !tap));
+  if (hud.classList.contains('hidden') || performance.now() - hudTick < 100) return;
+  hudTick = performance.now();
+  const t = T - starts[beat], li = lineAt(T);
+  hud.innerHTML = `<b>scene ${beat}/${SCRIPT.length - 1}</b> line ${li}/${LINES.length - 1} &nbsp; ${T.toFixed(2)}s of ${total.toFixed(1)}s<br>scene ${t.toFixed(2)} / ${SCRIPT[beat].dur.toFixed(2)} &nbsp; line ${(T - LINES[li].start).toFixed(2)} / ${LINES[li].l[0].toFixed(2)}
+    <div class="bar"><div style="width:${(T / total * 100).toFixed(1)}%"></div></div>
+    ${tap ? '<b style="color:#f8961e">TAP MODE</b>: space to play, enter as each caption line ends<br>' : ''}
+    ${audio ? 'audio: ' + audio.dataset.name + '<br>' : ''}
+    space play · ←/→ scene · , . frame · [ ] ½s · r thumbnail<br>t tap timing · h hide · f fullscreen
+    ${tapLog ? '<textarea readonly>' + tapLog + '</textarea>' : ''}`;
+}
+
+// ======================= frame layout, loop =======================
+
+const res = new THREE.Vector2();
+function layout() {
+  const w = innerWidth, h = innerHeight;
+  const fw = Math.min(w, h * ASPECT), fh = fw / ASPECT;
+  Object.assign(frame.style, { width: fw + 'px', height: fh + 'px', left: (w - fw) / 2 + 'px', top: (h - fh) / 2 + 'px' });
+  renderer.setSize(fw, fh, false);
+  renderer.getDrawingBufferSize(res);
+}
+addEventListener('resize', layout);
+layout();
+
+function tick(now) {
+  if (playing) {
+    if (audio && !audio.paused) T = audio.currentTime;
+    else T += Math.min(.1, (now - last) / 1000);
+    last = now;
+    if (!tap && T >= total) { T = total; pause(); }
+  }
+  if (tap && playing && T > LINES[tapLine].start + LINES[tapLine].l[0]) {
+    // stretch the current line so it holds while waiting for enter
+    LINES[tapLine].l[0] = T - LINES[tapLine].start + 1e-3;
+    retime();
+  }
+  const beat = beatAt(T);
+  const S = stateAt(Math.min(T, total - 1e-4), beat);
+  const c = cameraAt(Math.min(T, total - 1e-4), beat, S);
+  camera.position.copy(c.pos);
+  camera.lookAt(c.look);
+  camera.fov = c.fov;
+  camera.updateProjectionMatrix();
+  render(S, T, T - starts[beat], res, res.y / 1000);
+  renderer.render(scene, camera);
+  drawCaption(beat);
+  drawHud(beat);
+  requestAnimationFrame(tick);
+}
+
+loadModels().then(() => {
+  $('#loading').remove();
+  requestAnimationFrame(tick);
+});
+</script>
+</body>
+</html>
