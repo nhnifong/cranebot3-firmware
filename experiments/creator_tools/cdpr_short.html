@@ -135,6 +135,8 @@ function canvasTex(w, h, draw, nearest = false) {
 const HALF = 2.25, CEIL = 3.0;
 const VIS_G = 2.0, VIS_A = 1.7, VIS_E = 3.0;   // robot parts drawn larger than life so they read on a phone
 const LINE_R = 0.016;
+// The anchor line that becomes the power cable: straight from anchor 1's face to the gripper.
+const POWER_LINE = 1;
 const COL = { line: 0xffd166, cyan: 0x4cc9f0, red: 0xff4d6d, green: 0x06d6a0, orange: 0xf8961e };
 const CSS = { y: '#ffd166', c: '#4cc9f0', r: '#ff4d6d', g: '#06d6a0', o: '#f8961e', w: '#ffffff' };
 
@@ -245,7 +247,7 @@ const stripeTex = canvasTex(8, 64, (g, w, h) => {
 stripeTex.wrapS = stripeTex.wrapT = THREE.RepeatWrapping;
 const lineSegs = [0, 1, 2, 3].map(i => [0, 1].map(() => {
   const mat = std(COL.line, { roughness: .45, emissive: COL.line, emissiveIntensity: .25 });
-  if (i === 3) { mat.map = stripeTex.clone(); mat.map.needsUpdate = true; }
+  if (i === POWER_LINE) { mat.map = stripeTex.clone(); mat.map.needsUpdate = true; }
   const m = mesh(cylGeo, mat);
   m.visible = false;
   scene.add(m);
@@ -327,6 +329,9 @@ ghost.add(ghostCore, ghostHalo);
 scene.add(ghost);
 const pulse = glow(0xfff3b0, .06);
 scene.add(pulse);
+// Where the power cable rubs in the hole in the anchor face.
+const hotRing = new THREE.Mesh(new THREE.TorusGeometry(.045, .011, 10, 32), new THREE.MeshBasicMaterial({ color: COL.red, transparent: true, depthWrite: false }));
+scene.add(hotRing);
 
 // Braided line close-up: two strands each way around the line.
 const braid = new THREE.Group();
@@ -451,8 +456,6 @@ async function loadModels() {
   }
   for (const c of [2, 3]) {
     const root = placeAtCorner(c === 2 ? E.scene : E.scene.clone(), c, VIS_E, ['grommet']);
-    // Own materials, so only the eyelet the cable rubs on glows.
-    root.traverse(o => { if (o.isMesh) o.material = o.material.clone(); });
     EYE[c] = { root, grommet: worldOf(root, 'grommet') };
   }
   for (const [c, eyeC] of [[0, 3], [1, 2]]) {
@@ -699,7 +702,7 @@ const SCENES = [
     },
   },
   { // 12 power cable
-    cam: cam(-3.0, 3.5, 6.4, -.2, 1.6, .5),
+    cam: cam(-3.4, 2.6, 4.2, .9, 2.0, -.9),
     apply(S, u, t) {
       S.braid = 0;
       S.power = seg(u, .05, .3);
@@ -709,8 +712,8 @@ const SCENES = [
       label(S, '⚡ POWER', null, 'y', seg(u, .2, .35), 6);
     },
   },
-  { // 13 teflon jacket
-    cam: () => eyeletView(), blend: 1.2,
+  { // 13 teflon jacket where the cable leaves the anchor
+    cam: () => anchorHoleView(), blend: 1.2,
     apply(S, u, t) {
       const tc = t * 2.2;
       const stuck = (Math.floor(tc) + seg(tc % 1, .72, 1)) * .3;
@@ -809,9 +812,17 @@ function braidView() {
   const side = d.clone().cross(UP).normalize();
   return { pos: c.clone().addScaledVector(side, -.85).add(V(0, .12, 0)), look: c };
 }
-function eyeletView() {
-  const e = EYE[3]?.grommet ?? V(-2, 2.6, 2);
-  return { pos: e.clone().add(V(.55, -.3, -.4)), look: e.clone().add(V(.05, -.08, -.05)), fov: 45 };
+function holeInward() {
+  const g = ARP[POWER_LINE]?.direct ?? V(2, 2.9, -2);
+  return V(-g.x, 0, -g.z).normalize();
+}
+function holeInside() {
+  return ARP[POWER_LINE].direct.clone().addScaledVector(holeInward(), -.16);
+}
+function anchorHoleView() {
+  const g = ARP[POWER_LINE]?.direct ?? V(2, 2.9, -2), inward = holeInward();
+  const side = inward.clone().cross(UP).normalize();
+  return { pos: g.clone().addScaledVector(inward, .75).addScaledVector(side, .8).add(V(0, -.2, 0)), look: g.clone().addScaledVector(inward, .2).add(V(0, -.18, 0)), fov: 45 };
 }
 
 // ======================= render the state =======================
@@ -916,6 +927,8 @@ function render(S, T, sceneT, res, px) {
   const routes = [0, 1, 2, 3].map(i => {
     if (!S.lineOn[i] || gs.on < .001) return null;
     if (S.arpLines && ARP[0]) {
+      // Inside the anchor the cable runs back toward the wall, so it bends at the hole.
+      if (i === POWER_LINE && S.power > .01) return [holeInside(), ARP[i].direct, P];
       if (i < 2) return [ARP[i].direct, P];
       const a = ARP[i === 2 ? 1 : 0];
       return [a.wall, EYE[i].grommet, P];
@@ -930,7 +943,7 @@ function render(S, T, sceneT, res, px) {
     s0.visible = s1.visible = false;
     if (!r) return;
     let total = 0;
-    const power = i === 3 ? S.power : 0;
+    const power = i === POWER_LINE ? S.power : 0;
     const rad = lerp(LINE_R, .024, power);
     for (let k = 0; k < r.length - 1; k++) {
       const m = lineSegs[i][k];
@@ -1031,12 +1044,12 @@ function render(S, T, sceneT, res, px) {
   }
 
   // power cable labels, pulse
-  const r3 = routes[3];
+  const r3 = routes[POWER_LINE];
   for (const L of labels) {
     if (!L.p && r3) {
-      if (L.t === '⚡ POWER') L.p = vl(r3[r3.length - 2], P, .45).add(V(.25, 0, 0));
-      if (L.t === 'FRICTION') L.p = r3[1].clone().add(V(.18, -.24, -.16));
-      if (L.t === 'PTFE JACKET') L.p = r3[1].clone().add(V(.18, -.24, -.16));
+      const hole = r3[r3.length - 2];
+      if (L.t === '⚡ POWER') L.p = vl(hole, P, .45).add(V(-.3, 0, 0));
+      if (L.t === 'FRICTION' || L.t === 'PTFE JACKET') L.p = hole.clone().addScaledVector(holeInward(), .3).add(V(0, .1, 0));
     }
     if (!L.p && L.t === 'POLE') L.p = P.clone().add(V(.3, -POLE_DROP * .55, 0));
     if (!L.p && L.t === '2 kg') L.p = box.position.clone().add(V(0, .3, 0));
@@ -1048,7 +1061,13 @@ function render(S, T, sceneT, res, px) {
     while (k < lens.length - 1 && d > lens[k]) d -= lens[k++];
     pulse.position.copy(vl(r3[k], r3[k + 1], d / lens[k]));
   }
-  if (EYE[3]?.root) EYE[3].root.traverse(o => { if (o.isMesh) { o.material.emissive?.set(COL.red); if (o.material.emissive) o.material.emissiveIntensity = S.friction * .8; } });
+  hotRing.visible = S.friction > .01 && !!r3;
+  if (hotRing.visible) {
+    const out = P.clone().sub(r3[r3.length - 2]).normalize();
+    hotRing.position.copy(r3[r3.length - 2]).addScaledVector(out, .03);
+    hotRing.quaternion.setFromUnitVectors(V(0, 0, 1), out);
+    hotRing.material.opacity = S.friction;
+  }
 
   // furniture and things to pick up
   furniture.visible = S.furn > .001;
