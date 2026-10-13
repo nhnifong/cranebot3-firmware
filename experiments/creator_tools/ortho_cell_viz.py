@@ -2,8 +2,8 @@
 
 """Live illustration of how the ortho target net finds targets: an offset and an objectness per cell.
 
-    python experiments/ortho_cell_viz.py
-    python experiments/ortho_cell_viz.py --local_models --port 4252
+    python experiments/creator_tools/ortho_cell_viz.py
+    python experiments/creator_tools/ortho_cell_viz.py --local_models --port 4252
 
 The ortho counterpart of cell_softmax_viz.py. Reads the floor projection MJPEG feed, runs
 OrthoTargetNet on it at up to 30 fps (the feed itself is 10), and serves a page at

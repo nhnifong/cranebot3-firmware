@@ -2,8 +2,8 @@
 
 """Live illustration of how the visual servo net picks a point: a softmax over cells, then its centre of mass near the peak.
 
-    python experiments/cell_softmax_viz.py
-    python experiments/cell_softmax_viz.py --local_models --port 4250
+    python experiments/creator_tools/cell_softmax_viz.py
+    python experiments/creator_tools/cell_softmax_viz.py --local_models --port 4250
 
 Reads the gripper MJPEG feed, runs VisualServoNet on it at up to 30 fps, and serves a page
 at http://127.0.0.1:4250/ that draws, over the frame the model actually saw:

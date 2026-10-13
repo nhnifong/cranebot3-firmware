@@ -2,8 +2,8 @@
 
 """Live readout of the visual servo net's scalar heads, and what each one is made of.
 
-    python experiments/scalar_heads_viz.py
-    python experiments/scalar_heads_viz.py --telemetry ws://127.0.0.1:4245 --port 4254
+    python experiments/creator_tools/scalar_heads_viz.py
+    python experiments/creator_tools/scalar_heads_viz.py --telemetry ws://127.0.0.1:4245 --port 4254
 
 The companion of cell_softmax_viz.py. Reads the gripper MJPEG feed, runs VisualServoNet on it
 at up to 30 fps, and serves a page at http://127.0.0.1:4254/ showing the frame with one
