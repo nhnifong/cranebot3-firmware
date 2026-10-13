@@ -33,6 +33,8 @@ BIN_NAMES = ('gamepad', 'trash', 'toys', 'hamper')
 # Targets this close to any card, horizontally, are left alone, or the robot would pick
 # back up what it just sorted.
 CARD_EXCLUSION_M = 0.4
+# (metres) height of the gripper, at the end of the pole, over a card when it lets go
+DROP_HEIGHT_OVER_CARD_M = 0.30
 # A target this close to one already flown over in the collect phase is the same object.
 VISITED_RADIUS_M = 0.15
 
@@ -291,8 +293,8 @@ class ClusterSort(Maneuver):
         ppc = ob.config.pick_and_place
         pnp = ob.maneuvers['pick_and_place']
         GANTRY_HEIGHT_OVER_TARGET = tonp(ppc.gantry_height_over_target)
-        GANTRY_HEIGHT_OVER_DROPOFF = tonp(ppc.gantry_height_over_dropoff)
-        drop_point = None
+        gantry_over_card = np.array([0, 0, ob.pole[2] + DROP_HEIGHT_OVER_CARD_M])
+        drop_goal = None
         target_seen_t = time.time()
         while True:
             cards = self._cards()
@@ -311,7 +313,7 @@ class ClusterSort(Maneuver):
 
             # leaving a card, stay at this height until clear of it
             here = ob.gantry_position()
-            if drop_point is not None and np.linalg.norm(here - (drop_point + GANTRY_HEIGHT_OVER_DROPOFF)) < 0.5:
+            if drop_goal is not None and np.linalg.norm(here - drop_goal) < 0.5:
                 z_pos = here[2]
             else:
                 z_pos = GANTRY_HEIGHT_OVER_TARGET[2]
@@ -353,8 +355,8 @@ class ClusterSort(Maneuver):
             self.progress(0, f'{len(collection["sorted"])} sorted, last into {bins[b]}')
             logger.info(f'Object looks most like {seeds[nearest][2]}; it goes to the {bins[b]} card')
 
-            drop_point = ob.named_position(bins[b])
-            await ob.seek_goal(drop_point + GANTRY_HEIGHT_OVER_DROPOFF)
+            drop_goal = ob.named_position(bins[b]) + gantry_over_card
+            await ob.seek_goal(drop_goal)
             asyncio.create_task(ob.set_finger_angle(
                 max(-90, min(ppc.relaxed_open, ob.finger_angle() - 10))))
             # don't immediately select a new target, because it may be what was just let go

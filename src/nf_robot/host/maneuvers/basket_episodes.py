@@ -139,6 +139,7 @@ class BasketEpisodes(Maneuver):
                                             TiltWatch(ob, TILT_DEG, TILT_CONFIRM_S))
                 ob.slow_stop_all_spools()
                 await ob.clear_goal()
+                await asyncio.sleep(2)
                 if problem:
                     self.notify(f'Stopping basket episodes on the way back to the drop '
                                 f'position: {problem}')
