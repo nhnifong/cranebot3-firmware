@@ -550,16 +550,21 @@ given mode in one run, since a second run replaces the first rather than adding 
 ### Positives (default)
 
     python -m nf_robot.ml.visual_servoing.mine_teleop \
-        --repo_id naavox/grip_o naavox/simple_grasp_spin \
+        --repo_id naavox/grip_o naavox/simple_grasp_spin justink04/m2-close-grasp-sep29-26 \
         --output_root datasets/vs-centroid-dataset \
         --preview_dir datasets/vs-centroid-dataset/preview \
         --preview_count 200 \
-        --approach_seconds 4 \
         --uv_method optical-flow
 
 No split of the LeRobot dataset first: pass the whole thing. `simple_grasp_spin` can be
 added here even though it cannot be merged into `naavox/combined_targets`, because the
 miner takes several sources in one run.
+
+Without `--approach_seconds`, each episode's approach reaches back from the grasp for as
+long as the target stays tracked and in view - with optical flow, until the flow loses it.
+That is what makes `m2-close-grasp-sep29-26` worth mining: its operator hovers over each
+object before taking it, and every second of that hover is a labelled frame just above a
+target. Pass `--approach_seconds` to cap the window at a fixed length instead.
 
 ### Empty floor (`--negatives`)
 

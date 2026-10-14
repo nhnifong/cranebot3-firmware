@@ -45,8 +45,6 @@ from nf_robot.ml.lerobot.trim_to_grasp import (
     find_grasp,
 )
 
-# (seconds) how much of the approach before the grasp to label.
-APPROACH_SECONDS = 10.0
 # (seconds) how much of the carry after the grasp to keep, for the holding head.
 CARRY_SECONDS = 3.0
 # The canvas the target head predicts over, as a fraction of the frame; must match
@@ -342,11 +340,21 @@ def in_view(u, v, margin=OFF_SCREEN_MARGIN):
     return -margin <= u <= 1 + margin and -margin <= v <= 1 + margin
 
 
+def approach_start(track, grasp, margin=OFF_SCREEN_MARGIN):
+    """The earliest frame of the unbroken run back from the grasp in which the target is
+    tracked and in view."""
+    first = grasp
+    while (first > 0 and track[first - 1] is not None
+           and in_view(track[first - 1][0], track[first - 1][1], margin)):
+        first -= 1
+    return first
+
+
 def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m,
                  margin=OFF_SCREEN_MARGIN, uv_method=DEFAULT_UV_METHOD, jaw_uv=None,
                  frames=None):
     """Labelled rows for one grasp episode as (rows, dropped, blind), or (None, reason, 0)
-    if unusable."""
+    if unusable. approach_seconds None reaches back as far as the target stays in view."""
     pressure = np.array([r["pressure"] for r in rows], dtype=np.float32)
     grasp = find_grasp(pressure, fps, PRESSURE_THRESHOLD, MIN_GRASP_SECONDS)
     if grasp is None:
@@ -369,7 +377,10 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
     # The force that turned out to be enough, read at the frame it proved itself on.
     pressure_at_lift = None if lift is None else float(rows[lift]["pressure"])
 
-    first = max(0, grasp - int(round(approach_seconds * fps)))
+    if approach_seconds is None:
+        first = approach_start(track, grasp, margin)
+    else:
+        first = max(0, grasp - int(round(approach_seconds * fps)))
     last = min(len(rows) - 1, grasp + int(round(carry_seconds * fps)))
 
     out, dropped, blind = [], 0, 0
@@ -921,7 +932,10 @@ def main():
                         help="Frames per contact sheet")
     parser.add_argument("--preview_seed", type=int, default=0)
     add_uv_arguments(parser)
-    parser.add_argument("--approach_seconds", type=float, default=APPROACH_SECONDS)
+    parser.add_argument("--approach_seconds", type=float, default=None,
+                        help="How much of the approach before the grasp to label. By "
+                             "default, as far back as the target stays tracked and in view, "
+                             "which with --uv_method optical-flow is until the flow loses it.")
     parser.add_argument("--carry_seconds", type=float, default=CARRY_SECONDS)
     parser.add_argument("--rise_m", type=float, default=RISE_M)
     parser.add_argument("--limit", type=int, default=None, help="Only mine this many episodes")

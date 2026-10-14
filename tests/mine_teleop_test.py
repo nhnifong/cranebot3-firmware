@@ -187,6 +187,19 @@ class TestMineEpisode(unittest.TestCase):
             self.assertIsNotNone(row["finger"])
             self.assertIsNotNone(row["holding"])
 
+    def test_auto_approach_stops_where_the_target_leaves_the_frame(self):
+        """Back to the last frame it was in view, however long the hover, and no further."""
+        offsets = [0.45] * 20 + list(np.linspace(0.45, 0.02, 30)) + [0.02] * 80
+        result, _, blind = mine_episode(rows_for(offsets, grasp_at=100, length=130), 30.0,
+                                        CALIBRATION, approach_seconds=None, carry_seconds=0.5,
+                                        rise_m=0.05)
+        before = [r for r in result if r["seconds_to_grasp"] > 0]
+        self.assertEqual(blind, 0)
+        # the 50 frames of hover, plus some of the drift in
+        self.assertGreater(len(before), 50)
+        self.assertLess(len(before), 80)
+        self.assertTrue(all(r["target_uv"] is not None for r in before))
+
     def test_a_blind_row_does_not_claim_the_picture_is_empty(self):
         """Only that this object is out of shot. Something else graspable may well be in
         view, so present is masked rather than set to zero."""
