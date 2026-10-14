@@ -13,7 +13,7 @@ import numpy as np
 
 from nf_robot.ml.visual_servoing.mine_teleop import (
     CANVAS_SCALE, FALSE_GRAB_PREFIX, MODE_FALSE_GRABS, MODE_GRASPS, MODE_NEGATIVES,
-    NEGATIVE_PREFIX, OFF_SCREEN_MARGIN, ReservoirSampler, ShardWriter, find_lift,
+    NEGATIVE_PREFIX, OFF_SCREEN_MARGIN, ReservoirSampler, ShardWriter,
     holding_label, in_view, mine_episode, mine_false_grab_episode, shard_prefix)
 from nf_robot.ml.visual_servoing.geometry import CAMERA_POS_BODY
 from nf_robot.ml.visual_servoing.uv_methods import (
@@ -123,30 +123,52 @@ class TestInView(unittest.TestCase):
 
 
 class TestHoldingWindow(unittest.TestCase):
-    """`holding` is positive only where the grip is proven: from the lift to the drop.
+    """`holding` is the operator's decision to go up, read off the commanded vertical speed.
 
-    Labelling from the grasp instead makes "an object is close in frame" sufficient for a
-    positive, which is the cheapest feature in the episode and the one the head learns
-    instead of the object being in the hand.
+    That is the question visual_servo asks the head, and it needs no pressure reading,
+    which thin objects barely produce.
     """
 
-    def test_before_the_grasp_is_a_negative(self):
-        self.assertEqual(holding_label(5, grasp=10, lift=20, drop=None), 0)
+    def _rows(self, climb_from=60, length=200):
+        """Grasp at 60, the climb commanded only from `climb_from`."""
+        rows = rows_for([0.02] * length, length=length)
+        for i, row in enumerate(rows):
+            if 60 <= i < climb_from:
+                row["vel_cmd"] = np.array([0.0, 0.0, 0.0])
+        return rows
 
-    def test_between_the_grasp_and_the_lift_is_masked(self):
-        self.assertIsNone(holding_label(15, grasp=10, lift=20, drop=None))
+    def test_a_climb_after_the_grasp_is_a_positive(self):
+        rows = self._rows()
+        self.assertEqual(holding_label(rows, 70, grasp=60), 1)
 
-    def test_a_grasp_that_never_lifted_is_masked_throughout(self):
-        """Closing on something and never picking it up proves nothing either way."""
-        self.assertIsNone(holding_label(50, grasp=10, lift=None, drop=None))
+    def test_holding_still_after_the_grasp_is_a_negative(self):
+        """Gripping without going up yet is exactly when the head should say not yet."""
+        rows = self._rows(climb_from=90)
+        self.assertEqual(holding_label(rows, 75, grasp=60), 0)
+        self.assertEqual(holding_label(rows, 95, grasp=60), 1)
 
-    def test_from_the_lift_to_the_drop_is_positive(self):
-        self.assertEqual(holding_label(25, grasp=10, lift=20, drop=40), 1)
+    def test_a_climb_before_the_grasp_is_a_negative(self):
+        """Backing off to try again is not a pick."""
+        rows = self._rows()
+        rows[30]["vel_cmd"] = np.array([0.0, 0.0, 0.3])
+        self.assertEqual(holding_label(rows, 30, grasp=60), 0)
 
-    def test_the_drop_ends_the_carry(self):
-        """Whether the operator opened the jaws or the object slipped out of them."""
-        self.assertEqual(holding_label(40, grasp=10, lift=20, drop=40), 0)
-        self.assertEqual(holding_label(45, grasp=10, lift=20, drop=40), 0)
+    def test_the_carry_is_counted_from_the_climb(self):
+        """Operators hold a grip for seconds before climbing, so a window counted from the
+        grasp can end before the first positive."""
+        rows = self._rows(climb_from=150)
+        result, _, _ = mine_episode(rows, 30.0, CALIBRATION, approach_seconds=2.0,
+                                    carry_seconds=0.5, rise_m=0.05)
+        self.assertEqual(result[-1]["frame_index"], 150 + 15)
+        self.assertEqual([r["holding"] for r in result if r["frame_index"] >= 60],
+                         [0] * 90 + [1] * 16)
+
+    def test_a_recording_without_the_command_is_refused(self):
+        rows = self._rows()
+        for row in rows:
+            row["vel_cmd"] = None
+        with self.assertRaises(SystemExit):
+            mine_episode(rows, 30.0, CALIBRATION, 2.0, 0.5, 0.05)
 
 
 class TestMineEpisode(unittest.TestCase):
@@ -214,8 +236,7 @@ class TestMineEpisode(unittest.TestCase):
         for position and are not what the new masking is about.
 
         What they do keep is the labels that describe the gripper rather than where the
-        object is. `holding` is one of those but has a window of its own, which
-        TestHoldingWindow covers."""
+        object is. `holding` is one of those, and TestHoldingWindow covers it."""
         result, _, _ = self._mine([0.02] * 90)
         carried = [r for r in result if r["seconds_to_grasp"] < 0]
         self.assertGreater(len(carried), 0)
@@ -223,23 +244,6 @@ class TestMineEpisode(unittest.TestCase):
             self.assertIsNone(row["target_uv"])
             self.assertIsNone(row["target_present"])
             self.assertIsNotNone(row["finger"])
-
-    def test_the_carry_is_masked_until_the_grip_takes_the_weight(self):
-        """The grasp is not the lift. Frames between the two look exactly like held ones
-        and the object really is between the jaws, but nothing there proves the grip, so
-        they are masked rather than taught either way."""
-        rows = rows_for([0.02] * 90)
-        result, _, _ = self._mine([0.02] * 90)
-        lift = find_lift(rows, 60, 30.0)
-
-        carried = [r for r in result if r["seconds_to_grasp"] < 0]
-        unproven = [r for r in carried if r["frame_index"] < lift]
-        proven = [r for r in carried if r["frame_index"] >= lift]
-
-        self.assertGreater(len(unproven), 0)
-        self.assertGreater(len(proven), 0)
-        self.assertTrue(all(r["holding"] is None for r in unproven))
-        self.assertTrue(all(r["holding"] == 1 for r in proven))
 
     def test_everything_before_the_grasp_is_a_negative(self):
         """An object in view, in reach, and not in the hand is the case the head keeps

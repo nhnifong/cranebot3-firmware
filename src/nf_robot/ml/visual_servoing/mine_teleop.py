@@ -46,8 +46,12 @@ from nf_robot.ml.lerobot.trim_to_grasp import (
     find_grasp,
 )
 
-# (seconds) how much of the carry after the grasp to keep, for the holding head.
+# (seconds) how much of the climb to keep, counted from the first upward command after the
+# grasp, for the holding head.
 CARRY_SECONDS = 3.0
+# (m/s) commanded climb at or above which the operator has decided to go up; the holding
+# label is that decision, which is the one visual_servo asks the head to make.
+LIFT_COMMAND_MPS = 0.02
 # The canvas the target head predicts over, as a fraction of the frame; must match
 # model.CANVAS_SCALE.
 CANVAS_SCALE = 1.25
@@ -72,9 +76,6 @@ CLOSE_GAP_FRAMES = 10
 # climbing this long later.
 LIFT_ONSET_M = 0.03
 LIFT_CONFIRM_SECONDS = 0.5
-# (normalized 0-1) finger_pressure held this low for MIN_GRASP_SECONDS means the object is
-# gone.
-RELEASE_PRESSURE = 0.05
 # Full-scale commanded finger speed, used to normalize the finger label into -1..1.
 FINGER_SPEED_FULL_SCALE = 90.0
 # Stored frame size, the model's input; 252 = 14 x 18 for the /14 backbone.
@@ -298,38 +299,20 @@ def find_lift(rows, grasp, fps):
     return None
 
 
-def find_drop(rows, lift, fps, release_pressure=RELEASE_PRESSURE,
-              min_release_seconds=MIN_GRASP_SECONDS):
-    """The frame the object stopped being held after `lift` (an open command or a sustained
-    pressure drop), or None."""
-    drop = None
-    for i in range(lift, len(rows)):
-        if rows[i]["finger_speed"] < 0:
-            drop = i
-            break
-
-    hold = max(1, int(round(min_release_seconds * fps)))
-    tail = np.array([r["pressure"] for r in rows[lift:]], dtype=np.float32)
-    if len(tail) >= hold:
-        under = (tail < release_pressure).astype(np.int32)
-        gone = np.convolve(under, np.ones(hold, dtype=np.int32), mode="valid") == hold
-        collapsed = np.flatnonzero(gone)
-        if collapsed.size:
-            slipped = lift + int(collapsed[0])
-            drop = slipped if drop is None else min(drop, slipped)
-    return drop
+def going_up(row):
+    """Whether the operator is commanding a climb on this frame."""
+    return float(row["vel_cmd"][2]) >= LIFT_COMMAND_MPS
 
 
-def holding_label(i, grasp, lift, drop):
-    """Whether frame `i` shows an object securely held: 1 from lift to drop, 0 before the
-    grasp, None between."""
-    if i < grasp:
-        return 0
-    if lift is None or i < lift:
-        return None
-    if drop is not None and i >= drop:
-        return 0
-    return 1
+def first_climb(rows, grasp):
+    """The first frame from the grasp on where the operator commands a climb, or None."""
+    return next((i for i in range(grasp, len(rows)) if going_up(rows[i])), None)
+
+
+def holding_label(rows, i, grasp):
+    """Whether frame `i` is one the operator chose to go up on. Before the grasp a climb is
+    backing off to try again, not a pick, so those frames are 0 whatever the command."""
+    return 1 if i >= grasp and going_up(rows[i]) else 0
 
 
 def wrap_pi(radians):
@@ -369,12 +352,14 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
     # A grasp frame with no usable rangefinder reading has no target to label.
     if not anchor_is_usable(rows[grasp], calibration):
         return None, "no_range", 0
+    if rows[grasp]["vel_cmd"] is None:
+        raise SystemExit("the holding label is the commanded vertical speed, and this "
+                         "recording has no action.vel_z to read it from.")
 
     track = target_track(rows, grasp, calibration, uv_method, jaw_uv, frames)
     wrist_at_grasp = rows[grasp]["wrist_angle"]
     onset = close_onset(rows, grasp)
     lift = find_lift(rows, grasp, fps)
-    drop = None if lift is None else find_drop(rows, lift, fps)
     # The force that turned out to be enough, read at the frame it proved itself on.
     pressure_at_lift = None if lift is None else float(rows[lift]["pressure"])
 
@@ -382,7 +367,10 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
         first = approach_start(track, grasp, margin)
     else:
         first = max(0, grasp - int(round(approach_seconds * fps)))
-    last = min(len(rows) - 1, grasp + int(round(carry_seconds * fps)))
+    # From the climb rather than the grasp, since operators hold a grip for seconds first.
+    climb = first_climb(rows, grasp)
+    last = min(len(rows) - 1,
+               (grasp if climb is None else climb) + int(round(carry_seconds * fps)))
 
     out, dropped, blind = [], 0, 0
     for i in range(first, last + 1):
@@ -401,7 +389,7 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
             "grasp_pressure": (None if pressure_at_lift is None
                                else round(pressure_at_lift, 4)),
             "target_present": 1 if i <= grasp else None,
-            "holding": holding_label(i, grasp, lift, drop),
+            "holding": holding_label(rows, i, grasp),
             "state": {
                 "laser_rangefinder": round(float(r["laser_rangefinder"]), 4),
                 "finger_angle": round(float(r["finger_angle"]), 3),
@@ -727,13 +715,13 @@ def mine_sources(writer, sources, limit: int | None, progress=None, workers: int
                 progress.set_postfix(frames=writer.total, refresh=False)
 
     for repo_id, s in stats.items():
-        # Report the holding label balance, since it is a judgement call.
+        # Report the holding label balance, since it is set by how often operators climb.
         summary = (f"{repo_id}: mined {s['mined']} frames from "
                    f"{s['considered'] - sum(s['skipped'].values())}/{s['considered']} episodes "
                    f"(skipped {s['skipped']}), {s['dropped']} frames dropped as off-canvas "
                    f"or behind the camera, {s['blind']} kept with no target in view "
                    f"({s['blind'] / max(s['mined'], 1) * 100:.0f}% of what was mined), "
-                   f"holding {s['holding'][1]} held / {s['holding'][0]} empty / "
+                   f"holding {s['holding'][1]} going up / {s['holding'][0]} not / "
                    f"{s['holding'][None]} masked")
         if progress is not None:
             progress.write(summary)
@@ -990,7 +978,9 @@ def main():
                         help="How much of the approach before the grasp to label. By "
                              "default, as far back as the target stays tracked and in view, "
                              "which with --uv_method optical-flow is until the flow loses it.")
-    parser.add_argument("--carry_seconds", type=float, default=CARRY_SECONDS)
+    parser.add_argument("--carry_seconds", type=float, default=CARRY_SECONDS,
+                        help="How much of the climb to keep, from the operator's first "
+                             "upward command after the grasp. Default %(default)s.")
     parser.add_argument("--rise_m", type=float, default=RISE_M)
     parser.add_argument("--limit", type=int, default=None, help="Only mine this many episodes")
     what = parser.add_mutually_exclusive_group()

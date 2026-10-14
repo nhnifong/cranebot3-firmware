@@ -182,25 +182,20 @@ so it can be compared against finger_pressure at eval time - the two disagreeing
 informative (pressure without a visual grasp is a snagged carpet or a finger jammed on
 the floor; a visual grasp without pressure is a slipping towel).
 
-Labels for this are available after all, at least from teleop, but pressure crossing the
-grasp threshold is not one of them. That instant says the jaws closed on something, which
-is the cheapest thing in an episode to reach, and a head trained from it learns "an object
-is close in frame" - it then reads near 1 through the whole approach, before anything is
-in the hand.
+Despite the name, what the head is taught is the decision visual_servo needs from it: go
+up now. The teleop label is the operator making that decision - 1 on every frame after the
+grasp where the commanded vertical speed (`action.vel_z`) is at least
+`mine_teleop.LIFT_COMMAND_MPS` (0.02 m/s), 0 otherwise. Frames between the grasp and the
+climb, where the operator is still settling the grip, are 0: not yet. Frames before the
+grasp are 0 whatever the command, since a climb there is backing off to try again.
 
-The positives are the carry: from the **lift**, where the grip proves itself by taking the
-weight, to the **drop**, where the operator opens the jaws or the object slips out of them
-(mine_teleop.find_lift and find_drop). Object held, off the floor, still in frame is the
-cleanest positive-label data in the set, and everything before the grasp is a real
-negative - an object in view, in reach, and not in the hand is exactly the case the head
-keeps getting wrong. The frames between the grasp and the lift are masked: they look like
-the held ones and the object really is between the jaws, only unproven.
+Felt pressure plays no part in it. An earlier version labelled from the lift to a drop
+found partly from pressure, and thin objects - paper, lint, fabric - settle the grip
+below the release threshold, so their carries were taught as empty.
 
-That costs about half the positives (measured over 744 mined grasps: 66k frames to 30k,
-with the balance moving from 1:2.8 to 1:6.2 against) and it drops the ~12% of episodes
-whose lift lands past the end of the retained carry. `--carry_seconds` is the knob if the
-head turns out to be starved; the default 3.0 was chosen when a positive started at the
-grasp, and the median lift is 1.37s after it.
+The retained carry is `--carry_seconds` (3.0) counted from the first upward command, not
+from the grasp: operators hold a grip for a median 1.3-1.9s before climbing, and over 3s in
+`m2-close-grasp-sep29-26`.
 
 Synthetic frames mostly can't be labelled for this, so mask the loss there rather than
 guessing. Composites with an object pasted between the jaws could supply positives later
@@ -452,9 +447,8 @@ Then the labels fall out per head:
 - **target_present**: 1 throughout the mined window. Do not emit 0 for other frames -
   we do not know that nothing graspable was visible, and the honest label is null.
   Negatives come from synthetic bare-floor frames.
-- **holding**: 1 from the lift to the drop, 0 before the grasp instant and after the
-  drop, null between the grasp and the lift. See head 5 above for why the grasp instant
-  is the wrong boundary.
+- **holding**: 1 where the operator commands a climb after the grasp, 0 everywhere else.
+  See head 5 above.
 
 Note that this labels the target as *where the jaws ended up*, which is not the object's
 visual centroid. That is a feature: it is the chunky-lump answer, learned from a human
