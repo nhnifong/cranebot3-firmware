@@ -26,6 +26,7 @@ import argparse
 import json
 import logging
 import math
+import os
 import random
 import shutil
 from pathlib import Path
@@ -607,90 +608,144 @@ def report_sources(sources):
     return usable
 
 
-def mine_source(writer, root: Path, repo_id: str, approach_seconds: float,
-                carry_seconds: float, rise_m: float, limit: int | None, progress=None,
-                mode: str = MODE_GRASPS, stride: int = SWEEP_STRIDE,
-                image_size=IMAGE_SIZE, fetch_images: bool = True,
-                uv_method: str = DEFAULT_UV_METHOD, jaw_uv=None):
-    # The pixel methods decode the approach window a second time, which makes them the
-    # expensive ones.
-    """Mine one teleop dataset into an open shard writer, decoding frames only if `fetch_images`."""
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+# Each worker process's open sources, so an episode only pays for its own frames.
+_OPEN_SOURCES = {}
 
-    calibration = gripper_camera_calibration()
-    episodes, fps = read_columns(root)
 
-    dataset = LeRobotDataset(repo_id, root=root)
-    starts = {
-        int(r["episode_index"]): int(r["dataset_from_index"])
-        for r in dataset.meta.episodes.select_columns(
-            ["episode_index", "dataset_from_index"]).to_list()
-    }
-    if IMAGE_KEY not in dataset.meta.video_keys:
-        raise ValueError(f"{repo_id} has no {IMAGE_KEY}; present: {dataset.meta.video_keys}")
-    src_h, src_w = dataset.meta.features[IMAGE_KEY]["shape"][:2]
-    if progress is not None:
-        progress.set_description(f"{repo_id.split('/')[-1]} {src_w}x{src_h}")
+def init_worker():
+    """One thread per worker, since the pool itself is the parallelism."""
+    import torch
 
-    mined, skipped = 0, {"no_grasp": 0, "no_rise": 0, "no_range": 0}
-    dropped_total, blind_total = 0, 0
-    considered = 0
-    # Report the holding label balance, since it is a judgement call.
-    holding_counts = {1: 0, 0: 0, None: 0}
-    for n, ep in enumerate(sorted(episodes)):
-        if limit and n >= limit:
-            break
-        considered += 1
-        if progress is not None:
-            progress.update(1)
-        if mode == MODE_NEGATIVES:
-            result, info, blind = mine_negative_episode(episodes[ep], stride)
-        elif mode == MODE_FALSE_GRABS:
-            result, info, blind = mine_false_grab_episode(episodes[ep], stride)
-        else:
-            result, info, blind = mine_episode(
-                episodes[ep], fps, calibration, approach_seconds, carry_seconds, rise_m,
-                uv_method=uv_method, jaw_uv=jaw_uv,
-                frames=(lambda i, base=starts[ep]: frame_bgr(dataset, base + i))
-                if uv_method in PIXEL_METHODS else None)
-        if result is None:
-            skipped[info] += 1
-            continue
-        dropped_total += info
-        blind_total += blind
-        base = starts[ep]
+    cv2.setNumThreads(1)
+    torch.set_num_threads(1)
+
+
+def open_source(repo_id: str, root: Path):
+    """A source's episode columns, fps, dataset and episode start indices, cached per process."""
+    key = (repo_id, str(root))
+    if key not in _OPEN_SOURCES:
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+        episodes, fps = read_columns(root)
+        dataset = LeRobotDataset(repo_id, root=root)
+        starts = {
+            int(r["episode_index"]): int(r["dataset_from_index"])
+            for r in dataset.meta.episodes.select_columns(
+                ["episode_index", "dataset_from_index"]).to_list()
+        }
+        _OPEN_SOURCES[key] = (episodes, fps, dataset, starts)
+    return _OPEN_SOURCES[key]
+
+
+def mine_one(task):
+    """Mine one episode as (repo_id, result, info, blind), its rows carrying their images
+    (or what to fetch them by)."""
+    repo_id, root, ep, opts = task
+    episodes, fps, dataset, starts = open_source(repo_id, root)
+    mode = opts["mode"]
+    if mode == MODE_NEGATIVES:
+        result, info, blind = mine_negative_episode(episodes[ep], opts["stride"])
+    elif mode == MODE_FALSE_GRABS:
+        result, info, blind = mine_false_grab_episode(episodes[ep], opts["stride"])
+    else:
+        uv_method = opts["uv_method"]
+        result, info, blind = mine_episode(
+            episodes[ep], fps, gripper_camera_calibration(), opts["approach_seconds"],
+            opts["carry_seconds"], opts["rise_m"],
+            uv_method=uv_method, jaw_uv=opts["jaw_uv"],
+            frames=(lambda i, base=starts[ep]: frame_bgr(dataset, base + i))
+            if uv_method in PIXEL_METHODS else None)
+    if result is not None:
         for sample in result:
-            index = base + sample["frame_index"]
-            if fetch_images:
-                sample["image"] = encode_frame(frame_bgr(dataset, index), image_size)
+            index = starts[ep] + sample["frame_index"]
+            if opts["fetch_images"]:
+                sample["image"] = encode_frame(frame_bgr(dataset, index), opts["image_size"])
             else:
                 sample["_fetch"] = (repo_id, str(root), index)
             sample["episode_index"] = ep
             sample["source_repo_id"] = repo_id
-            writer.add(sample)
-            holding_counts[sample["holding"]] += 1
-            mined += 1
-        if progress is not None:
-            progress.set_postfix(frames=writer.total, refresh=False)
+    return repo_id, result, info, blind
 
-    summary = (f"{repo_id}: mined {mined} frames from "
-               f"{considered - sum(skipped.values())}/{considered} episodes "
-               f"(skipped {skipped}), {dropped_total} frames dropped as off-canvas "
-               f"or behind the camera, {blind_total} kept with no target in view "
-               f"({blind_total / max(mined, 1) * 100:.0f}% of what was mined), "
-               f"holding {holding_counts[1]} held / {holding_counts[0]} empty / "
-               f"{holding_counts[None]} masked")
-    if progress is not None:
-        progress.write(summary)
-    else:
-        logging.info(summary)
-    return mined
+
+def episode_indices(root: Path):
+    """A source's episode indices, read from the episode_index column alone."""
+    import pyarrow.parquet as pq
+
+    eps = set()
+    for path in sorted(root.glob("data/chunk-*/file-*.parquet")):
+        eps.update(pq.read_table(path, columns=["episode_index"])
+                   .column("episode_index").to_pylist())
+    return sorted(eps)
+
+
+def default_workers():
+    """Enough processes to keep about 80% of the cores busy."""
+    return max(1, int(os.cpu_count() * 0.8))
+
+
+def mine_sources(writer, sources, limit: int | None, progress=None, workers: int = 1,
+                 mode: str = MODE_GRASPS, stride: int = SWEEP_STRIDE,
+                 approach_seconds: float | None = None, carry_seconds: float = CARRY_SECONDS,
+                 rise_m: float = RISE_M, image_size=IMAGE_SIZE, fetch_images: bool = True,
+                 uv_method: str = DEFAULT_UV_METHOD, jaw_uv=None):
+    """Mine the (repo_id, root) sources into an open shard writer, one episode per task
+    across `workers` processes, adding rows in source and episode order."""
+    import multiprocessing
+
+    opts = dict(mode=mode, stride=stride, approach_seconds=approach_seconds,
+                carry_seconds=carry_seconds, rise_m=rise_m, image_size=image_size,
+                fetch_images=fetch_images, uv_method=uv_method, jaw_uv=jaw_uv)
+    tasks = []
+    stats = {}
+    for repo_id, root in sources:
+        info = json.loads((root / "meta" / "info.json").read_text())
+        if IMAGE_KEY not in info["features"]:
+            raise ValueError(f"{repo_id} has no {IMAGE_KEY}")
+        eps = episode_indices(root)[:limit or None]
+        tasks += [(repo_id, root, ep, opts) for ep in eps]
+        stats[repo_id] = {"mined": 0, "considered": len(eps), "dropped": 0, "blind": 0,
+                          "skipped": {"no_grasp": 0, "no_rise": 0, "no_range": 0},
+                          "holding": {1: 0, 0: 0, None: 0}}
+
+    # spawn rather than fork: torch, cv2 and the video decoders don't survive a fork well.
+    with multiprocessing.get_context("spawn").Pool(workers, initializer=init_worker) as pool:
+        for repo_id, result, info, blind in pool.imap(mine_one, tasks):
+            s = stats[repo_id]
+            if progress is not None:
+                progress.set_description(repo_id.split("/")[-1], refresh=False)
+                progress.update(1)
+            if result is None:
+                s["skipped"][info] += 1
+                continue
+            s["dropped"] += info
+            s["blind"] += blind
+            for sample in result:
+                writer.add(sample)
+                s["holding"][sample["holding"]] += 1
+                s["mined"] += 1
+            if progress is not None:
+                progress.set_postfix(frames=writer.total, refresh=False)
+
+    for repo_id, s in stats.items():
+        # Report the holding label balance, since it is a judgement call.
+        summary = (f"{repo_id}: mined {s['mined']} frames from "
+                   f"{s['considered'] - sum(s['skipped'].values())}/{s['considered']} episodes "
+                   f"(skipped {s['skipped']}), {s['dropped']} frames dropped as off-canvas "
+                   f"or behind the camera, {s['blind']} kept with no target in view "
+                   f"({s['blind'] / max(s['mined'], 1) * 100:.0f}% of what was mined), "
+                   f"holding {s['holding'][1]} held / {s['holding'][0]} empty / "
+                   f"{s['holding'][None]} masked")
+        if progress is not None:
+            progress.write(summary)
+        else:
+            logging.info(summary)
 
 
 def mine(sources, output_root: Path, split: str, approach_seconds: float,
          carry_seconds: float, rise_m: float, limit: int | None,
          mode: str = MODE_GRASPS, stride: int = SWEEP_STRIDE,
-         image_size=IMAGE_SIZE, uv_method: str = DEFAULT_UV_METHOD, jaw_uv=None):
+         image_size=IMAGE_SIZE, uv_method: str = DEFAULT_UV_METHOD, jaw_uv=None,
+         workers: int = 1):
     """Replace this producer's share of the pool with rows mined from the given (repo_id,
     root) sources."""
     split_dir = output_root / split
@@ -714,10 +769,10 @@ def mine(sources, output_root: Path, split: str, approach_seconds: float,
     total = sum(min(source_episode_count(root), limit or 1 << 30) for _, root in sources)
     writer = ShardWriter(split_dir, prefix=prefix)
     with tqdm(total=total, unit="ep", dynamic_ncols=True) as progress:
-        for repo_id, root in sources:
-            mine_source(writer, root, repo_id, approach_seconds, carry_seconds, rise_m,
-                        limit, progress, mode=mode, stride=stride,
-                        image_size=image_size, uv_method=uv_method, jaw_uv=jaw_uv)
+        mine_sources(writer, sources, limit, progress, workers, mode=mode, stride=stride,
+                     approach_seconds=approach_seconds, carry_seconds=carry_seconds,
+                     rise_m=rise_m, image_size=image_size, uv_method=uv_method,
+                     jaw_uv=jaw_uv)
     writer.flush()
 
     write_dataset_card(output_root)
@@ -728,7 +783,7 @@ def mine(sources, output_root: Path, split: str, approach_seconds: float,
 def mine_preview(sources, approach_seconds: float, carry_seconds: float, rise_m: float,
                  limit: int | None, count: int, seed: int, mode: str = MODE_GRASPS,
                  stride: int = SWEEP_STRIDE, image_size=IMAGE_SIZE,
-                 uv_method: str = DEFAULT_UV_METHOD, jaw_uv=None):
+                 uv_method: str = DEFAULT_UV_METHOD, jaw_uv=None, workers: int = 1):
     """Label every frame a real run would, keep a random `count` of the rows, write nothing."""
     from tqdm import tqdm
 
@@ -740,11 +795,10 @@ def mine_preview(sources, approach_seconds: float, carry_seconds: float, rise_m:
     total = sum(min(source_episode_count(root), limit or 1 << 30) for _, root in sources)
     sampler = ReservoirSampler(count, seed)
     with tqdm(total=total, unit="ep", dynamic_ncols=True) as progress:
-        for repo_id, root in sources:
-            mine_source(sampler, root, repo_id, approach_seconds, carry_seconds, rise_m,
-                        limit, progress, mode=mode, stride=stride,
-                        image_size=image_size, fetch_images=False,
-                        uv_method=uv_method, jaw_uv=jaw_uv)
+        mine_sources(sampler, sources, limit, progress, workers, mode=mode, stride=stride,
+                     approach_seconds=approach_seconds, carry_seconds=carry_seconds,
+                     rise_m=rise_m, image_size=image_size, fetch_images=False,
+                     uv_method=uv_method, jaw_uv=jaw_uv)
 
     logging.info(f"{sampler.total} rows would be written; previewing {len(sampler.rows)}")
     fetch_preview_images(sampler.rows, image_size)
@@ -955,6 +1009,9 @@ def main():
     parser.add_argument("--negative_stride", "--false_grab_stride", dest="stride",
                         type=int, default=SWEEP_STRIDE,
                         help="With --negatives or --false_grabs, keep one frame in this many")
+    parser.add_argument("--workers", type=int, default=default_workers(),
+                        help="Processes to mine episodes in, one episode each at a time. "
+                             "Default %(default)s, about 80%% of the cores.")
     parser.add_argument("--image_size", type=int, nargs=2, default=list(IMAGE_SIZE),
                         metavar=("WIDTH", "HEIGHT"),
                         help="Frame size to store, which has to suit the backbone the "
@@ -992,6 +1049,7 @@ def main():
             args.preview_count, args.preview_seed, mode=mode, stride=args.stride,
             image_size=tuple(args.image_size),
             uv_method=args.uv_method, jaw_uv=tuple(args.jaw_uv) if args.jaw_uv else None,
+            workers=args.workers,
         )
         render_preview(rows, Path(args.preview_dir), args.preview_group)
         return
@@ -1002,6 +1060,7 @@ def main():
         mode=mode, stride=args.stride,
         image_size=tuple(args.image_size),
         uv_method=args.uv_method, jaw_uv=tuple(args.jaw_uv) if args.jaw_uv else None,
+        workers=args.workers,
     )
     if args.preview_dir and total:
         write_preview(split_dir, Path(args.preview_dir),
