@@ -251,7 +251,13 @@ def ensure_motor_ids(controller, motor_type=MOTOR_TYPE, targets=ANCHOR_MOTOR_TAR
     configure_one_motor(
         controller, "upper", upper_motor_id, upper_feedback_id, motor_type=motor_type)
 
+    # On hats with the motor power MOSFET, hot plugging the lower motor browns out the pi,
+    # so cut motor power while it is plugged in.
+    time.sleep(0.5)
+    set_motor_power(False)
     input("Plug in both motors, then press Enter...")
+    set_motor_power(True)
+    time.sleep(0.5)
 
     # With the upper motor now on id 2, the lower motor is the only one still on the
     # factory id 1, so set its feedback_id in place without unplugging anything.
@@ -263,7 +269,7 @@ def ensure_motor_ids(controller, motor_type=MOTOR_TYPE, targets=ANCHOR_MOTOR_TAR
         controller, "lower", lower_motor_id, lower_feedback_id, motor_type=motor_type)
 
 
-    input("Unplug and re-plug the upper motor to power cycle it, then press Enter...")
+    input("On boards without the mosfet, Unplug and re-plug the upper motor to power cycle it. then press Enter...")
     power_cycle_motors()
 
     # This re-reads live registers, i.e. RAM, so it confirms the ids are in effect but
@@ -287,10 +293,16 @@ def power_cycle_motors(off_s=0.5, settle_s=0.5):
     builder power cycles the upper motor by hand instead. pinctrl leaves the pin
     driven after it exits, unlike a gpiozero device, which releases it on close.
     """
-    subprocess.run(["sudo", "pinctrl", "set", str(MOTOR_POWER_GPIO), "op", "dl"], check=True)
+    set_motor_power(False)
     time.sleep(off_s)
-    subprocess.run(["sudo", "pinctrl", "set", str(MOTOR_POWER_GPIO), "op", "dh"], check=True)
+    set_motor_power(True)
     time.sleep(settle_s)
+
+
+def set_motor_power(on):
+    """Switch motor power through the MOSFET on GPIO23 of newer anchor hats. No-op on older hats."""
+    level = "dh" if on else "dl"
+    subprocess.run(["sudo", "pinctrl", "set", str(MOTOR_POWER_GPIO), "op", level], check=True)
 
 
 def wind_with_ramp(motor, direction, total_revs, max_rev_per_s=4.0, accel_rev_per_s2=2.0, dt=0.02):
