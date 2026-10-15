@@ -559,7 +559,7 @@ given mode in one run, since a second run replaces the first rather than adding 
 ### Positives (default)
 
     python -m nf_robot.ml.visual_servoing.mine_teleop \
-        --repo_id naavox/grip_o naavox/simple_grasp_spin justink04/m2-close-grasp-sep29-26 \
+        --repo_id naavox/grip_o naavox/simple_grasp_spin justink04/m2-close-grasp-sep29-26 naavox/thins \
         --output_root datasets/vs-centroid-dataset \
         --preview_dir datasets/vs-centroid-dataset/preview \
         --preview_count 200 \

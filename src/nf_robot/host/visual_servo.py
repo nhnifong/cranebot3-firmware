@@ -1006,7 +1006,7 @@ class VisualServo:
         end_time = time.time() + PRESSURE_SENSE_WAIT
         held, evidence = False, 'no frames'
         angle = self.ob.datastore.finger.getLast()[1]
-        while time.time() < end_time and angle < CLOSED:
+        while time.time() < end_time and angle < CLOSED - FINGERS_SHUT_MARGIN_DEG:
             prediction = await self.predict()
             if prediction is not None:
                 await self.drive_fingers(prediction)
