@@ -29,6 +29,14 @@ else
     echo "preconfigured.nmconnection has no ssid set; skipping (unit will onboard via the QR code scanner)"
 fi
 
+# The minbase layer ships systemd-networkd with its own wlan0 and eth0 configs. Running it
+# alongside NetworkManager gives wlan0 two DHCP leases, and NetworkManager's lower-metric route
+# makes its address the source for outbound traffic, so units report an IP the router doesn't
+# list. Leave networking to NetworkManager alone.
+echo "Disabling systemd-networkd in favor of NetworkManager..."
+rm -f "$ROOTFS_DIR"/etc/systemd/network/*.network
+run_in_chroot "systemctl disable systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service 2>/dev/null || true"
+
 # Disable Wi-Fi power save
 # (wifi.powersave = 2 => disabled) for all connections.
 echo "Disabling Wi-Fi power save..."
