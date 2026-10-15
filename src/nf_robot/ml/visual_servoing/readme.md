@@ -126,15 +126,19 @@ what a rate label describes is a teleoperator's thumb: on the same situation it 
 one frame and 0 the next, and 69% of the mined values are exactly zero. What a grasp
 actually consists of is a decision and a target, so those are what get predicted:
 
-  **3a. Probability the close should have begun by this frame.** A step at the close
-  onset, found by walking back from the grasp through the run of frames commanding a
-  close - so it is 0 through the approach and 1 from the moment the operator committed.
-  47% positive on mined rows, against the rate head's 69% zeros. Bare-floor negatives
-  carry 0, which is a fact about them rather than a mask.
+  **3a. Probability that a close begun now would make a grip that lifts.** 1 through the
+  closing movement that made the episode's last lifted grip, from the operator's close
+  command until the fingers settle (the force controller keeps them creeping after the
+  command ends) or the lift, whichever is first. 0 before it, including closes on earlier
+  failed grips, and masked after it, where the question no longer applies. Bare-floor
+  negatives carry 0, which is a fact about them rather than a mask.
 
-  **3b. The grip force the object turned out to need**, read off the finger sensor at the
-  moment the lift began, and the same value on every frame of the episode: it is a
-  property of the object, not of the frame. Softplus, since a negative force is not one
+  **3b. The grip force the operator carried the object at**: the median commanded force
+  from the lift to the start of the opening that released it, and the same value on
+  every frame of the episode: it is a property of the object, not of the frame. Commanded
+  rather than felt because that is what deployment closes to, and a median over the
+  carry because a single frame at the lift lands on the closing peak in a fifth of
+  episodes. Grips that never entered force mode fall back to the felt pressure. Softplus, since a negative force is not one
   the gripper can hold.
 
 Deployment stops being a rate follower and becomes a program: hold the fingers still
@@ -188,19 +192,24 @@ is the cheapest thing in an episode to reach, and a head trained from it learns 
 is close in frame" - it then reads near 1 through the whole approach, before anything is
 in the hand.
 
-The positives are the carry: from the **lift**, where the grip proves itself by taking the
-weight, to the **drop**, where the operator opens the jaws or the object slips out of them
-(mine_teleop.find_lift and find_drop). Object held, off the floor, still in frame is the
-cleanest positive-label data in the set, and everything before the grasp is a real
-negative - an object in view, in reach, and not in the hand is exactly the case the head
-keeps getting wrong. The frames between the grasp and the lift are masked: they look like
-the held ones and the object really is between the jaws, only unproven.
+What the head answers in deployment is whether it is safe to lift now, and the operator
+answered that by lifting. The grip labelled is the last one in the episode that rose
+`--rise_m`; a grip runs from contact until the gripper is out of force mode and pressure
+is under 0.02, so a light grip on paper or a mid-carry force adjustment does not end it.
+The **lift** is the start of the operator's up command, not a height threshold, because
+closing on the floor levers the gripper up a few cm.
 
-That costs about half the positives (measured over 744 mined grasps: 66k frames to 30k,
-with the balance moving from 1:2.8 to 1:6.2 against) and it drops the ~12% of episodes
-whose lift lands past the end of the retained carry. `--carry_seconds` is the knob if the
-head turns out to be starved; the default 3.0 was chosen when a positive started at the
-grasp, and the median lift is 1.37s after it.
+Positive from the lift to the release. Before the lift, once the fingers have settled,
+a frame is also positive where the pressure over the last 0.5s drifts and wobbles no more
+than it did at the lift - the operator was as safe there and only slower to act, and a
+soft object's steady creep counts as steady because the operator lifted through it.
+Everything before contact and after the release is a real negative - an object in view,
+in reach, and not in the hand is exactly the case the head keeps getting wrong. The rest
+of the grip (the close, pressure still settling) is masked.
+
+In grip_o, lifting before the fingers settled was common (481 of 1336 lifted grips) and
+never ended in the pressure collapsing mid-carry; true collapses were 6 in 1336. The
+carry kept is `--carry_seconds` past the lift.
 
 Synthetic frames mostly can't be labelled for this, so mask the loss there rather than
 guessing. Composites with an object pasted between the jaws could supply positives later

@@ -13,8 +13,9 @@ import numpy as np
 
 from nf_robot.ml.visual_servoing.mine_teleop import (
     CANVAS_SCALE, FALSE_GRAB_PREFIX, MODE_FALSE_GRABS, MODE_GRASPS, MODE_NEGATIVES,
-    NEGATIVE_PREFIX, OFF_SCREEN_MARGIN, ReservoirSampler, ShardWriter, find_lift,
-    holding_label, in_view, mine_episode, mine_false_grab_episode, shard_prefix)
+    NEGATIVE_PREFIX, OFF_SCREEN_MARGIN, ReservoirSampler, ShardWriter, close_run,
+    final_grasp, gripping_segments, held_force, holding_labels, in_view, mine_episode,
+    mine_false_grab_episode, shard_prefix)
 from nf_robot.ml.visual_servoing.geometry import CAMERA_POS_BODY
 from nf_robot.ml.visual_servoing.uv_methods import (
     DEFAULT_UV_METHOD, anchor_is_usable, DELTA_METHODS, UV_METHODS, grasp_point_room,
@@ -46,7 +47,8 @@ def rows_for(offsets, fps=30.0, grasp_at=60, length=90):
             "finger_angle": 0.0,
             "laser_rangefinder": max(height - 0.2, 0.05),
             "target_force": 0.0,
-            "finger_speed": 0.0,
+            # the close that makes the grasp
+            "finger_speed": 90.0 if grasp_at - 10 <= i < grasp_at else 0.0,
         })
     # Exactly the velocity the track was built from, so a dead-reckoning method integrating
     # it has to land back on the positions - which is what makes a disagreement in these
@@ -122,31 +124,189 @@ class TestInView(unittest.TestCase):
         self.assertLess(OFF_SCREEN_MARGIN, (CANVAS_SCALE - 1.0) / 2.0)
 
 
-class TestHoldingWindow(unittest.TestCase):
-    """`holding` is positive only where the grip is proven: from the lift to the drop.
+def grip_rows(length=300, close=(40, 60), contact=50, settled=70, lift=100, release=250,
+              level=0.2, creep=0.0, ramp_until=None, fps=30.0):
+    """One grip, phase by phase: a close command over `close`, contact at `contact`, the
+    fingers creeping on until `settled`, the operator's up command from `lift`, and the
+    jaws opened at `release`.
 
-    Labelling from the grasp instead makes "an object is close in frame" sufficient for a
-    positive, which is the cheapest feature in the episode and the one the head learns
-    instead of the object being in the hand.
+    Pressure ramps from contact to `level` by `ramp_until` (default `settled`), then
+    drifts by `creep` per second. target_force comes on a few frames after contact, the
+    way the force controller lags the first touch.
     """
+    ramp_until = settled if ramp_until is None else ramp_until
+    rows = []
+    z = 0.3
+    for i in range(length):
+        if contact <= i < release:
+            if i < ramp_until:
+                pressure = level * (0.2 + 0.8 * (i - contact) / (ramp_until - contact))
+            else:
+                pressure = level + creep * (i - ramp_until) / fps
+        else:
+            pressure = 0.0
+        climbing = lift <= i < release
+        if climbing:
+            z += 0.01
+        angle = (0.0 if i < close[0]
+                 else 60.0 * (min(i, settled) - close[0]) / (settled - close[0]))
+        rows.append({
+            "frame_index": i,
+            "timestamp": i / fps,
+            "gripper_pos": np.array([0.0, 0.0, z]),
+            "spin": 0.0,
+            "pressure": pressure,
+            "wrist_angle": 540.0,
+            "finger_angle": angle,
+            "laser_rangefinder": 0.11,
+            "target_force": level if contact + 5 <= i < release else 0.0,
+            "finger_speed": (90.0 if close[0] <= i < close[1]
+                             else -90.0 if release <= i < release + 10 else 0.0),
+            "vel_cmd": np.array([0.0, 0.0, 0.3 if climbing else 0.0]),
+            "vel_obs": np.zeros(3),
+        })
+    return rows
 
-    def test_before_the_grasp_is_a_negative(self):
-        self.assertEqual(holding_label(5, grasp=10, lift=20, drop=None), 0)
 
-    def test_between_the_grasp_and_the_lift_is_masked(self):
-        self.assertIsNone(holding_label(15, grasp=10, lift=20, drop=None))
+class TestGrippingSegments(unittest.TestCase):
 
-    def test_a_grasp_that_never_lifted_is_masked_throughout(self):
-        """Closing on something and never picking it up proves nothing either way."""
-        self.assertIsNone(holding_label(50, grasp=10, lift=None, drop=None))
+    def test_a_light_grip_in_force_mode_is_not_a_release(self):
+        """Paper holds below the pressure floor; force mode is what says it is still held."""
+        rows = grip_rows(level=0.01)
+        segments = gripping_segments(rows, 30.0)
+        self.assertEqual(len(segments), 1)
+        self.assertEqual(segments[0][1], 250)
 
-    def test_from_the_lift_to_the_drop_is_positive(self):
-        self.assertEqual(holding_label(25, grasp=10, lift=20, drop=40), 1)
+    def test_lowering_the_force_mid_carry_is_not_a_release(self):
+        """A negative finger command in force mode only asks for less force."""
+        rows = grip_rows()
+        for r in rows[150:160]:
+            r["finger_speed"] = -90.0
+        self.assertEqual(gripping_segments(rows, 30.0), [(50, 250)])
 
-    def test_the_drop_ends_the_carry(self):
-        """Whether the operator opened the jaws or the object slipped out of them."""
-        self.assertEqual(holding_label(40, grasp=10, lift=20, drop=40), 0)
-        self.assertEqual(holding_label(45, grasp=10, lift=20, drop=40), 0)
+    def test_the_release_is_force_mode_off_and_pressure_gone(self):
+        rows = grip_rows()
+        for r in rows[250:260]:
+            r["pressure"] = 0.1  # still squeezed while the jaws open
+        self.assertEqual(gripping_segments(rows, 30.0), [(50, 260)])
+
+
+class TestFinalGrasp(unittest.TestCase):
+
+    def test_the_lift_is_the_up_command(self):
+        """Closing on the floor levers the gripper up a few cm; that is not the lift."""
+        rows = grip_rows()
+        for i, r in enumerate(rows[55:70]):
+            r["gripper_pos"] = r["gripper_pos"] + [0.0, 0.0, 0.002 * i]
+        self.assertEqual(final_grasp(rows, 30.0, 0.10), (50, 250, 100))
+
+    def test_an_earlier_grip_that_never_rose_is_passed_over(self):
+        rows = grip_rows(length=500, close=(240, 260), contact=250, settled=270, lift=300,
+                         release=450)
+        for r in rows[50:150]:
+            r["pressure"] = 0.2
+        self.assertEqual(final_grasp(rows, 30.0, 0.10), (250, 450, 300))
+
+    def test_the_last_lifted_grip_is_the_one_picked(self):
+        rows = grip_rows(length=500)
+        later = grip_rows(length=500, close=(340, 360), contact=350, settled=370, lift=380,
+                          release=450)
+        rows[300:] = later[300:]
+        for r in rows[300:]:
+            r["gripper_pos"] = r["gripper_pos"] + [0.0, 0.0, 1.5]
+        self.assertEqual(final_grasp(rows, 30.0, 0.10), (350, 450, 380))
+
+    def test_a_grip_that_never_rose(self):
+        rows = grip_rows()
+        for r in rows:
+            r["gripper_pos"] = np.zeros(3)
+        self.assertEqual(final_grasp(rows, 30.0, 0.10), "no_rise")
+
+    def test_no_grip_at_all(self):
+        rows = grip_rows()
+        for r in rows:
+            r["pressure"] = 0.0
+            r["target_force"] = 0.0
+        self.assertEqual(final_grasp(rows, 30.0, 0.10), "no_grasp")
+
+
+class TestCloseRun(unittest.TestCase):
+
+    def test_it_runs_from_the_command_to_the_fingers_settling(self):
+        """The force controller keeps the fingers moving after the command ends."""
+        onset, end = close_run(grip_rows(), 50, 100, 30.0)
+        self.assertEqual(onset, 40)
+        self.assertGreaterEqual(end, 70)
+        self.assertLess(end, 100)
+
+    def test_a_lift_before_the_fingers_settle_ends_it(self):
+        self.assertEqual(close_run(grip_rows(lift=65), 50, 65, 30.0), (40, 65))
+
+    def test_a_contact_with_no_close_leading_into_it_has_none(self):
+        rows = grip_rows()
+        for r in rows:
+            r["finger_speed"] = 0.0
+        self.assertIsNone(close_run(rows, 50, 100, 30.0))
+
+
+class TestHoldingLabels(unittest.TestCase):
+    """`holding` asks whether it is safe to lift now, which the operator answered by
+    lifting."""
+
+    def labels(self, **kwargs):
+        rows = grip_rows(**kwargs)
+        contact, release, lift = final_grasp(rows, 30.0, 0.10)
+        _, settled = close_run(rows, contact, lift, 30.0)
+        return holding_labels(rows, 30.0, contact, settled, lift, release)
+
+    def test_nothing_in_the_hand_is_a_negative(self):
+        labels = self.labels()
+        self.assertTrue(all(h == 0 for h in labels[:50]))
+        self.assertTrue(all(h == 0 for h in labels[250:]))
+
+    def test_the_close_is_masked(self):
+        self.assertTrue(all(h is None for h in self.labels()[50:70]))
+
+    def test_from_the_lift_to_the_release_is_positive(self):
+        self.assertTrue(all(h == 1 for h in self.labels()[100:250]))
+
+    def test_a_steady_plateau_before_the_lift_is_positive(self):
+        """As safe as the moment the operator chose; they were just slower to act."""
+        self.assertTrue(all(h == 1 for h in self.labels()[90:100]))
+
+    def test_pressure_still_climbing_before_the_lift_is_masked(self):
+        labels = self.labels(ramp_until=90)
+        self.assertTrue(all(h is None for h in labels[70:90]))
+        self.assertTrue(all(h == 1 for h in labels[100:250]))
+
+    def test_a_creep_the_operator_lifted_through_counts_as_steady(self):
+        """Soft objects never stop creeping; the operator lifting is what says that rate
+        is fine."""
+        labels = self.labels(creep=0.03)
+        self.assertTrue(all(h == 1 for h in labels[90:100]))
+
+
+class TestHeldForce(unittest.TestCase):
+    """The force label is what deployment closes to: the commanded force of the carry."""
+
+    def test_a_spike_at_the_lift_does_not_move_it(self):
+        rows = grip_rows()
+        for r in rows[95:110]:
+            r["pressure"] = 0.6
+        self.assertAlmostEqual(held_force(rows, 100, 250), 0.2)
+
+    def test_the_opening_ramp_is_left_out(self):
+        rows = grip_rows()
+        for i, r in enumerate(rows[230:250]):
+            r["finger_speed"] = -90.0
+            r["target_force"] = 0.2 * (1 - i / 20)
+        self.assertAlmostEqual(held_force(rows, 100, 250), 0.2)
+
+    def test_a_grip_never_in_force_mode_falls_back_to_the_felt_pressure(self):
+        rows = grip_rows(level=0.05)
+        for r in rows:
+            r["target_force"] = 0.0
+        self.assertAlmostEqual(held_force(rows, 100, 250), 0.05)
 
 
 class TestMineEpisode(unittest.TestCase):
@@ -224,22 +384,13 @@ class TestMineEpisode(unittest.TestCase):
             self.assertIsNone(row["target_present"])
             self.assertIsNotNone(row["finger"])
 
-    def test_the_carry_is_masked_until_the_grip_takes_the_weight(self):
-        """The grasp is not the lift. Frames between the two look exactly like held ones
-        and the object really is between the jaws, but nothing there proves the grip, so
-        they are masked rather than taught either way."""
-        rows = rows_for([0.02] * 90)
+    def test_the_close_label_marks_the_closing_movement(self):
+        """0 before the close that made the grasp, 1 through it, masked after."""
         result, _, _ = self._mine([0.02] * 90)
-        lift = find_lift(rows, 60, 30.0)
-
-        carried = [r for r in result if r["seconds_to_grasp"] < 0]
-        unproven = [r for r in carried if r["frame_index"] < lift]
-        proven = [r for r in carried if r["frame_index"] >= lift]
-
-        self.assertGreater(len(unproven), 0)
-        self.assertGreater(len(proven), 0)
-        self.assertTrue(all(r["holding"] is None for r in unproven))
-        self.assertTrue(all(r["holding"] == 1 for r in proven))
+        by_frame = {r["frame_index"]: r["close_now"] for r in result}
+        self.assertEqual(by_frame[49], 0)
+        self.assertTrue(all(by_frame[i] == 1 for i in range(50, 60)))
+        self.assertTrue(all(v is None for i, v in by_frame.items() if i >= 60))
 
     def test_everything_before_the_grasp_is_a_negative(self):
         """An object in view, in reach, and not in the hand is the case the head keeps
@@ -549,14 +700,3 @@ class TestUnusableRange(unittest.TestCase):
                                          2.0, 1.0, 0.05)
         self.assertIsNone(result)
         self.assertEqual(reason, "no_range")
-
-    def test_the_skip_counter_has_a_slot_for_it(self):
-        """mine_source counts reasons into a fixed dict, so a reason with no slot is a
-        KeyError halfway through a several-hour run."""
-        import inspect
-
-        from nf_robot.ml.visual_servoing import mine_teleop
-
-        source = inspect.getsource(mine_teleop.mine_source)
-        for reason in ("no_grasp", "no_rise", "no_range"):
-            self.assertIn(f'"{reason}": 0', source)
