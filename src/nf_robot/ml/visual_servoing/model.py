@@ -56,7 +56,7 @@ class VisualServoNet(GripperGridNet):
     def __init__(self, backbone_id=DEFAULT_BACKBONE, image_size=DEFAULT_IMAGE_SIZE,
                  fuse_layers=4, width=256, attention_layers=3, heads=8, freeze=True,
                  state_dim=STATE_DIM, close_state_keys=CLOSE_STATE_KEYS,
-                 film_state_keys=FILM_STATE_KEYS):
+                 film_state_keys=FILM_STATE_KEYS, global_state_keys=None):
         super().__init__(backbone_id=backbone_id, image_size=image_size,
                          fuse_layers=fuse_layers, width=width,
                          attention_layers=attention_layers, heads=heads, freeze=freeze,
@@ -72,8 +72,13 @@ class VisualServoNet(GripperGridNet):
         # Head 2: (sin 2t, cos 2t), because the grasp axis is pi-periodic.
         self.axis_head = nn.Conv2d(channels, 2, 1)
 
-        # Finger rate, present, holding and grip pressure read the whole image.
-        global_dim = self.global_dim + state_dim
+        # Finger rate, present, holding and grip pressure read the whole image, beside
+        # the same state FiLM gets unless told otherwise. Not finger_angle: closed fingers
+        # let holding answer from the state instead of what is between them.
+        self.global_state_keys = tuple(
+            film_state_keys if global_state_keys is None else global_state_keys)
+        self.global_state_index = [STATE_KEYS.index(k) for k in self.global_state_keys]
+        global_dim = self.global_dim + len(self.global_state_index)
         self.global_head = nn.Sequential(
             # LayerNorm first, or the large [CLS] norm saturates the finger head's tanh.
             nn.LayerNorm(global_dim),
@@ -94,7 +99,8 @@ class VisualServoNet(GripperGridNet):
         """Returns a dict of raw head outputs; see decode() for what they mean."""
         x, global_vec = self.cell_map(pixel_values, state)
 
-        flags = self.global_head(torch.cat([global_vec, state], dim=-1))
+        flags = self.global_head(
+            torch.cat([global_vec, state[:, self.global_state_index]], dim=-1))
         out = {
             "logits": self.logit_head(x).squeeze(1),
             "log_distance": self.distance_head(x).squeeze(1),
@@ -168,6 +174,7 @@ def load_checkpoint(path, device):
         # checkpoints from before these keys were recorded gave both all of the state
         close_state_keys=checkpoint.get("close_state_keys", STATE_KEYS),
         film_state_keys=checkpoint.get("film_state_keys", STATE_KEYS),
+        global_state_keys=checkpoint.get("global_state_keys", STATE_KEYS),
     ).to(device)
     load_head_state(model, checkpoint)
     model.eval()

@@ -15,7 +15,7 @@ try:
 
     from nf_robot.ml.dino_trunk import drop_trunk_weights
     from nf_robot.ml.visual_servoing.model import (
-        CLOSE_POOL, DEFAULT_BACKBONE, DEFAULT_IMAGE_SIZE, VisualServoNet,
+        CLOSE_POOL, DEFAULT_BACKBONE, DEFAULT_IMAGE_SIZE, STATE_KEYS, VisualServoNet,
         adaptive_avg_pool2d, load_checkpoint, predict)
     cached = isinstance(try_to_load_from_cache(DEFAULT_BACKBONE, "config.json"), str)
     AVAILABLE = cached
@@ -82,6 +82,7 @@ class TestCheckpointRoundTrip(unittest.TestCase):
             "fuse_layers": model.fuse_layers, "attention_layers": len(model.attention),
             "freeze": model.freeze, "close_state_keys": list(model.close_state_keys),
             "film_state_keys": list(model.film_state_keys),
+            "global_state_keys": list(model.global_state_keys),
             "state_dict": drop_trunk_weights(model.state_dict(), model.trunk, verify=False),
         }
 
@@ -97,6 +98,19 @@ class TestCheckpointRoundTrip(unittest.TestCase):
         loaded = self.round_trip(self.payload(trained))
         for key, value in trained.state_dict().items():
             self.assertTrue(torch.equal(value, loaded.state_dict()[key]), key)
+
+    def test_a_checkpoint_from_before_global_state_keys_loads(self):
+        """Those trained the global head on every state key."""
+        trained = VisualServoNet(global_state_keys=STATE_KEYS)
+        payload = self.payload(trained)
+        del payload["global_state_keys"]
+        loaded = self.round_trip(payload)
+        self.assertEqual(loaded.global_state_keys, tuple(STATE_KEYS))
+        for key, value in trained.state_dict().items():
+            self.assertTrue(torch.equal(value, loaded.state_dict()[key]), key)
+
+    def test_the_global_head_does_not_read_finger_angle(self):
+        self.assertNotIn("finger_angle", VisualServoNet().global_state_keys)
 
 
 if __name__ == "__main__":

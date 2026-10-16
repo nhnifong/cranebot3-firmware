@@ -252,6 +252,7 @@ def checkpoint_payload(model, args, metrics, epoch):
         "freeze": not args.unfreeze_backbone,
         "close_state_keys": list(model.close_state_keys),
         "film_state_keys": list(model.film_state_keys),
+        "global_state_keys": list(model.global_state_keys),
         "metrics": metrics,
         "epoch": epoch,
         # not needed to rebuild the model, kept so a checkpoint says how it was trained
