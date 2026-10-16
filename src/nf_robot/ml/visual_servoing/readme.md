@@ -211,9 +211,10 @@ In grip_o, lifting before the fingers settled was common (481 of 1336 lifted gri
 never ended in the pressure collapsing mid-carry; true collapses were 6 in 1336. The
 carry kept is `--carry_seconds` past the lift.
 
-Synthetic frames mostly can't be labelled for this, so mask the loss there rather than
-guessing. Composites with an object pasted between the jaws could supply positives later
-if the head turns out to be data-starved.
+Synthetic frames are always negatives, with `synth_frames --holding`: objects are pasted on
+the floor and the fingers over them, so nothing is ever between the jaws. Their closed-finger
+frames are the hard case teleop rarely records, fingers shut on nothing just off the floor.
+Without the flag the loss is masked there.
 
 ## Training notes
 
@@ -653,6 +654,7 @@ two cover the same range distribution:
         --output_root datasets/vs-centroid-dataset/ \
         --ranges_from datasets/vs-centroid-dataset/all \
         --count 80000 \
+        --holding \
         --annotate_dir datasets/vs-centroid-dataset/synth_preview
 
 Composites at `mine_teleop.IMAGE_SIZE`, the same constant the mining above defaults to,

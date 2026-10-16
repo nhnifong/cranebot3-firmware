@@ -304,7 +304,7 @@ def axis_from_wrist_offset(offset_deg):
 
 
 def compose(floor_plates, objects, object_dir, finger_plates, target_range, rng,
-            object_gains=None):
+            object_gains=None, holding=None):
     """One synthetic frame and its labels, targeting the candidate nearest the jaws."""
     frame_w, frame_h = IMAGE_SIZE
     canvas_w, canvas_h = int(frame_w * CANVAS_SCALE), int(frame_h * CANVAS_SCALE)
@@ -379,7 +379,8 @@ def compose(floor_plates, objects, object_dir, finger_plates, target_range, rng,
         "close_now": None,
         "grasp_pressure": None,
         "target_present": 1 if winner else 0,
-        "holding": None,
+        # Compositing can't know it either, so it is whatever the caller asserts.
+        "holding": holding,
         "state": {
             "laser_rangefinder": round(target_range, 4),
             "finger_angle": round(float(finger_angle), 3),
@@ -432,7 +433,7 @@ def annotate(frame, row, candidates):
 
 def generate(plate_dir, output_root, split, count, seed, object_dir=None, finger_dir=None,
              ranges_from=None, annotate_dir=None, annotate_count=40,
-             floor_cache_mb=FLOOR_CACHE_MB, shard_mb=SHARD_MB):
+             floor_cache_mb=FLOOR_CACHE_MB, shard_mb=SHARD_MB, holding=None):
     # Each ingredient is white-balanced on load; photometric re-lights the finished frame.
     floor_plates, floor_illuminants = load_floorplates(plate_dir, budget_mb=floor_cache_mb, seed=seed)
     if not floor_plates:
@@ -474,7 +475,8 @@ def generate(plate_dir, output_root, split, count, seed, object_dir=None, finger
     present = 0
     for index, target_range in enumerate(ranges):
         frame, row, candidates = compose(floor_plates, objects, object_dir,
-                                         finger_plates, target_range, rng, object_gains)
+                                         finger_plates, target_range, rng, object_gains,
+                                         holding)
         row["image"] = encode_frame(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
         row["frame_index"] = index
         writer.add(row)
@@ -517,6 +519,10 @@ def main():
                         help="Write annotated sample frames here, to check the labels")
     parser.add_argument("--annotate_count", type=int, default=40)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--holding", action="store_true",
+                        help="Label every frame holding=0: objects are pasted on the floor "
+                             "and the fingers over them, so nothing is ever between the "
+                             "jaws. Without it the label is masked.")
     parser.add_argument("--floor_cache_mb", type=float, default=FLOOR_CACHE_MB,
                         help="Memory budget for the decoded floor plate pool, which is "
                              "this tool's high water mark. More is more background "
@@ -529,7 +535,7 @@ def main():
     generate(args.plates, args.output_root, args.split, args.count, args.seed,
              args.object_dir, args.finger_dir, args.ranges_from,
              args.annotate_dir, args.annotate_count,
-             args.floor_cache_mb, args.shard_mb)
+             args.floor_cache_mb, args.shard_mb, 0 if args.holding else None)
 
 
 if __name__ == "__main__":
