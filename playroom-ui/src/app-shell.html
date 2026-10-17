@@ -245,6 +245,10 @@
             <div id="action-half-cal" class="menu-item" title="Tighten all lines and reset encoder bias. Use whenever indicated position appears inaccurate.">Tension lines (D-left)</div>
             <div id="action-record-drop" class="menu-item" title="Save where the gantry is now as the place to drop things, and send drops there from now on.">Set Drop Position</div>
             <div id="action-grasp" class="menu-item" title="Grasp the most prominent object in the gripper's view using the configured model.">Auto Grasp Here (D-right)</div>
+            <div id="action-toggle-orbit-person" class="menu-item menu-item-toggle" title="Find the orbit center for gamepad control by locating the person holding the gamepad in the anchor cameras, rather than by the gamepad tag.">
+              <span>Orbit person, not tag</span>
+              <div class="toggle-track"><div id="toggle-orbit-person-indicator" class="toggle-knob status-offline"></div></div>
+            </div>
             <div id="action-toggle-props" class="menu-item menu-item-toggle" title="Show or hide the trash can, toybox, gamepad and hamper in the 3D view.">
               <span>Room props</span>
               <div class="toggle-track"><div id="toggle-props-indicator" class="toggle-knob"></div></div>
@@ -291,6 +295,10 @@
             </div>
             <div id="action-shutdown-components" class="menu-item" title="Halt every connected component cleanly so its power can be cut without corrupting the SD card.">Shut Down Components</div>
             <div id="action-get-ticket" class="menu-item" title="Request a temporary auth ticket for accessing the robot's video streams directly.">Get Stream Ticket</div>
+            <div id="action-toggle-named-positions" class="menu-item menu-item-toggle" title="Show every other named position the robot reports (parking spot, drop position, basket fixes...) as a labelled ring in the 3D view.">
+              <span>Other named positions</span>
+              <div class="toggle-track"><div id="toggle-named-positions-indicator" class="toggle-knob status-offline"></div></div>
+            </div>
             <div id="action-toggle-logs" class="menu-item" title="Show or hide the log panel at the bottom of the screen.">Toggle Log Panel</div>
 
             <div class="menu-item menu-item-debug">
@@ -335,7 +343,7 @@
           <div class="perspective-grid">
             <button id="btn-viewport" class="perspective-button" title="Control the robot relative to your current 3D viewport camera angle."><img src="%VITE_ASSET_BUCKET_URL%/assets/playroom/orbit_icon.webp" class="orbit-image"/>Viewport</button>
             <button id="btn-top" class="perspective-button" title="Control the robot relative to Anchor 0's camera angle."><img src="%VITE_ASSET_BUCKET_URL%/assets/playroom/orbit_icon.webp" class="orbit-image"/>Anchor 0</button>
-            <button id="btn-person" class="perspective-button perspective-button-selected" title="Control orbits the seat/gamepad tag position in the room."><img src="%VITE_ASSET_BUCKET_URL%/assets/playroom/orbit_icon.webp" class="orbit-image"/>Seat Tag</button>
+            <button id="btn-person" class="perspective-button perspective-button-selected" title="Control orbits the gamepad tag position in the room."><img src="%VITE_ASSET_BUCKET_URL%/assets/playroom/orbit_icon.webp" class="orbit-image"/><span id="btn-person-label">Orbit Tag</span></button>
             <button id="btn-bottom" class="perspective-button" title="Control the robot relative to Anchor 1's camera angle."><img src="%VITE_ASSET_BUCKET_URL%/assets/playroom/orbit_icon.webp" class="orbit-image"/>Anchor 1</button>
             <button id="btn-gripper" class="perspective-button" title="Control the robot relative to the gripper's camera angle."><img src="%VITE_ASSET_BUCKET_URL%/assets/playroom/orbit_icon.webp" class="orbit-image"/>Gripper</button>
           </div>

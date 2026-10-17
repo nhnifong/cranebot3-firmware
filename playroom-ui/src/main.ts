@@ -288,6 +288,7 @@ const CONTROL_MENU_ITEMS: Record<string, string[]> = {
   'action-record-park':       ['owner', 'full'],
   'action-record-drop':       ['owner', 'full'],
   'action-grasp':             ['owner', 'full', 'limited_driver'],
+  'action-toggle-orbit-person':['owner', 'full', 'limited_driver'],
   'action-full-cal':          ['owner', 'full'],
   'action-dataset':           ['owner', 'full'],
   'action-collect-images':    ['owner', 'full'],
@@ -1097,6 +1098,9 @@ function updateFloatingLabelsText() {
 
 const down15cm = new THREE.Vector3(0, -0.15, 0);
 
+// Floating labels of the generic named position markers, created as they first appear
+const namedPositionLabels = new Map<string, HTMLElement>();
+
 function updateFloatingLabels() {
   const halfWidth = window.innerWidth / 2;
   const halfHeight = window.innerHeight / 2;
@@ -1129,6 +1133,34 @@ function updateFloatingLabels() {
             // anchor position, hovering just above it.
       labelEl.style.transform = `translate(${x}px, calc(${y}px - 100% - 10px))`;
     }
+  }
+
+    // Named positions shown as generic markers, labelled just above their rings
+  const container = document.getElementById('floating-labels-container');
+  const shown = new Set<string>();
+  for (const [name, markerPos] of room.genericMarkerLabels()) {
+    let labelEl = namedPositionLabels.get(name);
+    if (!labelEl && container) {
+      labelEl = document.createElement('div');
+      labelEl.className = 'floating-label hidden';
+      labelEl.textContent = name;
+      container.appendChild(labelEl);
+      namedPositionLabels.set(name, labelEl);
+    }
+    if (!labelEl) continue;
+    pos.copy(markerPos);
+    pos.y += 0.1;
+    pos.project(camera);
+    if (pos.z > 1) continue;
+    shown.add(name);
+    labelEl.classList.remove('hidden');
+    const x = (pos.x * halfWidth) + halfWidth;
+    const y = -(pos.y * halfHeight) + halfHeight;
+    // bottom centre of the label on the point
+    labelEl.style.transform = `translate(calc(${x}px - 50%), calc(${y}px - 100%))`;
+  }
+  for (const [name, labelEl] of namedPositionLabels) {
+    if (!shown.has(name)) labelEl.classList.add('hidden');
   }
 
     // Gripper
@@ -1540,19 +1572,15 @@ function showPopup(data: nf.telemetry.IPopup) {
 }
 
 function handleNamedPosition(data: nf.telemetry.INamedObjectPosition) {
-  if (data.name) {
-    if (data.position) {
-      // moved the named object
-      if (data.name == 'hamper' || data.name == 'toys' || data.name == 'trash' || data.name == 'gamepad'
-          || data.name == 'predicted_drop') {
-        room.setNamedObjectPosition(data.name, data.position);
-      }
-      // else if (data.name == 'gantry_goal_marker') {
+  if (!data.name) return;
+  // the point the gripper orbits under gamepad control comes from one of these: the
+  // 'gamepad' apriltag, or the 'person' the robot's person detector reports
 
-      // }
-    } else {
-      // hide the named object
-    }
+  gamepad.setNamedPosition(data.name, data.position ?? null);
+  if (DynamicRoom.hasProp(data.name)) {
+    if (data.position) room.setNamedObjectPosition(data.name, data.position);
+  } else {
+    room.setGenericMarker(data.name, data.position ?? null);
   }
 }
 
@@ -1822,6 +1850,9 @@ function handleAutoTargetingState(data: nf.telemetry.IAutoTargetingState) {
 // online on every uplinkStatus tick, so acting on `online` alone would re-send per tick.
 let wasOnline = false;
 
+// The gripper orbits the detected 'person' rather than the 'gamepad' apriltag.
+let orbitPerson = false;
+
 function updateOnlineStatus(online: boolean) {
   const cameOnline = online && !wasOnline;
   wasOnline = online;
@@ -1859,6 +1890,8 @@ function updateOnlineStatus(online: boolean) {
 
   // Outside the DOM guard: re-arming the robot doesn't depend on the status elements.
   if (cameOnline) resumeLogForwardingIfOpen();
+  // The robot starts with its person locator off, so a reconnect has to ask again.
+  if (cameOnline && orbitPerson) simpleCommand(nf.control.Command.COMMAND_ENABLE_PERSON_LOCATOR);
 }
 
 // Function called when mode changes
@@ -1869,9 +1902,7 @@ function onPerspectiveChanged(mode: number) {
     break;
 
   case perspPerson:
-    if (room.userPers) {
-      gamepad.setOrbitCenter(room.userPers);
-    }
+    gamepad.setOrbitOperator();
     break;
 
   case perspTop:
@@ -2141,6 +2172,46 @@ function initRunMenu() {
     Command.COMMAND_ENABLE_TORQUE, Command.COMMAND_DISABLE_TORQUE);
   initMenuToggle('action-toggle-tension-reg', 'toggle-tension-reg-indicator',
     Command.COMMAND_ENABLE_TENSION_REG, Command.COMMAND_DISABLE_TENSION_REG);
+
+  // Where the point the gripper orbits under gamepad control comes from: the 'gamepad'
+  // apriltag, or the 'person' the robot's person detector reports. A UI choice, so the
+  // knob follows the click;
+  // the robot only runs its person locator while some UI wants it.
+  const orbitToggle = document.getElementById('action-toggle-orbit-person');
+  const orbitKnob = document.getElementById('toggle-orbit-person-indicator');
+  if (orbitToggle && orbitKnob) {
+    orbitKnob.classList.toggle('status-offline', !orbitPerson);
+    orbitToggle.addEventListener('click', (e) => {
+      // Keep the menu open: the document-level handler closes it on any click.
+      e.stopPropagation();
+      if (orbitToggle.classList.contains('disabled')) return;
+      orbitPerson = !orbitPerson;
+      gamepad.setOrbitSource(orbitPerson ? 'person' : 'gamepad');
+      simpleCommand(orbitPerson ? Command.COMMAND_ENABLE_PERSON_LOCATOR
+                                : Command.COMMAND_DISABLE_PERSON_LOCATOR);
+      orbitKnob.classList.toggle('status-offline', !orbitPerson);
+      const orbitBtn = document.getElementById('btn-person');
+      const orbitLabel = document.getElementById('btn-person-label');
+      if (orbitLabel) orbitLabel.textContent = orbitPerson ? 'Orbit Me' : 'Orbit Tag';
+      if (orbitBtn) orbitBtn.title = orbitPerson
+          ? 'Control orbits you, located by the robot in its anchor cameras.'
+          : 'Control orbits the gamepad tag position in the room.';
+      if (orbitPerson) setPerspective(perspPerson);
+    });
+  }
+
+  // View setting like the props toggle below: named positions with no prop of their
+  // own (parking spot, drop position, basket fixes...), other than the person.
+  const namedToggle = document.getElementById('action-toggle-named-positions');
+  const namedKnob = document.getElementById('toggle-named-positions-indicator');
+  if (namedToggle && namedKnob) {
+    namedToggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const visible = !room.getOtherMarkersVisible();
+      room.setOtherMarkersVisible(visible);
+      namedKnob.classList.toggle('status-offline', !visible);
+    });
+  }
 
   // Purely a view setting, so it isn't an initMenuToggle: there is no robot state
   // to wait for and the knob follows the click directly.

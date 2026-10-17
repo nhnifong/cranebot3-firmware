@@ -48,6 +48,11 @@ enum Command {
   COMMAND_SAFE_COMPONENT_SHUTDOWN = 22;
   // Save where the gantry is standing now as the drop position, and route to it from now on.
   COMMAND_RECORD_DROP = 23;
+  // Start locating, in the anchor cameras, the person holding the gamepad, and publish them
+  // as the named position 'person'.
+  COMMAND_ENABLE_PERSON_LOCATOR = 24;
+  // Stop locating the person.
+  COMMAND_DISABLE_PERSON_LOCATOR = 25;
 
   // =====  Commands intended only for diagnostics =====
 

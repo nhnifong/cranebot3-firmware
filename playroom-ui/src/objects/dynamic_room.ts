@@ -17,6 +17,11 @@ export class DynamicRoom {
   private toybox: THREE.Object3D | undefined;
   private trash_can: THREE.Object3D | undefined;
   private predictedDrop: THREE.Mesh;
+  // Named positions with no prop of their own, each a white ring. Their names are drawn
+  // as floating labels by main.ts, which reads them from genericMarkerLabels().
+  private genericMarkers = new Map<string, THREE.Mesh>();
+  // Whether to show the generic markers other than ALWAYS_SHOWN_MARKERS
+  private otherMarkersVisible = false;
 
   // Applied again once the model finishes loading, since it can be set before then.
   private propsVisible = true;
@@ -141,6 +146,52 @@ export class DynamicRoom {
     }
   }
 
+  /** Whether a named position has a prop of its own rather than a generic marker. */
+  public static hasProp(name: string): boolean {
+    return ['hamper', 'toys', 'trash', 'gamepad', 'predicted_drop'].includes(name);
+  }
+
+  /** Show a named position with no prop of its own as a white ring, or hide it if
+   *  position is null. */
+  public setGenericMarker(name: string, position: nf.common.IVec3 | null) {
+    let marker = this.genericMarkers.get(name);
+    if (!position) {
+      if (marker) marker.userData.present = false;
+    } else {
+      if (!marker) {
+        marker = makeGenericMarker();
+        marker.name = name;
+        this.genericMarkers.set(name, marker);
+        this.root.add(marker);
+      }
+      marker.userData.present = true;
+      marker.position.set(position.x ?? 0, position.z ?? 0, -(position.y ?? 0));
+    }
+    if (marker) this.applyGenericMarkerVisibility(marker);
+  }
+
+  /** Show or hide the generic markers other than the ones that are always shown. */
+  public setOtherMarkersVisible(visible: boolean) {
+    this.otherMarkersVisible = visible;
+    for (const marker of this.genericMarkers.values()) this.applyGenericMarkerVisibility(marker);
+  }
+
+  public getOtherMarkersVisible(): boolean {
+    return this.otherMarkersVisible;
+  }
+
+  /** Name and world position of every generic marker currently shown. */
+  public *genericMarkerLabels(): Iterable<[string, THREE.Vector3]> {
+    for (const [name, marker] of this.genericMarkers) {
+      if (marker.visible) yield [name, marker.position];
+    }
+  }
+
+  private applyGenericMarkerVisibility(marker: THREE.Mesh) {
+    marker.visible = marker.userData.present
+        && (this.otherMarkersVisible || ALWAYS_SHOWN_MARKERS.includes(marker.name));
+  }
+
   /** Show or hide the four room props (trash can, toybox, gamepad, hamper). */
   public setPropsVisible(visible: boolean) {
     this.propsVisible = visible;
@@ -197,4 +248,15 @@ export class DynamicRoom {
     positions.needsUpdate = true;
     this.geometry.computeVertexNormals();
   }
+}
+
+// Generic markers shown even when the other named positions are hidden
+const ALWAYS_SHOWN_MARKERS = ['person'];
+
+function makeGenericMarker(): THREE.Mesh {
+  const geometry = new THREE.RingGeometry(0.07, 0.1, 32);
+  geometry.rotateX(-Math.PI / 2);
+  // just off the floor so it doesn't z-fight with it
+  geometry.translate(0, 0.005, 0);
+  return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }));
 }

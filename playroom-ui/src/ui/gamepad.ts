@@ -22,6 +22,13 @@ export class GamepadController {
     // State Tracking
     public seatOrbitMode = true;
     private orbitObj: THREE.Object3D | null = null;
+    // Orbit the gripper around a named position (chosen by orbitSource) rather than orbitObj
+    private orbitOperator = false;
+    // Which named position the gripper orbits: the 'gamepad' apriltag, or the 'person'
+    // the robot's person detector reports. Falls back to the tag until a person is reported.
+    private orbitSource: 'gamepad' | 'person' = 'gamepad';
+    // Named positions the robot has reported, as (x, y) in robot space
+    private namedPositions = new Map<string, { x: number, y: number }>();
     private robotPosition: { x: number, y: number } | null = null;
 
     private lastSendT = 0;
@@ -254,7 +261,40 @@ export class GamepadController {
     // Set an object to use as the orbit center for control inputs
     public setOrbitCenter(orbitObj: THREE.Object3D) {
         this.orbitObj = orbitObj
+        this.orbitOperator = false;
         this.setSeatOrbitMode(true);
+    }
+
+    // Orbit the gripper around the named position setOrbitSource chose
+    public setOrbitOperator() {
+        this.orbitObj = null;
+        this.orbitOperator = true;
+        this.setSeatOrbitMode(true);
+    }
+
+    public setOrbitSource(source: 'gamepad' | 'person') {
+        this.orbitSource = source;
+    }
+
+    public setNamedPosition(name: string, position: nf.common.IVec3 | null) {
+        if (position) {
+            this.namedPositions.set(name, { x: position.x ?? 0, y: position.y ?? 0 });
+        } else {
+            this.namedPositions.delete(name);
+        }
+    }
+
+    // The orbit center in the x,y plane of robot space, or null if there is none yet
+    private orbitPoint(): { x: number, y: number } | null {
+        if (this.orbitOperator) {
+            return this.namedPositions.get(this.orbitSource) ?? this.namedPositions.get('gamepad') ?? null;
+        }
+        if (this.orbitObj) {
+            const p = new THREE.Vector3();
+            this.orbitObj.getWorldPosition(p);
+            return { x: p.x, y: -p.z };
+        }
+        return null;
     }
 
     public setRobotPosition(x: number, y: number) {
@@ -377,13 +417,10 @@ export class GamepadController {
 
         // in orbit mode, lateral movements orbit a given position and
         // forward/back movements move away/towards it.
-        if (this.seatOrbitMode && this.orbitObj && this.robotPosition) {
-
-            // get position of orbitObj in x,y plane in robot space
-            const p = new THREE.Vector3();
-            this.orbitObj.getWorldPosition(p);
-            const orbitX = p.x
-            const orbitY = -p.z;
+        const orbit = this.seatOrbitMode ? this.orbitPoint() : null;
+        if (orbit && this.robotPosition) {
+            const orbitX = orbit.x;
+            const orbitY = orbit.y;
 
             // Vector from orbit position to robot
             const dx = this.robotPosition.x - orbitX;

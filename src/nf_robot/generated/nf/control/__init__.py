@@ -134,6 +134,17 @@ class Command(betterproto2.Enum):
     Save where the gantry is standing now as the drop position, and route to it from now on.
     """
 
+    ENABLE_PERSON_LOCATOR = 24
+    """
+    Start locating, in the anchor cameras, the person holding the gamepad, and publish them
+    as the named position 'person'.
+    """
+
+    DISABLE_PERSON_LOCATOR = 25
+    """
+    Stop locating the person.
+    """
+
     HORIZONTAL_CHECK = 6
     """
     =====  Commands intended only for diagnostics =====
@@ -185,6 +196,8 @@ class Command(betterproto2.Enum):
             21: "COMMAND_DISABLE_TENSION_REG",
             22: "COMMAND_SAFE_COMPONENT_SHUTDOWN",
             23: "COMMAND_RECORD_DROP",
+            24: "COMMAND_ENABLE_PERSON_LOCATOR",
+            25: "COMMAND_DISABLE_PERSON_LOCATOR",
             6: "COMMAND_HORIZONTAL_CHECK",
             7: "COMMAND_COLLECT_GRIPPER_IMAGES",
             8: "COMMAND_SHUTDOWN",
@@ -214,6 +227,8 @@ class Command(betterproto2.Enum):
             "COMMAND_DISABLE_TENSION_REG": 21,
             "COMMAND_SAFE_COMPONENT_SHUTDOWN": 22,
             "COMMAND_RECORD_DROP": 23,
+            "COMMAND_ENABLE_PERSON_LOCATOR": 24,
+            "COMMAND_DISABLE_PERSON_LOCATOR": 25,
             "COMMAND_HORIZONTAL_CHECK": 6,
             "COMMAND_COLLECT_GRIPPER_IMAGES": 7,
             "COMMAND_SHUTDOWN": 8,

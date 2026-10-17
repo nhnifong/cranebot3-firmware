@@ -62,6 +62,7 @@ from nf_robot.host.arp_gripper_client import (ArpeggioGripperClient, rotate_vect
                                               ROUTE_TAG_MAX_AGE_S, CAPTURE_RESOLUTION_SIZE,
                                               OPEN, CLOSED, RANGE_MAX_AGE_S)
 from nf_robot.host import swing
+from nf_robot.host.person_locator import PersonLocator
 from nf_robot.host.visual_servo import VisualServo, SERVO_MODE_GRASP, SERVO_MODE_OBSERVE, SERVO_MODE_CENTER
 from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.position_estimator import Positioner2
@@ -116,6 +117,7 @@ BUILTIN_COMMANDS = frozenset({
     control.Command.DISABLE_TORQUE, control.Command.ENABLE_TORQUE,
     control.Command.DEBUG_LOG_OVER_T, control.Command.ENABLE_TENSION_REG,
     control.Command.DISABLE_TENSION_REG, control.Command.SAFE_COMPONENT_SHUTDOWN,
+    control.Command.ENABLE_PERSON_LOCATOR, control.Command.DISABLE_PERSON_LOCATOR,
 })
 BUILTIN_CONTROL_FIELDS = frozenset({
     'command', 'move', 'gantry_goal_pos', 'jog_spool', 'debug', 'set_swing_cancellation',
@@ -424,6 +426,9 @@ class AsyncObserver:
         # --lerobot_grasp hands it to a policy instead. Holds the checkpoint, loaded on
         # first use.
         self.servo = VisualServo(self)
+        # Publishes 'person', the person holding the gamepad as seen from the anchor
+        # cameras, which the UI can orbit around instead of the gamepad tag.
+        self.person_locator = PersonLocator(self)
         self.perception_task = None
         self.webui_server = None
         # owns every telemetry destination: the local websocket server and the cloud relay
@@ -1675,6 +1680,10 @@ class AsyncObserver:
                 r = await self.set_tension_reg(False)
             case control.Command.SAFE_COMPONENT_SHUTDOWN:
                 r = await self.shutdown_all_bots()
+            case control.Command.ENABLE_PERSON_LOCATOR:
+                self.person_locator.start()
+            case control.Command.DISABLE_PERSON_LOCATOR:
+                await self.person_locator.stop()
             case _:
                 entry = self._maneuver_commands.get(cmd)
                 if entry is None:
@@ -4961,6 +4970,9 @@ class AsyncObserver:
         if self.perception_task is not None:
             self.perception_task.cancel()
             tasks.append(self.perception_task)
+        if self.person_locator.task is not None:
+            self.person_locator.task.cancel()
+            tasks.append(self.person_locator.task)
         if self.passive_safety_task is not None:
             self.passive_safety_task.cancel()
             tasks.append(self.passive_safety_task)
