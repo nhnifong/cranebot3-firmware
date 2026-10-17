@@ -109,7 +109,8 @@ def explain(model, images, state_t):
     state = state_t.float().detach().requires_grad_(True)
     x = x.float()
 
-    flags = model.global_head(torch.cat([global_vec, state], dim=-1))[0]
+    flags = model.global_head(
+        torch.cat([global_vec, state[:, model.global_state_index]], dim=-1))[0]
     with torch.no_grad():
         bins = adaptive_avg_pool2d(F.gelu(model.close_reduce(x)), CLOSE_POOL)
     bins = bins.detach().requires_grad_(True)
@@ -120,7 +121,7 @@ def explain(model, images, state_t):
         image, st = contributions(pre, [image_input, state])
         parts = {"image": float(image.sum())}
         # a state input the head never reads has a zero gradient, and is left off its panel
-        keys = model.close_state_keys if image_input is bins else STATE_KEYS
+        keys = model.close_state_keys if image_input is bins else model.global_state_keys
         parts.update({k: float(v) for k, v in zip(STATE_KEYS, st[0]) if k in keys})
         parts["remainder"] = float(pre) - sum(parts.values())
         return {"value": float(out), "pre": float(pre), "parts": parts}, image

@@ -140,6 +140,8 @@ WATCH_LOG_S = 2.0           # (s) how often the debugging modes print
 # ---------------------------------------------------------------------------
 # Normalized finger speed (mine_teleop.FINGER_SPEED_FULL_SCALE) to the robot's units.
 FINGER_SPEED_FULL_SCALE = 90.0
+# (deg) the open end of the finger range, wider than OPEN
+FULLY_OPEN = -90
 # Consecutive frames of the model asking to close it takes to stop the gantry, so one
 # noisy frame cannot end an approach.
 CLOSE_CONFIRM_FRAMES = 60
@@ -191,6 +193,18 @@ HOLD_FORCE_SETTLE_MIN_SAMPLES = 5
 # And the model's own opinion, which is the half that can tell a loaded grip on an object
 # from a loaded grip on a finger, a carpet edge or the floor.
 HOLD_PROB_THRESHOLD = 0.5
+# (m/s, s) a close that never loaded the grip gets a short lift before it is given up on,
+# judged by the holding head over the last part of the rise. A thin item leaves the fingers
+# shut at the stop with no force to read, and lifting is the one test that settles it.
+TEST_LIFT_SPEED = 0.05
+TEST_LIFT_S = 1.0
+TEST_LIFT_JUDGE_S = 0.5
+# (s) how long to wait at the top for a grip force the rise disturbed to settle again
+TEST_LIFT_SETTLE_WAIT_S = 3.0
+# (deg) fingers this close to CLOSED are at the stop: the force loop has no travel left to
+# act with, so a moving force there is the object shifting and waiting will not change it.
+# Shut fingers report 88-89.6 deg in recordings, never CLOSED itself.
+FINGERS_SHUT_MARGIN_DEG = 2.0
 
 # ---------------------------------------------------------------------------
 # Wrist
@@ -673,14 +687,8 @@ class VisualServo:
         return tracking or resting, commanded, felt, ratio, spread
 
     def holding_now(self, prediction):
-        """This routine's own answer to "we have it, go up", and its evidence.
-        
-        TODO: this predicate has a hard time with paper
-        It often grabs the paper but fails to detect enough pressure.
-        If no pressure is felt but the prediction of holding is high,
-        There's one way to know for sure if you go it. go up.
-        If you do that and the visual holding head still says you have it, then you got it.
-        """
+        """This routine's own answer to "we have it, go up", and its evidence. A grip it
+        cannot confirm, such as paper with no force to feel, gets _test_lift instead."""
         loaded, commanded, felt, ratio, spread = self.grip_loaded()
         probability = prediction['holding'] if prediction is not None else 0.0
         steadiness = 'too few samples' if spread is None else f'{spread:.3f}'
@@ -788,35 +796,57 @@ class VisualServo:
         tried, held, evidence = 0, False, 'no attempt made'
         while not held and tried < attempts and self.ob.run_command_loop:
             tried += 1
-            logger.debug(f'Open fingers to {OPEN} to clear camera')
+            # A retry opens all the way: whatever the last close missed, it gets the
+            # widest jaws this time.
+            opening = OPEN if tried == 1 else FULLY_OPEN
+            logger.debug(f'Open fingers to {opening}')
             asyncio.create_task(
-                self.ob.gripper_client.send_commands({'set_finger_angle': OPEN}))
+                self.ob.gripper_client.send_commands({'set_finger_angle': opening}))
 
             reason, held, evidence, asked_to_close = await self._approach()
             self.ob.slow_stop_all_spools()
             logger.info(f'Visual servo approach ended: {reason}')
 
             if held:
+                # The model closed the fingers while still steering, the close reached its
+                # predicted force, the grip loaded and the holding head agreed. Nothing
+                # left to do but lift.
                 logger.info(f'Grip loaded during the approach: {evidence}')
 
             elif reason in ('nothing seen', 'rangefinder reading went stale'):
-                continue # nothing worth closing on; spend another attempt looking
+                # Nothing to close on: either target_found stayed false for
+                # NOTHING_SEEN_TIMEOUT_S while high up (the approach climbed for a wider
+                # view), or the rangefinder stopped reporting. The fingers never closed.
+                continue
 
             elif reason == 'stuck' and not asked_to_close:
-                # Being stuck is not itself a reason to close - the gripper could be hung
-                # up anywhere. But it is often what arriving feels like when the object
-                # stops the descent before the rangefinder reads through it, so the model
-                # gets the casting vote: if it is asking to close, close.
+                # The gantry stopped making progress, and the model is not asking to
+                # close. There's not telling why it's stuck, but often the positioning is
+                # still good enough to attempt a grasp. let the model decide whether to try.
                 logger.info('Stuck and the model is not asking to close; not grasping')
                 continue
 
             else:
+                # Model was driving and
+                # the close head stayed over threshold for CLOSE_CONFIRM_FRAMES,
+                # or the rangefinder reading inside RANGE_ITEM, 
+                # or the approach timed out. Hold the gantry still and
+                # let the model finish the close.
                 held, evidence = await self._close_until_held()
+                if not held:
+                    # The close ran out of time or travel without the force tests
+                    # passing: a thin item with the fingers shut and nothing to feel, or a
+                    # grip still short of its setpoint. Lift a little and ask the holding
+                    # head.
+                    held, evidence = await self._test_lift(evidence)
 
             if not held:
+                # Every test said empty, including the test lift if there was one. Open,
+                # go back up with a random sideways hop, and spend another attempt.
                 await self._recover(evidence)
                 continue
 
+            # Held, by the approach, the close, or the test lift.
             await self._lift()
             return True
 
@@ -976,7 +1006,7 @@ class VisualServo:
         end_time = time.time() + PRESSURE_SENSE_WAIT
         held, evidence = False, 'no frames'
         angle = self.ob.datastore.finger.getLast()[1]
-        while time.time() < end_time and angle < CLOSED:
+        while time.time() < end_time and angle < CLOSED - FINGERS_SHUT_MARGIN_DEG:
             prediction = await self.predict()
             if prediction is not None:
                 await self.drive_fingers(prediction)
@@ -991,6 +1021,60 @@ class VisualServo:
         logger.info(f'Close ended {"held" if held else "empty"}: {evidence}, '
                     f'finger angle {angle:.1f}')
         return held, evidence
+
+    async def _test_lift(self, evidence):
+        """Rise a little with the fingers as they are and let the holding head decide if
+        the grasp succeeded.
+
+        Returns (held, evidence). Zero finger speed holds whatever the close reached, so
+        the grip is unchanged on the way up. Judged on the end of the rise, by which point
+        an object that was not really held has stayed on the floor or fallen away.
+
+        The rise can shift the object in the jaws, and the force loop then works to get
+        back to its setpoint. If the felt force is still moving at the top, wait there for
+        it to settle and judge after that, taking a grip that loads meanwhile as held -
+        unless the fingers are shut at the stop, where the loop has nothing left to do.
+        """
+        logger.info(f'Close did not confirm a grip ({evidence}); test lifting')
+        seen = []  # (time, holding head)
+        started = time.time()
+        while time.time() - started < TEST_LIFT_S and self.ob.run_command_loop:
+            await self.ob.move_direction_speed([0.0, 0.0, TEST_LIFT_SPEED])
+            prediction = await self.predict()
+            if prediction is not None:
+                seen.append((time.time(), prediction['holding']))
+            await asyncio.sleep(LOOP_DELAY)
+
+        shut = self.ob.datastore.finger.getLast()[1] >= CLOSED - FINGERS_SHUT_MARGIN_DEG
+        if not shut and not self.force_settled()[0]:
+            logger.info('Grip force moving after the test lift; waiting for it to settle')
+            self.ob.slow_stop_all_spools()
+            deadline = time.time() + TEST_LIFT_SETTLE_WAIT_S
+            settled_at = None
+            while time.time() < deadline and self.ob.run_command_loop:
+                prediction = await self.predict()
+                if prediction is not None:
+                    seen.append((time.time(), prediction['holding']))
+                    if self.grip_loaded()[0] and prediction['holding'] > HOLD_PROB_THRESHOLD:
+                        return True, (f'{evidence}, grip loaded after the test lift, holding '
+                                      f'head {prediction["holding"]:.2f}')
+                if settled_at is None and self.force_settled()[0]:
+                    settled_at = time.time()
+                if settled_at is not None and time.time() - settled_at >= TEST_LIFT_JUDGE_S:
+                    break
+                await asyncio.sleep(LOOP_DELAY)
+            if settled_at is None:
+                logger.info(f'Grip force still moving {TEST_LIFT_SETTLE_WAIT_S}s after the '
+                            f'test lift; judging anyway')
+
+        recent = [p for t, p in seen if t >= time.time() - TEST_LIFT_JUDGE_S]
+        if not recent:
+            return False, evidence + ', test lift saw no frames'
+        probability = float(np.median(recent))
+        held = probability > HOLD_PROB_THRESHOLD
+        logger.info(f'Test lift {"held" if held else "empty"}: holding head {probability:.2f} '
+                    f'over {len(recent)} frames')
+        return held, f'{evidence}, test lift holding head {probability:.2f}'
 
     async def _lift(self):
         """Carry the object up and away from the floor."""

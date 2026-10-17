@@ -46,7 +46,7 @@ from nf_robot.ml.lerobot.trim_to_grasp import (
     find_grasp,
 )
 
-# (seconds) how much of the carry after the grasp to keep, for the holding head.
+# (seconds) how much of the carry after the lift to keep, for the holding head.
 CARRY_SECONDS = 3.0
 # The canvas the target head predicts over, as a fraction of the frame; must match
 # model.CANVAS_SCALE.
@@ -72,9 +72,23 @@ CLOSE_GAP_FRAMES = 10
 # climbing this long later.
 LIFT_ONSET_M = 0.03
 LIFT_CONFIRM_SECONDS = 0.5
-# (normalized 0-1) finger_pressure held this low for MIN_GRASP_SECONDS means the object is
-# gone.
-RELEASE_PRESSURE = 0.05
+# (normalized 0-1) below this, with the gripper out of force mode, the fingers hold
+# nothing. Low because paper holds at 0.03.
+RELEASE_PRESSURE = 0.02
+# (degrees, seconds) the fingers have finished closing once their angle stays within
+# this span for this long. The force controller keeps them creeping after the command ends.
+SETTLE_DEGREES = 1.0
+SETTLE_SECONDS = 0.5
+# (m/s, seconds) an up command faster than this, through pauses no longer than this, is
+# the operator lifting.
+LIFT_COMMAND_MPS = 0.05
+LIFT_COMMAND_GAP_SECONDS = 0.3
+# (seconds, per second, normalized) a frame before the lift is as safe to lift on as the
+# lift itself when the pressure over this trailing window drifts no faster, and wobbles
+# about that drift no more, than it did at the lift, within these margins.
+STABLE_SECONDS = 0.5
+STABLE_SLOPE_MARGIN = 0.02
+STABLE_WOBBLE_MARGIN = 0.01
 # Full-scale commanded finger speed, used to normalize the finger label into -1..1.
 FINGER_SPEED_FULL_SCALE = 90.0
 # Stored frame size, the model's input; 252 = 14 x 18 for the /14 backbone.
@@ -298,38 +312,149 @@ def find_lift(rows, grasp, fps):
     return None
 
 
-def find_drop(rows, lift, fps, release_pressure=RELEASE_PRESSURE,
-              min_release_seconds=MIN_GRASP_SECONDS):
-    """The frame the object stopped being held after `lift` (an open command or a sustained
-    pressure drop), or None."""
-    drop = None
-    for i in range(lift, len(rows)):
-        if rows[i]["finger_speed"] < 0:
-            drop = i
-            break
-
-    hold = max(1, int(round(min_release_seconds * fps)))
-    tail = np.array([r["pressure"] for r in rows[lift:]], dtype=np.float32)
-    if len(tail) >= hold:
-        under = (tail < release_pressure).astype(np.int32)
-        gone = np.convolve(under, np.ones(hold, dtype=np.int32), mode="valid") == hold
-        collapsed = np.flatnonzero(gone)
-        if collapsed.size:
-            slipped = lift + int(collapsed[0])
-            drop = slipped if drop is None else min(drop, slipped)
-    return drop
+def gripping_segments(rows, fps):
+    """(start, end) of each run of frames, end exclusive, in which the gripper is in force
+    mode or feels pressure. A negative finger command in force mode only lowers the force,
+    so a run ends at a real release, not at a mid-carry adjustment."""
+    gripping = [r["target_force"] > 0 or r["pressure"] >= RELEASE_PRESSURE for r in rows]
+    shortest = max(1, int(round(MIN_GRASP_SECONDS * fps)))
+    segments, start = [], None
+    for i, g in enumerate(gripping + [False]):
+        if g and start is None:
+            start = i
+        elif not g and start is not None:
+            if i - start >= shortest:
+                segments.append((start, i))
+            start = None
+    return segments
 
 
-def holding_label(i, grasp, lift, drop):
-    """Whether frame `i` shows an object securely held: 1 from lift to drop, 0 before the
-    grasp, None between."""
-    if i < grasp:
-        return 0
-    if lift is None or i < lift:
+def lift_start(rows, start, end, rise_m, fps):
+    """The frame in [start, end) the operator began the up command that carried the
+    gripper `rise_m` above its low point, or None if it never rose that far. The command
+    rather than the height, since closing on the floor levers the gripper up a few cm."""
+    gap_frames = max(1, int(round(LIFT_COMMAND_GAP_SECONDS * fps)))
+    low = start
+    for i in range(start, end):
+        z = rows[i]["gripper_pos"][2]
+        if z < rows[low]["gripper_pos"][2]:
+            low = i
+        if z - rows[low]["gripper_pos"][2] < rise_m:
+            continue
+        if rows[i]["vel_cmd"] is None:
+            return low
+        onset, gap = None, 0
+        for j in range(i, start - 1, -1):
+            if rows[j]["vel_cmd"][2] > LIFT_COMMAND_MPS:
+                onset, gap = j, 0
+            else:
+                gap += 1
+                if gap > gap_frames:
+                    break
+        if onset is None:
+            # levered all the way up before the operator asked; the lift is what follows
+            onset = next((j for j in range(i, end)
+                          if rows[j]["vel_cmd"][2] > LIFT_COMMAND_MPS), low)
+        return onset
+    return None
+
+
+def final_grasp(rows, fps, rise_m):
+    """(contact, release, lift) of the last grip the gripper rose `rise_m` in, or the skip
+    reason. Earlier grips are taken as failed attempts."""
+    segments = gripping_segments(rows, fps)
+    if not segments:
+        return "no_grasp"
+    for contact, release in reversed(segments):
+        lift = lift_start(rows, contact, release, rise_m, fps)
+        if lift is not None:
+            return contact, release, lift
+    return "no_rise"
+
+
+def close_run(rows, contact, lift, fps, gap_frames=CLOSE_GAP_FRAMES):
+    """(onset, end) of the closing movement that made `contact`, end exclusive, or None
+    if no close command led into it. It ends when the fingers settle, or at the lift if
+    the operator judged the grip good before they did."""
+    commanded = [i for i in range(contact + 1) if rows[i]["finger_speed"] > 0]
+    if not commanded or contact - commanded[-1] > gap_frames:
         return None
-    if drop is not None and i >= drop:
-        return 0
-    return 1
+
+    def extent(step, stop):
+        i = last = commanded[-1]
+        gap = 0
+        while i != stop and rows[i]["finger_speed"] >= 0:
+            if rows[i]["finger_speed"] > 0:
+                last, gap = i, 0
+            else:
+                gap += 1
+                if gap > gap_frames:
+                    break
+            i += step
+        return last
+
+    onset = extent(-1, -1)
+    end = extent(1, lift) + 1
+    window = max(1, int(round(SETTLE_SECONDS * fps)))
+    angles = np.array([r["finger_angle"] for r in rows])
+    while end < lift and np.ptp(angles[end:end + window]) > SETTLE_DEGREES:
+        end += 1
+    return onset, min(end, lift)
+
+
+def pressure_steadiness(pressure, i, window):
+    """(|slope| per frame, wobble about that slope) of the pressure over the window
+    ending at frame `i`."""
+    w = pressure[max(0, i - window):i + 1]
+    if len(w) < 2:
+        return 0.0, 0.0
+    t = np.arange(len(w), dtype=np.float64)
+    slope, intercept = np.polyfit(t, w, 1)
+    return abs(slope), float(np.ptp(w - (slope * t + intercept)))
+
+
+def holding_labels(rows, fps, contact, settled, lift, release):
+    """Per frame, whether it is safe to lift now: 0 with nothing held, 1 from the
+    operator's lift to the release, and between the fingers settling and the lift, 1 where
+    the pressure is as steady as it was when the operator chose to lift. Everything else
+    while gripping is masked."""
+    pressure = np.array([r["pressure"] for r in rows], dtype=np.float64)
+    window = max(1, int(round(STABLE_SECONDS * fps)))
+    # slope per frame, so the margin is converted from per second
+    slope_at_lift, wobble_at_lift = pressure_steadiness(pressure, lift, window)
+    slope_limit = slope_at_lift + STABLE_SLOPE_MARGIN / fps
+    wobble_limit = wobble_at_lift + STABLE_WOBBLE_MARGIN
+
+    labels = [None] * len(rows)
+    for i in range(len(rows)):
+        if i < contact or i >= release:
+            labels[i] = 0
+        elif i >= lift:
+            labels[i] = 1
+        elif i >= settled:
+            slope, wobble = pressure_steadiness(pressure, i, window)
+            if slope <= slope_limit and wobble <= wobble_limit:
+                labels[i] = 1
+    return labels
+
+
+def held_force(rows, lift, release):
+    """The force the operator carried the object at: the median commanded force from the
+    lift to the start of the opening that released it, which a spike while closing or
+    lifting cannot move. The felt pressure stands in when the grip never entered force
+    mode."""
+    end = release
+    while end > lift and rows[end - 1]["finger_speed"] >= 0:
+        end -= 1
+    while end > lift and rows[end - 1]["finger_speed"] < 0:
+        end -= 1
+    if end == lift:
+        # no opening command inside the grip: it was carried to the release
+        end = release
+    commanded = [r["target_force"] for r in rows[lift:end]]
+    if max(commanded) > 0:
+        return float(np.median(commanded))
+    return float(np.median([r["pressure"] for r in rows[lift:end]]))
 
 
 def wrap_pi(radians):
@@ -356,15 +481,20 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
                  frames=None):
     """Labelled rows for one grasp episode as (rows, dropped, blind), or (None, reason, 0)
     if unusable. approach_seconds None reaches back as far as the target stays in view."""
-    pressure = np.array([r["pressure"] for r in rows], dtype=np.float32)
-    grasp = find_grasp(pressure, fps, PRESSURE_THRESHOLD, MIN_GRASP_SECONDS)
-    if grasp is None:
-        return None, "no_grasp", 0
+    found = final_grasp(rows, fps, rise_m)
+    if isinstance(found, str):
+        return None, found, 0
+    contact, release, lift = found
+    run = close_run(rows, contact, lift, fps)
+    if run is None:
+        return None, "no_close", 0
+    onset, settled = run
 
-    heights = np.array([r["gripper_pos"][2] for r in rows])
-    if not np.any(heights[grasp:] >= heights[grasp] + rise_m):
-        # closed on nothing, or on something it could not pick up
-        return None, "no_rise", 0
+    # The anchor is the first firm hold in the chosen grip; a light one never gets there,
+    # and then the fingers closing on it is the nearest thing.
+    pressure = np.array([r["pressure"] for r in rows[contact:release]], dtype=np.float32)
+    firm = find_grasp(pressure, fps, PRESSURE_THRESHOLD, MIN_GRASP_SECONDS)
+    grasp = settled if firm is None else contact + firm
 
     # A grasp frame with no usable rangefinder reading has no target to label.
     if not anchor_is_usable(rows[grasp], calibration):
@@ -372,17 +502,14 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
 
     track = target_track(rows, grasp, calibration, uv_method, jaw_uv, frames)
     wrist_at_grasp = rows[grasp]["wrist_angle"]
-    onset = close_onset(rows, grasp)
-    lift = find_lift(rows, grasp, fps)
-    drop = None if lift is None else find_drop(rows, lift, fps)
-    # The force that turned out to be enough, read at the frame it proved itself on.
-    pressure_at_lift = None if lift is None else float(rows[lift]["pressure"])
+    holding = holding_labels(rows, fps, contact, settled, lift, release)
+    grasp_pressure = held_force(rows, lift, release)
 
     if approach_seconds is None:
         first = approach_start(track, grasp, margin)
     else:
         first = max(0, grasp - int(round(approach_seconds * fps)))
-    last = min(len(rows) - 1, grasp + int(round(carry_seconds * fps)))
+    last = min(len(rows) - 1, max(grasp, lift) + int(round(carry_seconds * fps)))
 
     out, dropped, blind = [], 0, 0
     for i in range(first, last + 1):
@@ -395,13 +522,12 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
             "target_range_m": None,
             "grasp_axis_rad": None,
             "finger": round(float(r["finger_speed"]) / FINGER_SPEED_FULL_SCALE, 4),
-            # Whether the close should have begun by this frame, masked when the onset is
-            # outside the window.
-            "close_now": None if onset is None else (1 if i >= onset else 0),
-            "grasp_pressure": (None if pressure_at_lift is None
-                               else round(pressure_at_lift, 4)),
+            # Whether a close begun now would make the grip that got lifted: 1 through
+            # that closing movement, 0 before it, masked after it.
+            "close_now": 0 if i < onset else (1 if i < settled else None),
+            "grasp_pressure": round(grasp_pressure, 4),
             "target_present": 1 if i <= grasp else None,
-            "holding": holding_label(i, grasp, lift, drop),
+            "holding": holding[i],
             "state": {
                 "laser_rangefinder": round(float(r["laser_rangefinder"]), 4),
                 "finger_angle": round(float(r["finger_angle"]), 3),
@@ -704,7 +830,8 @@ def mine_sources(writer, sources, limit: int | None, progress=None, workers: int
         eps = episode_indices(root)[:limit or None]
         tasks += [(repo_id, root, ep, opts) for ep in eps]
         stats[repo_id] = {"mined": 0, "considered": len(eps), "dropped": 0, "blind": 0,
-                          "skipped": {"no_grasp": 0, "no_rise": 0, "no_range": 0},
+                          "skipped": {"no_grasp": 0, "no_rise": 0, "no_close": 0,
+                                      "no_range": 0},
                           "holding": {1: 0, 0: 0, None: 0}}
 
     # spawn rather than fork: torch, cv2 and the video decoders don't survive a fork well.
@@ -715,7 +842,7 @@ def mine_sources(writer, sources, limit: int | None, progress=None, workers: int
                 progress.set_description(repo_id.split("/")[-1], refresh=False)
                 progress.update(1)
             if result is None:
-                s["skipped"][info] += 1
+                s["skipped"][info] = s["skipped"].get(info, 0) + 1
                 continue
             s["dropped"] += info
             s["blind"] += blind
