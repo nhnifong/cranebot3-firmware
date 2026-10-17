@@ -597,7 +597,7 @@ for making sure they were all over empty floor.
 Recordings in which closing the jaws would catch nothing:
 
     python -m nf_robot.ml.visual_servoing.mine_teleop \
-        --repo_id naavox/false-grabs naavox/bd-false-grabs \
+        --repo_id naavox/false-grabs naavox/bd-false-grabs naavox/false-grabs-closed-fingers \
         --false_grabs \
         --output_root datasets/vs-centroid-dataset \
         --preview_dir datasets/vs-centroid-dataset/false_grab_preview
@@ -653,7 +653,7 @@ two cover the same range distribution:
         --plates plates_all \
         --output_root datasets/vs-centroid-dataset/ \
         --ranges_from datasets/vs-centroid-dataset/all \
-        --count 80000 \
+        --count 100000 \
         --holding \
         --annotate_dir datasets/vs-centroid-dataset/synth_preview
 

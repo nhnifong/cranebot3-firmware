@@ -192,8 +192,8 @@ def capped_scale(scale, what):
     """A rescale factor clamped to MAX_SCALE, logged when it binds."""
     if scale <= MAX_MAGNIFICATION:
         return scale
-    logging.warning(f"{what}: magnification {scale:.1f}x capped at {MAX_MAGNIFICATION}x; "
-                    f"check the capture range on this plate")
+    # logging.warning(f"{what}: magnification {scale:.1f}x capped at {MAX_MAGNIFICATION}x; "
+    #                 f"check the capture range on this plate")
     return MAX_MAGNIFICATION
 
 
@@ -471,9 +471,11 @@ def generate(plate_dir, output_root, split, count, seed, object_dir=None, finger
         for old in Path(annotate_dir).glob("*.jpg"):
             old.unlink()
 
+    from tqdm import tqdm
+
     writer = ShardWriter(split_dir, prefix="synth", target_bytes=int(shard_mb * 1e6))
     present = 0
-    for index, target_range in enumerate(ranges):
+    for index, target_range in enumerate(tqdm(ranges, unit="frame", dynamic_ncols=True)):
         frame, row, candidates = compose(floor_plates, objects, object_dir,
                                          finger_plates, target_range, rng, object_gains,
                                          holding)
@@ -484,8 +486,6 @@ def generate(plate_dir, output_root, split, count, seed, object_dir=None, finger
         if annotate_dir and index < annotate_count:
             cv2.imwrite(str(Path(annotate_dir) / f"synth{index:04d}.jpg"),
                         annotate(frame, row, candidates))
-        if (index + 1) % 2000 == 0:
-            logging.info(f"{index + 1}/{count} frames")
     writer.flush()
 
     logging.info(f"{writer.total} synthetic frames in {writer.shards} shard(s) under "
