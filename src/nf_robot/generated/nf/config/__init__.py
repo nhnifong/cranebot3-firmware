@@ -14,6 +14,7 @@ __all__ = (
     "StringmanPilotConfig",
 )
 
+import warnings
 from dataclasses import dataclass
 
 import betterproto2
@@ -175,11 +176,10 @@ class ParkData(betterproto2.Message):
 
     reference_image: "str" = betterproto2.field(4, betterproto2.TYPE_STRING)
     """
-    Filename (not a path) of the gripper camera's view of the floor, taken from the
-    mouth of the fork - `pos` shifted out along escape_direction - and held in the
-    park_reference directory. That is as far in as steering by it is any use: from the
-    mouth the gantry has to go straight down the track into the fork, and there is no
-    room left to correct. Re-recording overwrites the file and keeps this name.
+    Unused. Held the filename of a gripper camera view taken from the mouth of the fork,
+    which park used to steer by; park steers by mouth_tag_pose now. Kept rather than
+    reserved because betterproto2's ignore_unknown_fields does not reach nested
+    messages, so configs that still have it would fail to load.
     """
 
     escape_direction: "_common__.Vec3 | None" = betterproto2.field(
@@ -209,6 +209,19 @@ class ParkData(betterproto2.Message):
 
     mouth_range: "float" = betterproto2.field(11, betterproto2.TYPE_DOUBLE)
 
+    mouth_tag_pose: "_common__.Pose | None" = betterproto2.field(
+        12, betterproto2.TYPE_MESSAGE, optional=True
+    )
+    """
+    The gantry tag as one anchor camera saw it from the mouth of the fork, in that
+    camera's own frame (raw detection, not composed into the room), and which anchor
+    that was. Parked, the tag is partly hidden and goes undetected, but at the mouth the
+    nearest anchor sees it, so park can servo back onto this view directly instead of
+    trusting the position estimate. Unset if no anchor could see the tag.
+    """
+
+    mouth_tag_anchor: "int" = betterproto2.field(13, betterproto2.TYPE_INT32)
+
     parked: "bool" = betterproto2.field(9, betterproto2.TYPE_BOOL)
     """
     Whether the gantry is on the hook right now, as far as anything here knows: set by a
@@ -216,6 +229,11 @@ class ParkData(betterproto2.Message):
     out so that a host restarted while the robot hangs on the wall still knows it has to
     unpark before it can do anything else.
     """
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.is_set("reference_image"):
+            warnings.warn("ParkData.reference_image is deprecated", DeprecationWarning)
 
 
 default_message_pool.register_message("nf.config", "ParkData", ParkData)

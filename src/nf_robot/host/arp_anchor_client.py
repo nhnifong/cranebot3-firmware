@@ -38,6 +38,9 @@ class ArpeggioAnchorClient(ComponentClient):
         self.camera_pose = np.zeros((2, 3))
         self.eye_pos = np.zeros(3)
         self.raw_gant_poses = deque(maxlen=24)
+        # (capture time, camera-frame pose) of recent gantry tag sightings, kept always
+        # rather than only while save_raw is on, for park to servo on one camera's view
+        self.recent_raw_gant_poses = deque(maxlen=24)
         self.gantry_pos_sightings = deque(maxlen=100)
         self.gantry_pos_sightings_lock = threading.RLock()
         # per spool, what the observer's monitor_spools has not taken yet: the line records,
@@ -116,6 +119,7 @@ class ArpeggioAnchorClient(ComponentClient):
                 self.datastore.gantry_pos_event.set()
 
                 self.last_gantry_frame_coords = detection['p'][1]
+                self.recent_raw_gant_poses.append((timestamp, detection['p']))
                 with self.gantry_pos_sightings_lock:
                     self.gantry_pos_sightings.append(position)
 

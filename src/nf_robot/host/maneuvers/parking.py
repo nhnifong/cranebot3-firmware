@@ -9,48 +9,35 @@ import numpy as np
 
 import nf_robot.common.definitions as model_constants
 import nf_robot.generated.nf.config as nf_config
-from nf_robot.common.cv_common import get_inward_wall_normal, get_wall_escape_direction, write_rgb
-from nf_robot.common.image_motion import image_shift
-from nf_robot.common.util import fromnp, tonp
+from nf_robot.common.cv_common import get_inward_wall_normal, get_wall_escape_direction
+from nf_robot.common.pose_functions import average_pose
+from nf_robot.common.util import fromnp, poseProtoToTuple, poseTupleToProto, tonp
 from nf_robot.generated.nf import control, telemetry
 from nf_robot.host.maneuver import Maneuver, TiltWatch, command, startup_step
 
 logger = logging.getLogger(__name__)
 
-# Gripper camera views of the parking hook; park_data.reference_image names the one this
-# robot parks against.
-# Share of the frame, from the top, that park compares against that reference. The rest is
-# fingers and whatever is a hand's width under the camera: the part that slides furthest for
-# a given move and agrees with nothing else in the view.
-PARK_COMPARE_CROP = 0.62
-PARK_COMPARE_MIN_MATCHES = 20   # fewer than this and there is nothing to fit a move to
-# (metres) how far out along the escape direction the mouth of the fork is: as far in as
-# the gripper camera is any use, since from there the gantry goes straight down the track
-# into the fork with no room to correct. record_park photographs from here and park steers
-# to here.
+# (metres) how far out along the escape direction the mouth of the fork is: from there the
+# gantry goes straight down the track into the fork with no room to correct. record_park
+# records the gantry tag pose from here and park steers back to it.
 MOUTH_OFFSET_M = 0.075
-# (degrees) fingers held here through both record_park and park. Fully open is fully
-# retracted, which takes them out of the camera's view altogether: the reference image and
-# the live view then agree about the whole frame instead of agreeing everywhere the fingers
-# are not. The server clamps to -90.
-PARK_FINGER_ANGLE = -90
-PARK_REFERENCE_DIR = 'park_reference'
 # (degrees) how far the track in and out of the parking hook leans along the wall, off the
 # wall's inward normal and towards the anchor end of it. Unpark leaves along this line and
 # park comes back down it, so one constant sets both.
 ESCAPE_TILT_DEG = 45.0
+# Sightings of the gantry tag one anchor has to deliver to describe where it is now.
+MOUTH_TAG_MIN_SIGHTINGS = 5
+# Shown when record_park cannot see the gantry tag from the mouth of the fork, which park
+# needs to steer by.
+TAG_NOT_SEEN_MESSAGE = ('This parking hook location or lighting does not allow the marker to '
+                        'be seen. See parking hook install guide '
+                        'https://neufangled.com/docs/arp_install_guide/#mounting-the-parking-hook')
 
 
 class Parking(Maneuver):
     name = 'parking'
     title = 'Parking'
     config_field = 'park_data'
-
-    def __init__(self, ob):
-        super().__init__(ob)
-        # (name, mtime) -> grayscale image, so a servo loop reading the reference several
-        # times a second is not decoding a JPEG every pass.
-        self._reference_cache = {}
 
     def send_setup_telemetry(self):
         if self.data is not None and self.data.pos is not None:
@@ -90,102 +77,53 @@ class Parking(Maneuver):
         self.save_data()
         logger.info(f'Robot is {"parked" if parked else "not parked"}')
 
-    def save_reference_image(self, frame):
-        """Write the gripper camera frame out as the parking reference, and return its name.
+    def gantry_tag_now(self, window_s, after=None, anchor=None, min_sightings=MOUTH_TAG_MIN_SIGHTINGS):
+        """The gantry tag as one anchor camera sees it now: (anchor_num, (rvec, tvec)).
 
-        A config that already names one keeps that name and has the file overwritten, so
-        re-recording replaces the reference instead of leaving orphans behind.
+        The average of that camera's sightings in the window, in its own frame. anchor picks
+        the camera; otherwise it is whichever saw the tag most. None if no camera delivered
+        min_sightings.
         """
-        directory = self.output_dir(PARK_REFERENCE_DIR)
-        name = (self.data.reference_image
-                or f'park_reference_{time.strftime("%Y%m%d_%H%M%S")}.jpg')
-        write_rgb(directory / name, frame)
-        logger.info(f'Saved park reference image {directory / name}')
-        return name
+        seen = self.ob.raw_gantry_tag_sightings(window_s, after=after)
+        if anchor is not None:
+            seen = {anchor: seen.get(anchor, [])}
+        if not seen:
+            return None
+        num, rows = max(seen.items(), key=lambda kv: len(kv[1]))
+        if len(rows) < min_sightings:
+            return None
+        poses = [(np.asarray(p[0], dtype=float).reshape(3), np.asarray(p[1], dtype=float).reshape(3))
+                 for _, p in rows]
+        return num, average_pose(poses)
 
-    def compare_to_reference(self, frame, name=None):
-        """Where this gripper frame sits relative to a parking reference image.
+    def tag_offset_to_room(self, anchor, now_pose):
+        """The room-frame move that would put the gantry tag back where it was recorded.
 
-        Returns (dx, dy, confidence, inliers) as image_motion.image_shift does: how far the
-        scene has slid in pixels between the two, the share of feature matches that agree
-        on that (0 to 1), and how many that was.
+        Both poses are from the same camera, so the difference of their translations is how
+        far the tag has to move in that camera's frame, and only the camera's room rotation
+        is needed to say which way that is in the room. The camera's room position, the
+        position estimate and the tag-to-gantry offset all cancel out; the last one because
+        the gantry does not turn, so the tag and the gantry move together. None if the
+        anchor is not connected.
         """
-        name = name or self.data.reference_image
-        if not name:
+        camera = self.ob.anchor_camera_pose(anchor)
+        if camera is None:
             return None
-        reference = self._reference_gray(name)
-        if reference is None:
-            return None
-        return image_shift(reference, cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY),
-                           crop=PARK_COMPARE_CROP, min_matches=PARK_COMPARE_MIN_MATCHES)
-
-    def _reference_gray(self, name):
-        """A parking reference image in grayscale, or None if it cannot be read."""
-        path = self.output_dir(PARK_REFERENCE_DIR) / name
-        try:
-            mtime = path.stat().st_mtime
-        except OSError:
-            logger.warning(f'Parking reference image {path} is missing')
-            return None
-        if (name, mtime) not in self._reference_cache:
-            image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
-            if image is None:
-                logger.warning(f'Parking reference image {path} could not be read')
-                return None
-            self._reference_cache = {(name, mtime): image}
-        return self._reference_cache[(name, mtime)]
-
-    def offset_to_room(self, dx, dy):
-        """The room-frame XY move that would undo a (dx, dy) pixel slide of the scene.
-
-        A camera that translates by t sees the scene slide by -f*t/depth, so the move that
-        puts the scene back is (dx, dy) * depth / f in the camera's own frame. Depth is what
-        the rangefinder reads, which is the distance straight down rather than along an
-        optical axis that also looks forward, so this is a direction with roughly the right
-        size rather than a measurement - which is fine for something that measures again
-        after every step, and is why the gain on it is well under one.
-        """
-        distance = self.ob.laser_range()
-        if distance is None:
-            return None
-        intrinsics = self.ob.gripper_camera_intrinsics()
-        # camera optical frame: x right, y down, z along the axis
-        in_camera = np.array([dx * distance / intrinsics[0][0],
-                              dy * distance / intrinsics[1][1],
-                              0.0])
-        return self.ob.gripper_camera_to_room(in_camera)[:2]
-
-    async def measure_reference_offset(self, name=None):
-        """How far the gripper's view is from a parking reference, as (offset_px, move, conf).
-
-        None when there is nothing to compare: no gripper, no reference recorded, or no
-        frame. A low confidence is still returned rather than swallowed - the caller has to
-        decide whether "cannot tell" is a reason to stop, and that differs by caller.
-        """
-        if not self.ob.gripper_connected():
-            return None
-        name = name or self.data.reference_image
-        if not name:
-            return None
-        frame = await self.ob.gripper_frame(timeout=3.0)
-        if frame is None:
-            return None
-        result = self.compare_to_reference(frame, name)
-        if result is None:
-            return None
-        dx, dy, confidence, inliers = result
-        return float(np.hypot(dx, dy)), self.offset_to_room(dx, dy), confidence
+        rotation, _ = cv2.Rodrigues(np.asarray(camera[0], dtype=float))
+        recorded = poseProtoToTuple(self.data.mouth_tag_pose)
+        return rotation @ (recorded[1] - now_pose[1])
 
     @command(control.Command.RECORD_PARK, motion=True)
     async def record_park(self):
-        """Record where the parking hook is, and what the camera sees from over it.
+        """Record where the parking hook is, and how an anchor camera sees the gantry tag
+        from the mouth of it.
 
         Ends back down on the hook
         This is a motion task.
         """
         LIFT_M = 0.10               # up off the hook, the same move unpark starts with
         LIFT_SPEED_MPS = 0.04
-        SETTLE_S = 2.0              # let the pole stop swinging before the photograph
+        SETTLE_S = 2.0              # let the pole stop swinging before reading the tag
         CAPTURE_TIMEOUT_S = 5.0
         CONFIRM_TIMEOUT_S = 120.0   # long enough to walk over and look at the hook
 
@@ -218,19 +156,13 @@ class Parking(Maneuver):
             # throughout and is not restored afterwards, the same as park.
             ob.set_swing_cancellation(False)
 
-            # Fingers fully open, which retracts them clear of the camera, and is where park
-            # holds them too: the reference image has to be framed the way park will see it.
-            # Waited on rather than fired off, since the photograph is the whole point here.
-            await ob.settle_fingers(PARK_FINGER_ANGLE)
-
             # 1. up off the hook.
             logger.info(f'Record park: lifting {LIFT_M * 100:.0f}cm from '
                         f'{np.round(hook_pos, 3)}')
             await ob.nudge_gantry(np.array([0.0, 0.0, LIFT_M]), speed=LIFT_SPEED_MPS)
 
-            # 2. nose away from the wall. The camera looks out from under the nose, so this
-            # is what frames the reference image, and park turns back to the angle this
-            # leaves the wrist at.
+            # 2. nose away from the wall. park turns back to the angle this leaves the wrist
+            # at, so the gripper meets the hook the way it sat on it here.
             away = get_inward_wall_normal(hook_pos, ob.anchor_points())
             heading = ob.wrist_angle_for_heading(float(np.arctan2(away[0], away[1])))
             logger.info(f'Record park: turning the nose to face {np.round(away, 3)}, '
@@ -246,27 +178,41 @@ class Parking(Maneuver):
                                                anchor_indices=model_constants.ANCHOR_MOUNTED_POINTS,
                                                tilt_deg=ESCAPE_TILT_DEG)
 
-            # 3. out to the mouth of the fork, which is where the reference image has to be
-            # taken from: it is the last place park can still correct itself, so it is the
-            # place park has to be able to recognise.
+            # 3. out to the mouth of the fork, which is where the tag pose has to be taken
+            # from: it is the last place park can still correct itself.
             hover_pos = ob.gantry_position()
             logger.info(f'Record park: stepping {MOUTH_OFFSET_M * 100:.1f}cm out to the '
                         f'mouth of the fork along {np.round(escape, 3)}')
             await ob.nudge_gantry(np.array([escape[0], escape[1], 0.0]) * MOUTH_OFFSET_M,
                                   speed=LIFT_SPEED_MPS)
+            settled_at = time.time()
             await asyncio.sleep(SETTLE_S)
 
-            # 4. the photograph, from a frame captured after everything stopped moving, and
-            # the range from here, which is what park sets its own altitude by.
+            # The gantry tag as the anchor nearest the hook sees it from here. Parked it is
+            # partly hidden and goes undetected, but at the mouth it is in view, and park
+            # can servo back onto this one camera's view of it. Only frames from after the
+            # move stopped, and the settle, count.
+            mouth_tag = None
+            tag_deadline = time.time() + CAPTURE_TIMEOUT_S
+            while mouth_tag is None and time.time() < tag_deadline:
+                mouth_tag = self.gantry_tag_now(window_s=SETTLE_S, after=settled_at + SETTLE_S / 2)
+                if mouth_tag is None:
+                    await asyncio.sleep(0.2)
+            # the range from here, which is what park sets its own altitude by
             mouth_range = ob.laser_range()
             if mouth_range is None:
                 logger.warning('Record park: no rangefinder reading at the mouth; park will '
                                'have to take its altitude from the position estimate')
-            frame = await ob.gripper_frame(timeout=CAPTURE_TIMEOUT_S)
-            if frame is None:
-                logger.warning('No frame arrived from the gripper camera; '
+
+            if mouth_tag is None:
+                # park has nothing to steer by without it, so a location recorded without it
+                # would only fly the robot at the hook blind
+                logger.warning('Record park: no anchor camera saw the gantry tag at the mouth; '
                                'parking location not saved')
+                self.notify(TAG_NOT_SEEN_MESSAGE)
             else:
+                logger.info(f'Record park: anchor {mouth_tag[0]} sees the gantry tag at the mouth '
+                            f'at {np.round(mouth_tag[1][1], 3)} in its camera frame')
                 # the hovering position, not this one: the mouth is derived from it and the
                 # escape direction, and the descent is measured from it
                 self.data.pos = fromnp(hover_pos)
@@ -274,9 +220,10 @@ class Parking(Maneuver):
                 self.data.wrist_angle = wrist_angle
                 self.data.parked_range = parked_range or 0.0
                 self.data.mouth_range = mouth_range or 0.0
+                self.data.mouth_tag_anchor = int(mouth_tag[0])
+                self.data.mouth_tag_pose = poseTupleToProto(mouth_tag[1])
                 logger.info(f'Record park: range {parked_range} on the hook, '
                             f'{mouth_range} at the mouth')
-                self.data.reference_image = self.save_reference_image(frame)
                 self.save_data()
                 ob.send_ui(named_position=telemetry.NamedObjectPosition(
                     name='parking_location',
@@ -328,58 +275,37 @@ class Parking(Maneuver):
                                                None, here, key=self.velocity_key())
             await asyncio.sleep(LOOP_S)
 
-    async def _approach_hook_on_reference(self, aim, lateral, tilt):
-        """Close the last of the approach by steering the gripper's view onto the reference.
+    async def _approach_hook_on_tag(self, lateral, tilt):
+        """Close the last of the approach by steering the gantry tag back to where one anchor
+        camera saw it when the parking location was recorded.
 
-        Each pass measures how far the view has slid from the image record_park took over
-        the hook and moves against it, so the thing being closed is the picture rather than
-        a position estimate that only has to be a couple of centimetres out to miss a slot.
-        Height stays on the estimate: an image says nothing about it that a change of scene
-        could not equally explain.
+        The error each pass is the recorded camera-frame tag position minus the current one,
+        from the same camera, turned into the room by that camera's rotation - see
+        tag_offset_to_room. The position estimate is not used to decide where to go, only by
+        move_direction_speed to work out line speeds. All three axes come from the tag, so
+        this also sets the height.
 
-        A reading nothing agrees on moves nothing - a low confidence is what a view half
-        full of somebody walking past looks like, and the next frame is a fifth of a second
-        away. Excursion is bounded against the recorded position for the same reason: a
-        confident wrong answer should not be able to fly the gantry into a wall.
-
-        lateral shifts what counts as arrived: the image says where the recorded spot is,
-        and a retry searching to one side of it wants to stop that far short of matching.
-
-        Meant for the last few centimetres, after the track approach has done the coarse
-        work. Thirty centimetres out the two views barely overlap and the fit is poor - one
-        run measured the right distance in a direction 47 degrees wrong, on a tenth of its
-        matches agreeing - while over the hook the same fit agrees two thirds of the way and
-        lands within a couple of centimetres. Readings are smoothed for that last part: a
-        couple of centimetres of noise on consecutive frames would otherwise be chased.
-
+        lateral is the attempt's offset from the recorded spot.
         None once it arrives, or why it stopped.
         """
-        LOOP_S = 0.2                  # the camera is ~0.2s behind, so a faster loop only
-                                      # steers on staler pictures
-        TIMEOUT_S = 20.0
-        ARRIVED_M = 0.005             # how close the view has to put us, in both axes
-        ARRIVED_PASSES = 3            # ...held for this many readings, since one is noise
-        # A servo that is closing gets closer. One that has stopped getting closer has found
-        # its limit - the measurement noise, a bias, a cable creeping - and waiting out the
-        # timeout from there just hovers, so a stall ends this stage. It never fails the
-        # attempt: this loop is steering on a smoothed error that a bad patch of readings can
-        # leave sitting well off, while the check at the mouth measures again from scratch
-        # and is the thing that decides whether to go in.
-        STALL_S = 6.0                 # no improvement for this long means it is done moving
-        IMPROVEMENT_M = 0.001         # ...and this much closer is what counts as improving
-        GOOD_ENOUGH_M = 0.055         # a stall further out than this is worth remarking on
-        MIN_CONFIDENCE = 0.5          # share of matches that must agree to be worth moving on
-        BLIND_LIMIT_S = 6.0          # give up if nothing readable arrives for this long
-        GAIN = 1.0                    # 1/s on the room-frame error. Not lower: at 0.4 a
-                                      # half-centimetre error asks for 2mm/s, which
-                                      # move_direction_speed rounds to a dead stop
-        MIN_SPEED_MPS = 0.006         # ...and this is the speed it stops rounding away
+        LOOP_S = 0.2
+        TIMEOUT_S = 30.0
+        WINDOW_S = 0.6                # sightings this recent describe where the tag is now
+        MIN_SIGHTINGS = 2             # ...and this many of them, from the recorded anchor
+        ARRIVED_M = 0.005
+        ARRIVED_PASSES = 3
+        STALL_S = 6.0
+        IMPROVEMENT_M = 0.001
+        BLIND_LIMIT_S = 6.0
+        GAIN = 1.0
+        MIN_SPEED_MPS = 0.006
         MAX_SPEED_MPS = 0.05
-        MAX_EXCURSION_M = 0.45        # never steer further than this from the recorded spot
-        CLIMB_GAIN = 0.3              # 1/s holding the recorded altitude, on the estimate
-        SMOOTHING = 0.5               # of the previous error estimate kept each pass
+        MAX_ERROR_M = 0.45            # a tag reading this far off is not one to fly at
+        SMOOTHING = 0.5
 
-        logger.info('Park: closing on the reference image')
+        anchor = self.data.mouth_tag_anchor
+        target = np.array([lateral[0], lateral[1], 0.0])
+        logger.info(f'Park: closing on the gantry tag pose anchor {anchor} recorded')
         deadline = time.time() + TIMEOUT_S
         last_reading = time.time()
         close_passes = 0
@@ -391,70 +317,51 @@ class Parking(Maneuver):
             if caught:
                 return f'{caught} on the way in'
             if time.time() > deadline:
-                return 'took too long to close on the reference image'
+                return 'took too long to close on the recorded gantry tag pose'
 
-            # the newest frame rather than a fresh one: it is a fifth of a second behind
-            # whatever the gantry is doing, and waiting for a newer one only makes it two
-            move = error = None
-            frame = await self.ob.gripper_frame(after=0, timeout=1.0)
-            result = self.compare_to_reference(frame) if frame is not None else None
-            if result is not None:
-                dx, dy, confidence, inliers = result
-                logger.debug(f'Park: offset ({dx:+.1f}, {dy:+.1f})px, '
-                             f'{inliers} matches agreed ({confidence:.2f})')
-                if confidence >= MIN_CONFIDENCE:
-                    move = self.offset_to_room(dx, dy)
-                    if move is not None:
-                        move = move + lateral
-                        smoothed = (move if smoothed is None
-                                    else smoothed * SMOOTHING + move * (1 - SMOOTHING))
-                        move = smoothed
-                        error = float(np.linalg.norm(move))
+            move = None
+            seen = self.gantry_tag_now(WINDOW_S, anchor=anchor, min_sightings=MIN_SIGHTINGS)
+            if seen is not None:
+                move = self.tag_offset_to_room(anchor, seen[1])
             if move is None:
                 if time.time() - last_reading > BLIND_LIMIT_S:
-                    return ('the gripper view has not matched the reference image for '
+                    return (f'anchor {anchor} has not seen the gantry tag for '
                             f'{BLIND_LIMIT_S:.0f}s')
                 await self.ob.move_direction_speed(np.zeros(3), 0, key=self.velocity_key())
                 await asyncio.sleep(LOOP_S)
                 continue
             last_reading = time.time()
 
+            move = move + target
+            smoothed = move if smoothed is None else smoothed * SMOOTHING + move * (1 - SMOOTHING)
+            move = smoothed
+            error = float(np.linalg.norm(move))
+            logger.debug(f'Park: tag says move {np.round(move * 100, 1)}cm')
+            if error > MAX_ERROR_M:
+                return f'the gantry tag puts the mouth {error:.2f}m away, too far to trust'
+
             if error < best - IMPROVEMENT_M:
                 best, best_at = error, time.time()
             elif time.time() - best_at > STALL_S:
-                where = (f'{error * 100:.1f}cm from this attempt\'s aim point; steepest lean '
-                         f'on the way in was {tilt.worst_tilt:.1f} degrees')
-                if error < GOOD_ENOUGH_M:
-                    logger.info(f'Park: the view stopped closing at {where}')
-                else:
-                    logger.warning(f'Park: the view stopped closing well out, at {where} - '
-                                   f'going on to the check at the mouth anyway')
+                logger.warning(f'Park: the tag stopped closing at {error * 100:.1f}cm from this '
+                               f'attempt\'s aim point; steepest lean on the way in was '
+                               f'{tilt.worst_tilt:.1f} degrees')
                 return None
 
             if error < ARRIVED_M:
                 close_passes += 1
                 if close_passes >= ARRIVED_PASSES:
-                    # move carries the lateral offset, so taking it back out gives the
-                    # distance from the recorded mouth itself
-                    from_mouth = float(np.linalg.norm(move - lateral))
-                    logger.info(f"Park: {error * 100:.1f}cm from this attempt's aim "
-                                f"point and {from_mouth * 100:.1f}cm from the recorded "
-                                f"mouth; steepest lean on the way in was "
-                                f"{tilt.worst_tilt:.1f} degrees")
+                    from_mouth = float(np.linalg.norm(move - target))
+                    logger.info(f"Park: {error * 100:.1f}cm from this attempt's aim point and "
+                                f"{from_mouth * 100:.1f}cm from the recorded mouth by the tag; "
+                                f"steepest lean on the way in was {tilt.worst_tilt:.1f} degrees")
                     return None
             else:
                 close_passes = 0
 
-            here = self.ob.gantry_position()
-            excursion = here[:2] + move - aim[:2]
-            if float(np.linalg.norm(excursion)) > MAX_EXCURSION_M:
-                return (f'the reference image is steering {np.linalg.norm(excursion):.2f}m '
-                        f'away from the recorded parking location')
-
             speed = min(MAX_SPEED_MPS, max(MIN_SPEED_MPS, error * GAIN))
-            velocity = np.array([move[0] / error * speed, move[1] / error * speed,
-                                 (aim[2] - here[2]) * CLIMB_GAIN])
-            await self.ob.move_direction_speed(velocity, None, here, key=self.velocity_key())
+            await self.ob.move_direction_speed(move / error * speed, None,
+                                               self.ob.gantry_position(), key=self.velocity_key())
             await asyncio.sleep(LOOP_S)
 
     @command(control.Command.PARK, motion=True)
@@ -464,21 +371,23 @@ class Parking(Maneuver):
         The hook is a diagonal slot built around the flat marker.
         It is entered along the same line unpark leaves by.
         First we fly to a point HANDOVER_M short of the mouth of the fork.
-        The gripper camera steers the rest of the way onto the hook using a different from a reference image.
-        After getting as close as this can take us, it goes in along the track blind and lowers
-        Looking for the signature of a successful park, using tension and laser rangefinder.
+        The gantry tag, as the anchor camera that recorded it sees it, steers the rest of the way
+        to the mouth. From there it goes in along the track blind and lowers,
+        looking for the signature of a successful park, using tension and laser rangefinder.
 
         Swing cancellation is worth having for the flight out and is switched off for good once the
-        camera takes over. it's very important that it isn't turned on in the vicinity of the hook.
+        tag takes over. it's very important that it isn't turned on in the vicinity of the hook.
         That would almost certainly damage something.
 
         This is a motion task.
         """
         FINGER_ANGLE_PARKED = 70      # a neutral-looking hand position.
         HANDOVER_M = 0.10             # how far out beyond the mouth the flight ends and
-                                      # the camera takes over.
+                                      # the tag takes over.
         DESCENT_M = 0.30              # how far down to look for the hook
-        DESCENT_SPEED_MPS = 0.03
+        DESCENT_SPEED_MPS = 0.03      # to start with, and ramping up the longer the hook
+        DESCENT_ACCEL_MPS2 = 0.015    # takes to take the weight: lines that are nearly slack
+        DESCENT_MAX_SPEED_MPS = 0.12  # but not quite need paying out faster to let go
         DESCENT_LOOP_S = 0.1
         # Maximum permissible pole tilt while trying to park
         TILT_DEG = 10.0
@@ -493,19 +402,21 @@ class Parking(Maneuver):
         PARK_ATTEMPTS = len(ATTEMPT_OFFSETS_M)
         BACKOUT_LIFT_M = 0.10         # up off whatever it is touching before retreating
         BACKOUT_SPEED_MPS = 0.05
-        PARKED_FRACTION = 0.3         # every line under this share of its free-hanging
-                                      # tension is the hook having taken the weight
+        PARKED_FRACTION = 0.3         # total line tension under this share of the total
+                                      # free-hanging tension is the hook having taken the
+                                      # weight. Judged on the sum, not line by line: a
+                                      # lightly loaded line's limit can sit under what its
+                                      # sensor reads fully slack, and one line's jitter
+                                      # would keep resetting the confirm timer
         PARKED_CONFIRM_S = 0.4
         PARKED_RANGE_TOL_M = 0.05     # how far off the recorded parked range still counts
         RANGE_TRIM_TOL_M = 0.01
         RANGE_TRIM_STEPS = 5
         RANGE_TRIM_TRAVEL_M = 0.30
-        SWING_SETTLE_S = 3.0          # after the approach, before steering by the camera
+        SWING_SETTLE_S = 3.0          # after the approach, before steering by the tag
         # Lined up at the mouth is the last thing that can be checked - past it the gantry
-        # is inside the fork and the camera is looking at something it has no reference for.
-        # In metres: pixels mean different distances at different heights.
+        # is inside the fork and the tag is partly hidden.
         ALIGNED_M = 0.10             # lined up at the mouth, before going in
-        VERIFY_CONFIDENCE = 0.4       # under this the view has not been recognised at all
         SETTLE_S = 2.0
 
         ob = self.ob
@@ -524,12 +435,17 @@ class Parking(Maneuver):
             parkpos = tonp(park_data.pos)
             track = tonp(park_data.escape_direction)[:2]
             track = track / (np.linalg.norm(track) + 1e-9)  # outward along the slot
-            if not ob.gripper_connected() or not park_data.reference_image:
-                stop_short('parking needs a connected gripper and a recorded reference image')
+            if park_data.mouth_tag_pose is None:
+                # a location recorded before parking steered by the tag, or one where the tag
+                # could not be seen; either way there is nothing to steer onto the hook by
+                stop_short('no gantry tag pose was recorded at the mouth of the hook')
+                self.notify('The parking location needs to be recorded again. Rest the marker '
+                            'in the parking hook and run Set Parking Location.')
                 return
-
-            # fingers fully open to clear view
-            await ob.set_finger_angle(PARK_FINGER_ANGLE)
+            if ob.anchor_camera_pose(park_data.mouth_tag_anchor) is None:
+                stop_short(f'anchor {park_data.mouth_tag_anchor}, which recorded the gantry '
+                           f'tag at the mouth, is not connected')
+                return
 
             # across the track, so an attempt offset can be written in the track's frame
             sideways = np.array([-track[1], track[0]])
@@ -547,7 +463,7 @@ class Parking(Maneuver):
                         * (MOUTH_OFFSET_M + HANDOVER_M))
 
             first = handover_point(in_room(ATTEMPT_OFFSETS_M[0]))
-            logger.info(f'Park: flying to {np.round(first, 3)}, where the camera takes over, '
+            logger.info(f'Park: flying to {np.round(first, 3)}, where the tag takes over, '
                         f'{(MOUTH_OFFSET_M + HANDOVER_M) * 100:.1f}cm out from '
                         f'{np.round(parkpos, 3)} along {np.round(track, 3)}')
             async with ob.prefer_swing_cancellation():
@@ -555,7 +471,7 @@ class Parking(Maneuver):
                 await asyncio.sleep(SETTLE_S) # Allow swing cancellation to damp
 
             # 2. Turn swing cancellation off for good, and the wrist back
-            # to the angle the reference image was taken at.
+            # to the angle record_park left it at.
             ob.set_swing_cancellation(False)
             if ob.gripper_connected() and park_data.wrist_angle:
                 await ob.settle_wrist_to_heading(park_data.wrist_angle)
@@ -576,43 +492,46 @@ class Parking(Maneuver):
                 logger.warning('Park: no mouth range recorded, so the altitude is whatever '
                                'the position estimate says')
 
+            def check_tag_alignment(lateral):
+                """Why the tag says this attempt is not lined up at the mouth, or None."""
+                anchor = park_data.mouth_tag_anchor
+                seen = self.gantry_tag_now(SETTLE_S, anchor=anchor)
+                off = None if seen is None else self.tag_offset_to_room(anchor, seen[1])
+                if off is None:
+                    logger.warning(f'Park: anchor {anchor} cannot see the gantry tag to '
+                                   f'check the alignment; going in without checking it')
+                    return None
+                off = off + np.array([lateral[0], lateral[1], 0.0])
+                logger.info(f"Park: by the tag, this attempt's aim point is "
+                            f"{np.round(off * 100, 1)}cm away")
+                if float(np.linalg.norm(off)) > ALIGNED_M:
+                    return (f"the tag puts this attempt's aim point "
+                            f"{np.linalg.norm(off) * 100:.1f}cm away - not lined up with it")
+                return None
+
             async def attempt(offset):
                 """One go at getting onto the hook, aiming offset metres from the recorded
                 spot. None if it worked, or why it did not."""
-                # the mouth of the fork, which is what the reference image was taken from
-                lateral = offset[:2]   # the servo only steers horizontally; z is held
+                # the mouth of the fork, which is where the tag pose was recorded from
+                lateral = offset[:2]
                 mouth = parkpos + offset + np.array([track[0], track[1], 0.0]) * MOUTH_OFFSET_M
                 tilt = TiltWatch(ob, tilt_deg=TILT_DEG, confirm_s=TILT_CONFIRM_S)
                 logger.info(f'Park: closing on the mouth of the fork at {np.round(mouth, 3)}')
 
-                # 2. Close the distance using the reference image
+                # 2. Close the distance using the gantry tag
                 ob.slow_stop_all_spools()
                 await asyncio.sleep(SWING_SETTLE_S)
-                failed = await self._approach_hook_on_reference(mouth, lateral, tilt)
+                failed = await self._approach_hook_on_tag(lateral, tilt)
                 if failed:
                     return failed
 
                 ob.slow_stop_all_spools()
                 await asyncio.sleep(SETTLE_S)
 
-                # Report visual alignment numbers before moving in.
-                aligned = await self.measure_reference_offset()
-                if aligned is None:
-                    logger.warning('Park: nothing to check the alignment against before going in')
-                elif aligned[2] < VERIFY_CONFIDENCE:
-                    logger.warning(f'Park: the view at the mouth was not recognised '
-                                   f'(confidence {aligned[2]:.2f}); going in without checking it')
-                elif aligned[1] is None:
-                    logger.warning('Park: no rangefinder reading, so the view offset cannot be '
-                                   'turned into a distance; going in without checking it')
-                elif float(np.linalg.norm(aligned[1] + lateral)) > ALIGNED_M:
-                    # against where this attempt meant to end up, which is the recorded
-                    # mouth shifted by lateral; measuring against the recorded mouth itself
-                    # would fail every attempt that is deliberately searching to one side
-                    return (f"the view puts this attempt's aim point "
-                            f"{np.linalg.norm(aligned[1] + lateral) * 100:.1f}cm away "
-                            f"({np.linalg.norm(aligned[1]) * 100:.1f}cm from the recorded "
-                            f"mouth) - not lined up with it")
+                # Report alignment numbers before moving in.
+                failed = check_tag_alignment(lateral)
+                if failed:
+                    return failed
 
                 # 4. Blindly move in along a track. we may or may not be aligned.
                 # use various readings to look for the signature of a successful park
@@ -624,20 +543,30 @@ class Parking(Maneuver):
 
                 # 5. lower until the hook takes the weight.
                 free = await ob.measure_free_tension()
-                parked_limit = free * PARKED_FRACTION
+                parked_limit = float(np.sum(free)) * PARKED_FRACTION
                 tilt = TiltWatch(ob, tilt_deg=TILT_DEG, confirm_s=TILT_CONFIRM_S)
-                logger.info(f'Park: lowering up to {DESCENT_M * 100:.0f}cm, parked when every '
-                            f'line falls under {np.round(parked_limit, 2)}N')
+                logger.info(f'Park: lowering up to {DESCENT_M * 100:.0f}cm, parked when the '
+                            f'lines total under {parked_limit:.2f}N (free '
+                            f'{np.round(free, 2)}N)')
                 start_z = float(ob.gantry_position()[2])
                 tension = ob.line_tensions()
                 slack_since = None
                 landed = False
+                descent_started = time.time()
                 while float(ob.gantry_position()[2]) > start_z - DESCENT_M:
                     caught = tilt.check()
                     if caught:
                         return f'{caught} on the way down'
                     tension = tension * 0.7 + ob.line_tensions() * 0.3
-                    if np.all(tension < parked_limit):
+                    # how far the total still is above the parked limit; zero is parked
+                    total = float(np.sum(tension))
+                    residual = max(total - parked_limit, 0.0)
+                    speed = min(DESCENT_MAX_SPEED_MPS, DESCENT_SPEED_MPS
+                                + DESCENT_ACCEL_MPS2 * (time.time() - descent_started))
+                    logger.debug(f'Park: {start_z - float(ob.gantry_position()[2]):.3f}m down '
+                                 f'at {speed * 100:.1f}cm/s, residual tension {residual:.2f}N over the limit '
+                                 f'(total {total:.2f}N, lines {np.round(tension, 2)}N)')
+                    if total < parked_limit:
                         if slack_since is None:
                             slack_since = time.time()
                         elif time.time() - slack_since > PARKED_CONFIRM_S:
@@ -649,15 +578,16 @@ class Parking(Maneuver):
                             break
                     else:
                         slack_since = None
-                    await ob.move_direction_speed(np.array([0.0, 0.0, -DESCENT_SPEED_MPS]),
+                    await ob.move_direction_speed(np.array([0.0, 0.0, -speed]),
                                                   None, ob.gantry_position(),
                                                   key=self.velocity_key(), downward_bias=0)
                     await asyncio.sleep(DESCENT_LOOP_S)
                 ob.slow_stop_all_spools()
 
                 if not landed:
-                    return (f'lowered the full {DESCENT_M * 100:.0f}cm without every line going '
-                            f'slack ({np.round(tension, 2)}N)')
+                    return (f'lowered the full {DESCENT_M * 100:.0f}cm without the lines going '
+                            f'slack ({np.sum(tension):.2f}N total, '
+                            f'{np.round(tension, 2)}N per line)')
 
                 # Slack lines say something is holding the gantry up. The range says it is
                 # being held at the height the hook holds it at, which the front edge of the

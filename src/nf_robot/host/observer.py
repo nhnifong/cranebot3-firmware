@@ -144,6 +144,14 @@ VIDEO_LATENCY_S = 0.25
 # of the gantry marker before that is called a fault rather than a gap.
 VISIBILITY_POLL_S = 1.0
 UNSEEN_LIMIT_S = 40.0
+# Motion tasks (by coroutine name) and startup steps (by step name) allowed to run while the
+# gantry is recorded as parked. Anything else could drag the lines across the hook. Record
+# park starts from the hook by design, and the startup sequence checks each of its steps.
+PARKED_ALLOWED_MOTION_TASKS = {'unpark', 'record_park', 'startup_sequence'}
+# Sightings of the gantry marker at least this far (m) from the recorded parking location, in
+# one of monitor_gantry_visibility's polls, mean a parked robot was unparked by hand.
+MANUAL_UNPARK_DISTANCE_M = 0.5
+MANUAL_UNPARK_SIGHTINGS = 3
 # (s) of spool records monitor_spools keeps, to write out with a derailment
 SPOOL_HISTORY_S = 60.0
 # (m) below this rangefinder reading monitor_spools ignores the derail detector: with the
@@ -1910,6 +1918,7 @@ class AsyncObserver:
             ema = ema * 0.9 + self.pe.tension * 0.1
             if np.any(ema > max_safe_tension):
                 logger.warning(f'Tension limit reached! backing off. limit={max_safe_tension} actual={ema}')
+                self.zero_input_velocities()
                 self._respond_to_over_tension(ema.copy())
                 # Shedding tension by cycling torque is a safety action, not an
                 # operator one, so it must not move the UI's torque toggle.
@@ -1947,6 +1956,11 @@ class AsyncObserver:
                 self._motion_owner.abort_reason = 'marker'
             self.motion_task.cancel()
 
+    def _gantry_parked(self):
+        """Whether the gantry is on the parking hook, as far as the saved park data knows."""
+        park_data = self.config.park_data
+        return park_data is not None and park_data.parked
+
     async def monitor_gantry_visibility(self):
         """Watch how the anchor cameras see the gantry marker for the two faults that produce
         confident, wrong observations rather than an obvious absence of them:
@@ -1976,6 +1990,7 @@ class AsyncObserver:
         newest_per_anchor = {}      # anchor num -> newest capture time already taken from it
         # host clock, so a component whose clock is skewed cannot fake staleness
         last_advance = time.time()
+        newest_parked_check = 0.0   # newest capture time the parked check has looked at
 
         # Warmup time. Seconds until this task becomes active
         await asyncio.sleep(30)
@@ -2024,16 +2039,33 @@ class AsyncObserver:
                 else:
                     self._gantry_marker_warned.discard(('duplicate', anchor_num))
 
+            # ---- manual unparking. Driving by hand is allowed while parked so a trained
+            # operator can lift the gantry off the hook themselves, and nothing else would
+            # then clear the parked flag. Several sightings well away from the hook mean it
+            # has left; one alone could be a stray detection, and wrongly clearing the flag
+            # would let automatic moves run with the gantry on the hook.
+            fresh = rows[rows[:, 0] > newest_parked_check]
+            if len(fresh):
+                newest_parked_check = float(fresh[:, 0].max())
+                if self._gantry_parked() and self.config.park_data.pos is not None:
+                    park_pos = tonp(self.config.park_data.pos)
+                    away = np.linalg.norm(fresh[:, 2:] - park_pos, axis=1)
+                    if np.count_nonzero(away > MANUAL_UNPARK_DISTANCE_M) >= MANUAL_UNPARK_SIGHTINGS:
+                        logger.info(f'Gantry marker seen {float(np.median(away)):.2f}m from the '
+                                    f'parking location; it has been unparked by hand')
+                        self.maneuver('parking').set_parked(False)
+
             # ---- 2. no camera seeing the marker at all. Judged on whether any one camera's
             # own newest sighting moved on, so two components whose clocks disagree cannot
             # leave the slower one's fresh sightings looking older than the faster one's.
             if advanced:
                 last_advance = time.time()
                 self._gantry_marker_warned.discard('unseen')
-            elif not self.anchors or self._marker_may_be_hidden:
+            elif not self.anchors or self._marker_may_be_hidden or self._gantry_parked():
                 # nothing is looking, which is a connection problem and reported as one; or
                 # calibration has yet to stand the pole upright, which is what brings the
-                # marker into view, and the clock starts from there
+                # marker into view, and the clock starts from there; or the gantry is on
+                # the parking hook, where the marker is partly hidden and goes undetected
                 last_advance = time.time()
             elif time.time() - last_advance > UNSEEN_LIMIT_S:
                 self._report_gantry_marker_fault(
@@ -2095,7 +2127,16 @@ class AsyncObserver:
 
         owner is the maneuver the task belongs to, if any, and safety the SafetyPolicy the
         safety monitors hold it to (the default one if not given).
+
+        While parked, only the motion tasks in PARKED_ALLOWED_MOTION_TASKS run; anything else
+        could drag the lines across the hook, so it is dropped, and whatever is running is
+        left alone. Manual driving does not go through here and is unaffected.
         """
+        if self._gantry_parked() and coro.__name__ not in PARKED_ALLOWED_MOTION_TASKS:
+            coro.close()
+            logger.info(f"Can't move while in the parking hook; ignoring {coro.__name__}. "
+                        f"Unpark first.")
+            return
         if self.motion_task is not None and not self.motion_task.done():
             logger.debug(f'current motion task {self.motion_task} done={self.motion_task.done()}')
             logger.info(f"Cancelling previous motion task: {self.motion_task.get_name()}")
@@ -4415,6 +4456,29 @@ class AsyncObserver:
             cutoff = max(cutoff, after)
         return self.datastore.gantry_pos.deepCopy(cutoff=cutoff)[:, 2:]
 
+    def raw_gantry_tag_sightings(self, window_s, after=None):
+        """Recent gantry tag detections per anchor, in each anchor camera's own frame.
+
+        {anchor_num: [(capture_time, (rvec, tvec)), ...]}, oldest first, for sightings in the
+        last window_s and (optionally) captured after `after`. Nothing here goes through the
+        position estimator or the camera's room pose, so comparing two of these from the
+        same camera is unaffected by either being wrong.
+        """
+        cutoff = time.time() - window_s
+        if after is not None:
+            cutoff = max(cutoff, after)
+        return {
+            client.anchor_num: [(ts, pose) for ts, pose in list(client.recent_raw_gant_poses)
+                                if ts >= cutoff]
+            for client in self.anchors.values()
+            if hasattr(client, 'recent_raw_gant_poses')
+        }
+
+    def anchor_camera_pose(self, anchor_num):
+        """Room pose (rvec, tvec) of an anchor's camera, or None if that anchor is not connected."""
+        client = self.anchors.get(anchor_num)
+        return None if client is None else client.camera_pose
+
     async def settle_visual_estimate(self, tol_m=0.05, window_s=1.0, min_sightings=3, timeout=15.0):
         """Wait until pe.visual_pos agrees with where the cameras are seeing the marker now.
 
@@ -4564,6 +4628,13 @@ class AsyncObserver:
         """
         try:
             for name in self.startup_sequence_names:
+                # the steps run inside this one task, so invoke_motion_task's parked check
+                # never sees them; an unpark that failed before clearing the hook leaves
+                # the robot parked, and nothing after it may move
+                if self._gantry_parked() and name not in PARKED_ALLOWED_MOTION_TASKS:
+                    logger.info(f"Can't move while in the parking hook; skipping startup "
+                                f"step {name}")
+                    continue
                 step, safety, owner = self._startup_steps[name]
                 logger.info(f'Startup step {name}')
                 with self._running_as(owner, safety or SafetyPolicy()):
