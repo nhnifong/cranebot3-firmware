@@ -188,9 +188,9 @@
   --room-wall: #4a4840;
 }
 
-/* Microduck - after pollen-robotics.com/microduck. The site's pops are the
+/* Loud - after pollen-robotics.com/microduck. The site's pops are the
    whole scheme here: pink around the room, yellow walls, orange panels. */
-:root[data-theme="microduck"] {
+:root[data-theme="loud"] {
   color-scheme: light;
 
   /* Brand / action colors */
