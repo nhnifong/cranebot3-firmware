@@ -477,6 +477,12 @@ class GripperArpServer(RobotComponentServer):
         # fingers are resting on something, so the host needs the accelerometer's own answer.
         if self.imu is not None:
             self.update['angle_from_vertical'] = self.getAngleFromVertical()
+            # the direction of that lean, which the angle alone does not carry: the
+            # accelerometer's horizontal components in the gripper body frame (the same
+            # axes the swing model's gyro reads use). Holding still, they point away from
+            # the way the top of the pole leans.
+            ax, ay, _ = self.imu.acceleration
+            self.update['tilt_accel_xy'] = [float(ax), float(ay)]
 
         if self.rangefinder is not None and self.rangefinder.data_ready:
             distance = self.rangefinder.distance

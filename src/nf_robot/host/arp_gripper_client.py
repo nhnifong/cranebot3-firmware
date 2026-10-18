@@ -95,6 +95,10 @@ class ArpeggioGripperClient(ComponentClient):
         self.angle_from_vertical_received = asyncio.Event()
         self.last_angle_from_vertical = None
         self.angle_from_vertical_ts = 0.0
+        # accelerometer x/y in the gripper body frame, streamed by grippers new enough to
+        # send it; None from older firmware. See pole_straighten_direction.
+        self.last_tilt_accel_xy = None
+        self.tilt_accel_ts = 0.0
         # grip force set point last reported by the gripper. Kept because it is one of the
         # three state inputs the visual servoing model takes, and unlike the range and the
         # finger angle it has no home in the datastore.
@@ -178,6 +182,10 @@ class ArpeggioGripperClient(ComponentClient):
             self.last_angle_from_vertical = float(update['angle_from_vertical'])
             self.angle_from_vertical_ts = time.time()
             self.angle_from_vertical_received.set()
+
+        if 'tilt_accel_xy' in update:
+            self.last_tilt_accel_xy = np.array(update['tilt_accel_xy'], dtype=float)
+            self.tilt_accel_ts = time.time()
 
     async def query_angle_from_vertical(self, timeout=2.0):
         """Degrees the pole is tilted from vertical, from the accelerometer, or None if
@@ -365,6 +373,24 @@ class ArpeggioGripperClient(ComponentClient):
         if not self.calibrating_room_spin and self.config.gripper.frame_room_spin is not None:
             spin = spin - (self.config.gripper.frame_room_spin - np.pi)
         return float(np.degrees(spin) % 360.0)
+
+    def pole_straighten_direction(self, max_age=1.0):
+        """Room-frame XY unit vector to move the gantry along to straighten a leaning pole,
+        or None without a fresh accelerometer reading (or with no lean to speak of).
+
+        The gantry is a pivot with the gripper hanging below it, so the move is the way that
+        brings the gantry back over the gripper. The accelerometer's horizontal part, turned
+        from the body frame into the room by the heading alone (the lean itself is small, and
+        is what is being measured), points along the lean as the IMU is mounted - found on
+        the robot, where moving along it made the lean worse - so the move is against it.
+        """
+        if self.last_tilt_accel_xy is None or time.time() - self.tilt_accel_ts > max_age:
+            return None
+        horizontal = np.array([*self.last_tilt_accel_xy, 0.0])
+        if np.linalg.norm(horizontal) < 1e-3:
+            return None
+        room = Rotation.from_rotvec([0.0, 0.0, -self.get_spin()]).apply(horizontal)[:2]
+        return -room / np.linalg.norm(room)
 
     def gripper_body_room_rotation(self, timestamp=None):
         """Rotation taking a vector in the z-up gripper body frame (pole down -z, x/y horizontal)

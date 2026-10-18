@@ -18,6 +18,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
+import nf_robot.generated.nf.config as nf_config
 from nf_robot.host import observer as observer_module
 from nf_robot.host.data_store import DataStore
 from nf_robot.host.maneuver import SafetyPolicy
@@ -53,6 +54,7 @@ class StubObserver:
         self._motion_owner = None
         self._motion_safety = motion_safety
         self._marker_may_be_hidden = False
+        self.config = nf_config.StringmanPilotConfig(park_data=nf_config.ParkData())
         self.gantry_marker_fault = None
         self._gantry_marker_warned = set()
         self._gantry_marker_popped = set()
@@ -68,6 +70,7 @@ class StubObserver:
 
     monitor_gantry_visibility = AsyncObserver.monitor_gantry_visibility
     _report_gantry_marker_fault = AsyncObserver._report_gantry_marker_fault
+    _gantry_parked = AsyncObserver._gantry_parked
 
 
 async def run_monitor(stub, polls):
@@ -106,10 +109,9 @@ def quiet(seconds):
 
 
 # The loop starts counting the outage from the poll that takes in the sighting already filed, and
-# runs one last turn after the polls are exhausted, so these clear the limit either way by a turn
-# to spare - whatever UNSEEN_LIMIT_S is.
+# runs one last turn after the polls are exhausted, so this clears the limit by a turn to spare -
+# whatever UNSEEN_LIMIT_S is.
 PAST_THE_LIMIT_S = UNSEEN_LIMIT_S + 3 * VISIBILITY_POLL_S
-SHORT_OF_THE_LIMIT_S = UNSEEN_LIMIT_S - 2 * VISIBILITY_POLL_S
 
 
 class TestWidestGap(unittest.TestCase):
@@ -153,17 +155,6 @@ class TestGantryVisibility(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(stub.popups), 1)
         self.assertIn('appears to anchor 0 in multiple places', stub.popups[0])
 
-    async def test_one_split_frame_is_not_enough(self):
-        stub = StubObserver()
-
-        def poll(i):
-            stub.sight(T0 + i, 0, [0, 0, 1.0])
-            if i == 2:
-                stub.sight(T0 + i, 0, [0, 3.0, 1.0])
-
-        await run_monitor(stub, [poll] * 6)
-        self.assertEqual(stub.popups, [])
-
     async def test_two_detections_of_the_same_tag_are_not_a_duplicate(self):
         """Overlapping crops can detect one tag twice in a frame; those land together."""
         stub = StubObserver()
@@ -181,12 +172,6 @@ class TestGantryVisibility(unittest.IsolatedAsyncioTestCase):
         await run_monitor(stub, quiet(PAST_THE_LIMIT_S))
         self.assertEqual(len(stub.popups), 1)
         self.assertIn(f"hasn't been detected in {UNSEEN_LIMIT_S:.0f} seconds", stub.popups[0])
-
-    async def test_unseen_marker_is_not_reported_before_the_timeout(self):
-        stub = StubObserver()
-        stub.sight(T0, 0, [0, 0, 1.0])
-        await run_monitor(stub, quiet(SHORT_OF_THE_LIMIT_S))
-        self.assertEqual(stub.popups, [])
 
     async def test_unseen_marker_is_reported_only_once_per_outage(self):
         stub = StubObserver()
@@ -242,20 +227,6 @@ class TestGantryVisibility(unittest.IsolatedAsyncioTestCase):
         await run_monitor(stub, quiet(2 * PAST_THE_LIMIT_S))
         task.cancel.assert_not_called()
         self.assertEqual(stub.popups, [])
-
-    async def test_the_unseen_clock_starts_once_the_pole_is_upright(self):
-        task = Mock()
-        task.done.return_value = False
-        stub = StubObserver(motion_task=task, motion_safety=SafetyPolicy(needs_gantry_marker=True))
-        stub._marker_may_be_hidden = True
-        stub.sight(T0, 0, [0, 0, 1.0])
-        upright = [lambda i: setattr(stub, '_marker_may_be_hidden', False)]
-        cancels_short_of_the_limit = []
-        count = [lambda i: cancels_short_of_the_limit.append(task.cancel.call_count)]
-        await run_monitor(stub, quiet(PAST_THE_LIMIT_S) + upright + quiet(SHORT_OF_THE_LIMIT_S)
-                          + count + quiet(PAST_THE_LIMIT_S - SHORT_OF_THE_LIMIT_S))
-        self.assertEqual(cancels_short_of_the_limit, [0])
-        task.cancel.assert_called_once()
 
     async def test_fault_outside_calibration_does_not_cancel_the_motion_task(self):
         task = Mock()

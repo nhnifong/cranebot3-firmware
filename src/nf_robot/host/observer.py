@@ -2952,6 +2952,15 @@ class AsyncObserver:
             return None
         return float(gripper.last_angle_from_vertical)
 
+    def pole_straighten_direction(self, max_age=1.0):
+        """Room-frame XY unit vector to move the gantry along to straighten a leaning pole, or
+        None when the gripper has not said which way it leans (older gripper firmware does not
+        send it) for max_age seconds."""
+        gripper = self.gripper_client
+        if gripper is None or not hasattr(gripper, 'pole_straighten_direction'):
+            return None
+        return gripper.pole_straighten_direction(max_age=max_age)
+
     def wrist_angle_for_heading(self, heading):
         """The wrist angle that points the gripper's nose along a room-frame heading (radians)."""
         return self.gripper_client.wrist_angle_for_spin(heading)

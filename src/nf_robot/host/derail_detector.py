@@ -14,7 +14,7 @@ from collections import deque
 
 # (s) how far back a line's payout records are judged over. Long enough that the accel limit
 # and the mute's brief stops on a healthy line even out.
-WINDOW_S = 3.0
+WINDOW_S = 5.0
 # (s) of payout that must have been commanded within the window before it is judged
 MIN_PAYOUT_S = 1.0
 # fraction of that commanded payout a derailed spool delivers: 0.01-0.02 across a whole

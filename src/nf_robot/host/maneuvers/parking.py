@@ -39,7 +39,17 @@ class Parking(Maneuver):
     title = 'Parking'
     config_field = 'park_data'
 
+    def publish_parking_state(self):
+        """Tell the UI whether the gantry is parked and whether there is a hook to park on."""
+        data = self.data
+        self.ob.send_ui(parking_state=telemetry.ParkingState(
+            parked=bool(data is not None and data.parked),
+            location_recorded=bool(data is not None and data.pos is not None),
+            present=True,
+        ))
+
     def send_setup_telemetry(self):
+        self.publish_parking_state()
         if self.data is not None and self.data.pos is not None:
             self.ob.send_ui(named_position=telemetry.NamedObjectPosition(
                 name='parking_location',
@@ -75,6 +85,7 @@ class Parking(Maneuver):
             return
         self.data.parked = parked
         self.save_data()
+        self.publish_parking_state()
         logger.info(f'Robot is {"parked" if parked else "not parked"}')
 
     def gantry_tag_now(self, window_s, after=None, anchor=None, min_sightings=MOUTH_TAG_MIN_SIGHTINGS):
@@ -225,6 +236,7 @@ class Parking(Maneuver):
                 logger.info(f'Record park: range {parked_range} on the hook, '
                             f'{mouth_range} at the mouth')
                 self.save_data()
+                self.publish_parking_state()
                 ob.send_ui(named_position=telemetry.NamedObjectPosition(
                     name='parking_location',
                     position=self.data.pos,
@@ -245,6 +257,58 @@ class Parking(Maneuver):
             ob.slow_stop_all_spools()
             ob.set_swing_cancellation(False)
 
+    async def _straighten_pole(self, tilt, caught):
+        """Move the gantry sideways until the pole stands up again. None once it does, or why
+        it could not - caught (the tilt watch's complaint) included.
+
+        Only used while entering the fork, where the plausible cause of a lean is the pole
+        pivoting on the hook. The gantry is a pivot with the gripper hanging below it, so the
+        lean is the gantry no longer being over the gripper; moving the gantry back over it
+        straightens the pole, where retrying from scratch only repeats whatever caused it.
+        Elsewhere a lean means something else, and the attempt is failed instead. Slow, and bounded in distance
+        and in how many times one tilt watch may ask for it, since a pole that will not
+        straighten is caught on something moving it cannot fix.
+        """
+        STRAIGHT_FRACTION = 0.5       # of the watch's limit, the lean to stop at
+        SPEED_MPS = 0.01
+        MAX_TRAVEL_M = 0.05
+        TIMEOUT_S = 10.0
+        LOOP_S = 0.1
+        MAX_STRAIGHTENS = 3           # per tilt watch
+
+        ob = self.ob
+        tilt.straightens = getattr(tilt, 'straightens', 0) + 1
+        if tilt.straightens > MAX_STRAIGHTENS:
+            return f'{caught}, and it has already been straightened {MAX_STRAIGHTENS} times'
+        target = tilt.tilt_deg * STRAIGHT_FRACTION
+        start = ob.gantry_position()
+        deadline = time.time() + TIMEOUT_S
+        logger.info(f'Park: {caught}; moving the gantry to straighten it')
+        try:
+            while True:
+                lean = ob.pole_tilt()
+                direction = ob.pole_straighten_direction()
+                if lean is None or direction is None:
+                    return f'{caught}, and the gripper does not say which way'
+                if lean <= target:
+                    moved = float(np.linalg.norm(ob.gantry_position()[:2] - start[:2]))
+                    logger.info(f'Park: pole straightened to {lean:.1f} degrees after moving '
+                                f'{moved * 100:.1f}cm')
+                    tilt.leaning_since = None
+                    return None
+                here = ob.gantry_position()
+                if float(np.linalg.norm(here[:2] - start[:2])) > MAX_TRAVEL_M:
+                    return (f'{caught}, and it was still {lean:.0f} degrees after moving '
+                            f'{MAX_TRAVEL_M * 100:.0f}cm to straighten it')
+                if time.time() > deadline:
+                    return (f'{caught}, and it was still {lean:.0f} degrees after '
+                            f'{TIMEOUT_S:.0f}s straightening it')
+                await ob.move_direction_speed(np.array([direction[0], direction[1], 0.0]) * SPEED_MPS,
+                                              None, here, key=self.velocity_key())
+                await asyncio.sleep(LOOP_S)
+        finally:
+            await ob.move_direction_speed(np.zeros(3), 0, key=self.velocity_key())
+
     async def _enter_hook(self, track, tilt, distance):
         """Move in along the track by distance, from wherever the visual close left off.
 
@@ -264,7 +328,10 @@ class Parking(Maneuver):
         while True:
             caught = tilt.check()
             if caught:
-                return f'{caught} entering the fork'
+                failed = await self._straighten_pole(tilt, caught)
+                if failed:
+                    return f'{failed} entering the fork'
+                continue
             here = self.ob.gantry_position()
             travelled = float(np.dot(here[:2] - start[:2], -track))
             if travelled >= distance:

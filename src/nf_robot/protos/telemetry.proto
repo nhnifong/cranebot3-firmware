@@ -313,6 +313,14 @@ message TorqueState {
   bool present = 2; // something must be present other than a boolean with a false value for the message to even exist.
 }
 
+// Whether the gantry is resting on the parking hook, as the robot has it recorded. While
+// parked only unparking and manual driving can move it.
+message ParkingState {
+  bool parked = 1;
+  bool location_recorded = 2; // false when no parking location has been recorded
+  bool present = 3; // something must be present other than a boolean with a false value for the message to even exist.
+}
+
 message AutoTargetingState {
   bool enabled = 1;
   bool present = 2; // something must be present other than a boolean with a false value for the message to even exist.
@@ -369,6 +377,7 @@ message TelemetryItem {
     AutoTargetingState auto_targeting_state = 25;
     TorqueState torque_state = 26;
     DriverSlotStatus driver_slot_status = 27; // only sent from control plane, and only to one UI
+    ParkingState parking_state = 28;
   }
 
   // If set, the Control Plane will cache this item using this string as the key.

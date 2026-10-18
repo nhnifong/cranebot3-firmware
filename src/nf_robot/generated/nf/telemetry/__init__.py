@@ -20,6 +20,7 @@ __all__ = (
     "NamedObjectPosition",
     "OneTarget",
     "OperationProgress",
+    "ParkingState",
     "Popup",
     "PositionEstimate",
     "PositionFactors",
@@ -583,6 +584,29 @@ default_message_pool.register_message(
 
 
 @dataclass(eq=False, repr=False)
+class ParkingState(betterproto2.Message):
+    """
+    Whether the gantry is resting on the parking hook, as the robot has it recorded. While
+    parked only unparking and manual driving can move it.
+    """
+
+    parked: "bool" = betterproto2.field(1, betterproto2.TYPE_BOOL)
+
+    location_recorded: "bool" = betterproto2.field(2, betterproto2.TYPE_BOOL)
+    """
+    false when no parking location has been recorded
+    """
+
+    present: "bool" = betterproto2.field(3, betterproto2.TYPE_BOOL)
+    """
+    something must be present other than a boolean with a false value for the message to even exist.
+    """
+
+
+default_message_pool.register_message("nf.telemetry", "ParkingState", ParkingState)
+
+
+@dataclass(eq=False, repr=False)
 class Popup(betterproto2.Message):
     """
     A connected UI should immediately display this message in a popup
@@ -891,6 +915,10 @@ class TelemetryItem(betterproto2.Message):
     """
     only sent from control plane, and only to one UI
     """
+
+    parking_state: "ParkingState | None" = betterproto2.field(
+        28, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
 
     retain_key: "str | None" = betterproto2.field(
         14, betterproto2.TYPE_STRING, optional=True

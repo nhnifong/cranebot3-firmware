@@ -912,6 +912,7 @@ function connect(wsUrl: string) {
         else if (update.swingCancellationState) handleSwingCancellationState(update.swingCancellationState);
         else if (update.tensionRegulationState) handleTensionRegulationState(update.tensionRegulationState);
         else if (update.torqueState) handleTorqueState(update.torqueState);
+        else if (update.parkingState) handleParkingState(update.parkingState);
         else if (update.autoTargetingState) handleAutoTargetingState(update.autoTargetingState);
         else if (update.taskStatus) handleTaskStatus(update.taskStatus);
         else if (update.visibilityStates) handleVisibilityStates(update.visibilityStates);
@@ -1840,6 +1841,17 @@ function handleTorqueState(data: nf.telemetry.ITorqueState) {
   setMenuToggleState('action-toggle-torque', data.enabled ?? false);
 }
 
+// Parked or ready, next to the online status. Hidden until a parking location is recorded,
+// and while offline, since the last report could be stale by then.
+function handleParkingState(data: nf.telemetry.IParkingState) {
+  const badge = document.getElementById('parking-badge');
+  if (!badge) return;
+  const parked = data.parked ?? false;
+  badge.textContent = parked ? 'Parked' : 'Ready';
+  badge.classList.toggle('parked', parked);
+  badge.classList.toggle('hidden', !(data.locationRecorded ?? false));
+}
+
 function handleAutoTargetingState(data: nf.telemetry.IAutoTargetingState) {
   autoTargetEnabled = data.enabled ?? false;
   const btn = document.getElementById('btn-auto-target');
@@ -1874,6 +1886,7 @@ function updateOnlineStatus(online: boolean) {
     } else {
       statusDot.classList.add('status-offline');
       statusText.textContent = 'Offline';
+      document.getElementById('parking-badge')?.classList.add('hidden');
       runBtn.classList.add('disabled');
 
       firstOverheadVideo.setOffline();

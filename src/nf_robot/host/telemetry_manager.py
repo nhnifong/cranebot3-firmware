@@ -51,6 +51,7 @@ CONSTANT_RETAIN_KEYS = (
     'torque_state',
     'auto_targeting_state',
     'task_status',
+    'parking_state',
 )
 
 

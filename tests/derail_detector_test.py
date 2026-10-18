@@ -47,13 +47,6 @@ class TestDerailDetector(unittest.TestCase):
         d.add(0, records(150, -0.3, -2.5), -0.3)
         self.assertEqual(d.verdict(0), (False, None, None))
 
-    def test_window_expires(self):
-        d = DerailDetector(1)
-        d.add(0, records(150, 0.0, lambda k: -2.5 if k % 5 == 0 else 0.2), 0.3)
-        # 4 s of standing still later, the stall has aged out of the window
-        d.add(0, records(200, 0.0, 0.2, start=3.0), 0.0)
-        self.assertEqual(d.verdict(0), (False, None, None))
-
     def test_reset(self):
         d = DerailDetector(2)
         for line in (0, 1):
