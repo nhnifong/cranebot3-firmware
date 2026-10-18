@@ -13,10 +13,10 @@
     "committed_at": "2026-10-17"
   },
   "naavox/drop_point": {
-    "revision": "e19d2c6bf17001aefe1918693badf4390a98cf5a",
-    "pinned_at": "2026-10-01",
+    "revision": "903b78b104888c754f5aac41fe991cd69ea05b99",
+    "pinned_at": "2026-10-18",
     "title": "Upload drop_point.pth with huggingface_hub",
-    "committed_at": "2026-10-01"
+    "committed_at": "2026-10-18"
   },
   "naavox/basket_center": {
     "revision": "4afab0e04a0f025fd8ec6810fc8a8305230b3545",
