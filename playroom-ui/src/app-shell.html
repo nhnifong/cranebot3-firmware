@@ -380,19 +380,14 @@
         <!-- Spacer -->
         <div class="footer-spacer"></div>
 
-        <!-- Diagnostics -->
+        <!-- Maneuver status: the running motion task, or the last one and how it ended -->
         <div class="footer-stats-group">
           <div class="stat-line">
-            <span class="label-muted">Detections/sec</span>
-            <span id='detectionRate'>101.2</span>
+            <span class="label-muted">Maneuver</span>
+            <strong id="maneuver-name">Idle</strong>
           </div>
-          <div class="videoLatency">
-            <span class="label-muted">Video latency</span>
-            <span id="videoLatency">0.22 s</span>
-          </div>
-          <div class="avgFramerate">
-            <span class="label-muted">Avg framerate</span>
-            <span id="videoFramerate">29.2 fps</span>
+          <div class="stat-line">
+            <span id="maneuver-last" class="label-muted"></span>
           </div>
         </div>
 

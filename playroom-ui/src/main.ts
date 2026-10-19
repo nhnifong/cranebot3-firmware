@@ -897,7 +897,6 @@ function connect(wsUrl: string) {
         else if (update.posEstimate) handlePosEstimate(update.posEstimate);
         else if (update.posFactorsDebug) handlePosFactorsDebug(update.posFactorsDebug);
         else if (update.lastCommandedVel) handleLastCommandedVel(update.lastCommandedVel);
-        else if (update.vidStats) handleVidStats(update.vidStats);
         else if (update.componentConnStatus) handleComponentConnStatus(update.componentConnStatus);
         else if (update.targetList) handleTargetList(update.targetList);
         else if (update.gantrySightings) sightingsManager.handleSightings(update.gantrySightings);
@@ -913,6 +912,7 @@ function connect(wsUrl: string) {
         else if (update.tensionRegulationState) handleTensionRegulationState(update.tensionRegulationState);
         else if (update.torqueState) handleTorqueState(update.torqueState);
         else if (update.parkingState) handleParkingState(update.parkingState);
+        else if (update.motionTaskStatus) handleMotionTaskStatus(update.motionTaskStatus);
         else if (update.autoTargetingState) handleAutoTargetingState(update.autoTargetingState);
         else if (update.taskStatus) handleTaskStatus(update.taskStatus);
         else if (update.visibilityStates) handleVisibilityStates(update.visibilityStates);
@@ -1356,21 +1356,19 @@ function handleLastCommandedVel(data: nf.telemetry.ICommandedVelocity) {
   }
 }
 
-function handleVidStats(data: nf.telemetry.IVidStats) {
-  // Get Elements
-  const dpsEl = document.getElementById('detectionRate');
-  const latEl = document.getElementById('videoLatency');
-  const fpsEl = document.getElementById('videoFramerate');
-
-  // Format & Update elements
-  if (dpsEl) {
-    dpsEl.textContent = (data.detectionRate ?? 0).toFixed(1);
-  }
-  if (latEl) {
-    latEl.textContent = (data.videoLatency ?? 0).toFixed(2) + ' s';
-  }
-  if (fpsEl) {
-    fpsEl.textContent = (data.videoFramerate ?? 0).toFixed(1) + ' fps';
+// The running motion task, or Idle. A completion keeps the name of what ended and how,
+// on the line below, so a task that finished or failed while nobody was watching still says so.
+function handleMotionTaskStatus(data: nf.telemetry.IMotionTaskStatus) {
+  const nameEl = document.getElementById('maneuver-name');
+  const lastEl = document.getElementById('maneuver-last');
+  if (!nameEl || !lastEl) return;
+  if (data.running) {
+    nameEl.textContent = data.name || 'Running';
+    nameEl.classList.add('maneuver-running');
+  } else {
+    nameEl.textContent = 'Idle';
+    nameEl.classList.remove('maneuver-running');
+    if (data.name) lastEl.textContent = `Last: ${data.name} (${data.outcome || 'finished'})`;
   }
 }
 

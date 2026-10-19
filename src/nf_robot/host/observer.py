@@ -680,6 +680,11 @@ class AsyncObserver:
         self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=(SWING_VELOCITY_KEY in self.active_set), present='.'))
         self.send_ui(tension_regulation_state=telemetry.TensionRegulationState(enabled=self.tension_reg_enabled, present=True))
         self.send_ui(torque_state=telemetry.TorqueState(enabled=self.torque_enabled, present=True))
+        task = self.motion_task
+        if task is not None and not task.done():
+            self._send_motion_task_status(task)
+        else:
+            self.send_ui(motion_task_status=telemetry.MotionTaskStatus(present=True))
         r = await self.flush_tele_buffer()
 
     async def _on_telemetry_peer_connected(self, peer):
@@ -2155,6 +2160,39 @@ class AsyncObserver:
             owner.abort_reason = None
         self.motion_task = asyncio.create_task(coro)
         self.motion_task.set_name(coro.__name__)
+        self.motion_task.add_done_callback(self._report_motion_task_done)
+        self._send_motion_task_status(self.motion_task)
+
+    @staticmethod
+    def _motion_task_title(task):
+        """A motion task's coroutine name as something to show a person: seek_goal -> Seek goal."""
+        return task.get_name().replace('_', ' ').strip().capitalize()
+
+    def _send_motion_task_status(self, task, outcome=None):
+        """Tell the UI which motion task is running, or that task ended and how."""
+        self.send_ui(motion_task_status=telemetry.MotionTaskStatus(
+            name=self._motion_task_title(task) if task is not None else '',
+            running=outcome is None and task is not None,
+            outcome=outcome or '',
+            present=True,
+        ))
+
+    def _report_motion_task_done(self, task):
+        """Done callback of every motion task: report how it ended. Skipped when a newer task
+        has already replaced it, so the UI does not see the new one reported as ended."""
+        current = self.motion_task
+        if current is not None and current is not task and not current.done():
+            return
+        if task.cancelled():
+            outcome = 'cancelled'
+        elif task.exception() is not None:
+            outcome = 'failed'
+            # reading the exception marks it retrieved, which silences asyncio's own report
+            # of it, so say it here instead
+            logger.error(f'Motion task {task.get_name()} failed', exc_info=task.exception())
+        else:
+            outcome = 'finished'
+        self._send_motion_task_status(task, outcome)
 
     async def tension_lines(self):
         """Request all anchors to reel in all lines until tight."""

@@ -313,6 +313,17 @@ message TorqueState {
   bool present = 2; // something must be present other than a boolean with a false value for the message to even exist.
 }
 
+// The motion task (maneuver) the robot is running, if any. Sent with running=true when one
+// starts, and again with running=false and an outcome when it ends, which is the explicit
+// completion indicator. Independent of OperationProgress, which drives the progress bar and
+// is only sent by tasks that report progress.
+message MotionTaskStatus {
+  string name = 1;     // human-readable, e.g. "Park". Kept on completion, naming what ended
+  bool running = 2;
+  string outcome = 3;  // on completion: "finished", "cancelled" or "failed"; empty while running
+  bool present = 4; // something must be present other than a boolean with a false value for the message to even exist.
+}
+
 // Whether the gantry is resting on the parking hook, as the robot has it recorded. While
 // parked only unparking and manual driving can move it.
 message ParkingState {
@@ -378,6 +389,7 @@ message TelemetryItem {
     TorqueState torque_state = 26;
     DriverSlotStatus driver_slot_status = 27; // only sent from control plane, and only to one UI
     ParkingState parking_state = 28;
+    MotionTaskStatus motion_task_status = 29;
   }
 
   // If set, the Control Plane will cache this item using this string as the key.

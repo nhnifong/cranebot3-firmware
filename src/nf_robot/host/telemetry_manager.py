@@ -52,6 +52,7 @@ CONSTANT_RETAIN_KEYS = (
     'auto_targeting_state',
     'task_status',
     'parking_state',
+    'motion_task_status',
 )
 
 

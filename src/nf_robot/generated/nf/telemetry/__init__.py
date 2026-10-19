@@ -16,6 +16,7 @@ __all__ = (
     "GripperModel",
     "GripperSensors",
     "Logs",
+    "MotionTaskStatus",
     "MotorTorque",
     "NamedObjectPosition",
     "OneTarget",
@@ -477,6 +478,38 @@ default_message_pool.register_message("nf.telemetry", "Logs", Logs)
 
 
 @dataclass(eq=False, repr=False)
+class MotionTaskStatus(betterproto2.Message):
+    """
+    The motion task (maneuver) the robot is running, if any. Sent with running=true when one
+    starts, and again with running=false and an outcome when it ends, which is the explicit
+    completion indicator. Independent of OperationProgress, which drives the progress bar and
+    is only sent by tasks that report progress.
+    """
+
+    name: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+    """
+    human-readable, e.g. "Park". Kept on completion, naming what ended
+    """
+
+    running: "bool" = betterproto2.field(2, betterproto2.TYPE_BOOL)
+
+    outcome: "str" = betterproto2.field(3, betterproto2.TYPE_STRING)
+    """
+    on completion: "finished", "cancelled" or "failed"; empty while running
+    """
+
+    present: "bool" = betterproto2.field(4, betterproto2.TYPE_BOOL)
+    """
+    something must be present other than a boolean with a false value for the message to even exist.
+    """
+
+
+default_message_pool.register_message(
+    "nf.telemetry", "MotionTaskStatus", MotionTaskStatus
+)
+
+
+@dataclass(eq=False, repr=False)
 class NamedObjectPosition(betterproto2.Message):
     """
     Position of a named object that UI might want to visually represent.
@@ -918,6 +951,10 @@ class TelemetryItem(betterproto2.Message):
 
     parking_state: "ParkingState | None" = betterproto2.field(
         28, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
+    motion_task_status: "MotionTaskStatus | None" = betterproto2.field(
+        29, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
     retain_key: "str | None" = betterproto2.field(
