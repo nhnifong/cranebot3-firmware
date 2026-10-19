@@ -20,11 +20,17 @@ logger = logging.getLogger(__name__)
 # (metres) how far out along the escape direction the mouth of the fork is: from there the
 # gantry goes straight down the track into the fork with no room to correct. record_park
 # records the gantry tag pose from here and park steers back to it.
-MOUTH_OFFSET_M = 0.075
+MOUTH_OFFSET_M = 0.085
 # (degrees) how far the track in and out of the parking hook leans along the wall, off the
 # wall's inward normal and towards the anchor end of it. Unpark leaves along this line and
 # park comes back down it, so one constant sets both.
 ESCAPE_TILT_DEG = 45.0
+# (degrees, -90 open to 90 closed) the fingers are held at around the hook. Closed past about
+# 60 they cross the rangefinder's beam, and every range park and record_park take would be
+# the distance to the fingers instead of to what is under the hook.
+FINGER_ANGLE_PARKED = 50
+# (seconds) for the fingers to get there and the rangefinder to report past them
+FINGER_SETTLE_S = 1.5
 # Sightings of the gantry tag one anchor has to deliver to describe where it is now.
 MOUTH_TAG_MIN_SIGHTINGS = 5
 # Shown when record_park cannot see the gantry tag from the mouth of the fork, which park
@@ -156,6 +162,8 @@ class Parking(Maneuver):
                 return
 
             hook_pos = ob.gantry_position()
+            await ob.set_finger_angle(FINGER_ANGLE_PARKED)
+            await asyncio.sleep(FINGER_SETTLE_S)
             # taken now, resting on the hook, which is the one moment this reading means
             # "the height the hook holds the gantry at"
             parked_range = ob.laser_range()
@@ -448,7 +456,6 @@ class Parking(Maneuver):
 
         This is a motion task.
         """
-        FINGER_ANGLE_PARKED = 70      # a neutral-looking hand position.
         HANDOVER_M = 0.10             # how far out beyond the mouth the flight ends and
                                       # the tag takes over.
         DESCENT_M = 0.30              # how far down to look for the hook
@@ -523,6 +530,9 @@ class Parking(Maneuver):
                 return np.array([sideways[0] * across + track[0] * along,
                                  sideways[1] * across + track[1] * along,
                                  up])
+
+            # the flight out is long enough for the fingers to clear the rangefinder
+            await ob.set_finger_angle(FINGER_ANGLE_PARKED)
 
             # 1. Fly to standoff position
             def handover_point(offset):

@@ -1501,7 +1501,11 @@ class AsyncObserver:
             # it - low ceiling, origin card up on a bed - without running a whole calibration.
             r = await self.invoke_motion_task(self.find_origin_card())
         if item.action == 'centerorigin':
-            r = await self.invoke_motion_task(self._center_card_in_view('origin'))
+            # the pair calibration runs before measuring spin
+            async def find_then_center_origin():
+                await self.find_origin_card()
+                await self._center_card_in_view('origin')
+            r = await self.invoke_motion_task(find_then_center_origin())
         if item.action == 'servograsp':
             # One visual servoing grasp from wherever the gripper is now, without the
             # pick and place loop. Park it over the object first, roughly - closing the
