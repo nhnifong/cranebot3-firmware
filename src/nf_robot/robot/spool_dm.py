@@ -55,7 +55,7 @@ default_conf_dm = {
     # clamp on the magnitude of the tension correction line speed in meters per second.
     'MAX_TENSION_CORRECTION_MPS': 0.5,
     # hysteresis half-band in newtons. no correction is applied within +/- this of the target.
-    'TENSION_BAND_N': 0.1,
+    'TENSION_BAND_N': 0.3,
     # enable the soft mute that refuses to pay a line out while it is slack. 0 disables it.
     # keeping a would-be-slack cable taut over-constrains the gantry, so this is the knob to
     # A/B test the workspace convexity independently of the tension floor.
