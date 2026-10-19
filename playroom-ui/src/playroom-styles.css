@@ -391,7 +391,8 @@ body {
   background: rgba(0,0,0,0.55); color: #fff; white-space: nowrap;
 }
 .parking-badge.parked { background: #2e6fb5; }
-.maneuver-running { color: #6fcf6f; }
+#maneuver-name { color: var(--panel-text-dim); }
+#maneuver-name.maneuver-running { color: var(--panel-text); }
 .status-badge  { font-size: 0.8em; padding: 4px 8px; border-radius: 4px; background: #666; color: var(--text-light); }
 .status-online { background: #1b5e20; color: #a5d6a7; }
 
