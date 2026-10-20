@@ -5283,6 +5283,10 @@ class AsyncObserver:
         GOAL_PROXIMITY_M = 0.05
         MAX_SPEED = 0.4 # GANTRY_SPEED_MPS
         ACCEL = 0.15     # m/s^2
+        # m/s^2 the approach ramp plans its braking with. Lower brakes earlier and more gently;
+        # set well under ACCEL because the position estimate lags the gantry, and a ramp
+        # planned at ACCEL started braking 5-10cm too late.
+        BRAKE_ACCEL = 0.08
         ARRIVAL_SPEED_MPS = 0.03 # what it should still be doing when it lets go of the goal
         LOOP_SLEEP_S = 0.1
         IDEAL_GANTRY_ALTITUDE = 1.3 # meters. ideal gantry height for room traversal
@@ -5312,7 +5316,7 @@ class AsyncObserver:
                 # are actually covered.
                 ramp_dist_to_goal = np.linalg.norm(vector[:2]) if auto_altitude else dist_to_goal
                 braking_dist = max(0.0, ramp_dist_to_goal - GOAL_PROXIMITY_M)
-                speed_ramp_down = max(ARRIVAL_SPEED_MPS, np.sqrt(2 * ACCEL * braking_dist))
+                speed_ramp_down = max(ARRIVAL_SPEED_MPS, np.sqrt(2 * BRAKE_ACCEL * braking_dist))
 
                 # Target speed is the ramp-down limit or the max allowable speed
                 target_speed = min(speed_ramp_down, MAX_SPEED)

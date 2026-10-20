@@ -24,7 +24,7 @@ export class DynamicRoom {
   private otherMarkersVisible = false;
 
   // Applied again once the model finishes loading, since it can be set before then.
-  private propsVisible = true;
+  private propsVisible = false;
 
   // moving walls
   mesh: THREE.Mesh;

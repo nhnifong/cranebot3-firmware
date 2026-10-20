@@ -483,7 +483,7 @@ class Parking(Maneuver):
                                       # sensor reads fully slack, and one line's jitter
                                       # would keep resetting the confirm timer
         PARKED_CONFIRM_S = 0.4
-        PARKED_RANGE_TOL_M = 0.05     # how far off the recorded parked range still counts
+        PARKED_RANGE_TOL_M = 0.15     # how far off the recorded parked range still counts
         RANGE_TRIM_TOL_M = 0.01
         RANGE_TRIM_STEPS = 5
         RANGE_TRIM_TRAVEL_M = 0.30
