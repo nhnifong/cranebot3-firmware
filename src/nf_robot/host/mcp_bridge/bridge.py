@@ -26,6 +26,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from pydantic import BaseModel, Field
 
 from nf_robot.generated.nf import control
 from nf_robot.host.maneuver import Maneuver
@@ -44,6 +45,8 @@ MAX_DRIVE_S = 5.0
 HANDLER_WAIT_S = 10.0
 EVENT_HISTORY = 1000
 MAX_ERROR_CHARS = 6000
+# a crop is enlarged toward max_px by at most this much; past it the pixels are only blur
+MAX_CROP_ENLARGE = 4.0
 
 INSTRUCTIONS = """\
 Controls a Stringman cable robot through the observer process that runs it. Call `guide`
@@ -74,17 +77,41 @@ def _vec3(v):
     return None if v is None else [round(v.x, 4), round(v.y, 4), round(v.z, 4)]
 
 
-def _jpeg(rgb, max_px, quality=80):
+def _jpeg(rgb, max_px, quality=80, max_enlarge=1.0):
     h, w = rgb.shape[:2]
-    scale = min(1.0, max_px / max(h, w))
-    if scale < 1.0:
+    scale = min(max_enlarge, max_px / max(h, w))
+    if scale != 1.0:
         rgb = cv2.resize(rgb, (max(1, int(w * scale)), max(1, int(h * scale))),
-                         interpolation=cv2.INTER_AREA)
+                         interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
     ok, buf = cv2.imencode('.jpg', cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),
                            [cv2.IMWRITE_JPEG_QUALITY, quality])
     if not ok:
         raise RuntimeError('JPEG encoding failed')
     return buf.tobytes()
+
+
+class View(BaseModel):
+    """One image for get_images."""
+    camera: str = Field(description='gripper, anchor0-anchor3 or ortho')
+    crop: list[float] | None = Field(
+        default=None, description='[left, top, right, bottom] as fractions of the frame, 0 to 1; '
+                                  'omit for the whole frame')
+    max_px: int = Field(default=512, description='bound on the longer side of the result')
+
+
+def crop_frame(frame, crop):
+    """The part of frame inside crop, [left, top, right, bottom] as fractions of its size."""
+    if crop is None:
+        return frame
+    if len(crop) != 4:
+        raise ValueError(f'crop is [left, top, right, bottom], got {crop}')
+    left, top, right, bottom = (min(1.0, max(0.0, float(c))) for c in crop)
+    if right <= left or bottom <= top:
+        raise ValueError(f'crop {crop} is empty: right must exceed left and bottom exceed top')
+    h, w = frame.shape[:2]
+    x0, y0 = int(left * w), int(top * h)
+    x1, y1 = max(x0 + 1, int(round(right * w))), max(y0 + 1, int(round(bottom * h)))
+    return frame[y0:y1, x0:x1]
 
 
 def contact_sheet(frames, labels, max_px):
@@ -463,8 +490,8 @@ class McpBridge(Maneuver):
                         raise as_tool_error(e) from e
             return server.tool()(wrapper)
 
-        def image(rgb, max_px):
-            return Image(data=_jpeg(rgb, max_px), format='jpeg')
+        def image(rgb, max_px, max_enlarge=1.0):
+            return Image(data=_jpeg(rgb, max_px, max_enlarge=max_enlarge), format='jpeg')
 
         @tool
         def guide() -> str:
@@ -489,6 +516,38 @@ class McpBridge(Maneuver):
             ts, frame = await bridge.capture(camera, fresh=fresh)
             caption = f'{camera} {frame.shape[1]}x{frame.shape[0]}, captured {time.time() - ts:.2f} s ago'
             return [caption, await asyncio.to_thread(image, frame, max(64, min(max_px, 1600)))]
+
+        @tool
+        async def get_images(views: list[View], fresh: bool = False):
+            """Several camera frames in one call, each optionally cropped, e.g. the gripper view
+            beside a close-up of one corner of the ortho floor view. Frames are captured
+            concurrently. A crop is [left, top, right, bottom] as fractions of the frame and is
+            enlarged up to 4x toward max_px, so a small region comes back legible. On the
+            1000 px ortho, room point (x, y) is at fraction (0.5 + x/5, 0.5 - y/5). fresh=True
+            waits for frames captured after the call. A camera with no frame is reported in
+            its caption rather than failing the others."""
+            if not views:
+                raise ValueError('give at least one view')
+            if len(views) > 8:
+                raise ValueError('at most 8 views per call')
+
+            async def one(view):
+                try:
+                    ts, frame = await bridge.capture(view.camera, fresh=fresh)
+                    part = crop_frame(frame, view.crop)
+                except Exception as e:
+                    return [f'{view.camera}: {type(e).__name__}: {e}']
+                where = '' if view.crop is None else f' crop {[round(c, 3) for c in view.crop]}'
+                caption = (f'{view.camera} {frame.shape[1]}x{frame.shape[0]}{where} '
+                           f'({part.shape[1]}x{part.shape[0]} px), captured {time.time() - ts:.2f} s ago')
+                enlarge = MAX_CROP_ENLARGE if view.crop is not None else 1.0
+                return [caption, await asyncio.to_thread(
+                    image, part, max(64, min(view.max_px, 1600)), enlarge)]
+
+            blocks = []
+            for result in await asyncio.gather(*(one(v) for v in views)):
+                blocks.extend(result)
+            return blocks
 
         @tool
         async def get_frames(camera: str = 'gripper', count: int = 6, interval_s: float = 0.3,
@@ -704,13 +763,24 @@ class McpBridge(Maneuver):
             return 'answered'
 
         @tool
-        async def load_maneuver(module_name: str, source: str) -> dict:
+        async def load_maneuver(module_name: str = '', source: str = '', path: str = '') -> dict:
             """Load Python source defining one or more Maneuver subclasses into the running
-            observer, replacing whatever an earlier load of module_name registered. The new
-            source is imported before the old version is removed, so code that fails to import
-            leaves the old one in place. Returns what the maneuvers answer to, or the error
-            with its traceback. Requires --mcp_allow_code."""
+            observer, replacing whatever an earlier load of module_name registered. Give the
+            source inline, or the path of a .py file on the observer's machine to read it from;
+            with a path, module_name defaults to the file's name. Iterate by editing the file
+            and loading it again. The new source is imported before the old version is
+            removed, so code that fails to import leaves the old one in place. Returns what
+            the maneuvers answer to, or the error with its traceback. Requires
+            --mcp_allow_code."""
             bridge.require_code()
+            if bool(source) == bool(path):
+                raise ValueError('give exactly one of source and path')
+            if path:
+                file = Path(path).expanduser()
+                source = await asyncio.to_thread(file.read_text)
+                module_name = module_name or file.stem
+            if not module_name:
+                raise ValueError('module_name is required with inline source')
             try:
                 entry = await bridge.agent_code.load(module_name, source)
             except Exception as e:

@@ -5779,8 +5779,11 @@ class AsyncObserver:
             return None
         return latest[1]
 
-    async def grasp(self):
-        """Try to grasp whatever is directly below the gripper. True if it is now held."""
+    async def grasp(self, max_wander_m=None):
+        """Try to grasp whatever is directly below the gripper. True if it is now held.
+
+        max_wander_m keeps the visual servo within that horizontal distance of where the
+        gantry started, so it cannot chase something further off; a lerobot grasp ignores it."""
         lerobot = self.maneuvers.get('lerobot')
         if lerobot is not None and lerobot.use_for_grasp:
             # A lerobot session may be driving from our own subprocess or connected
@@ -5797,7 +5800,7 @@ class AsyncObserver:
         # the model steers from the palm camera, so a swinging gripper moves the target under
         # it between the frame it decided on and the descent it decided to make
         async with self.prefer_swing_cancellation():
-            return await self.servo.run(mode=SERVO_MODE_GRASP)
+            return await self.servo.run(mode=SERVO_MODE_GRASP, max_wander_m=max_wander_m)
 
 def _dump_pending_tasks(loop) -> None:
     # Suspended coroutines aren't on any thread's stack, so list the pending

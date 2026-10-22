@@ -2,9 +2,11 @@ import asyncio
 import json
 import logging
 import socket
+import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -17,7 +19,7 @@ from mcp import Client
 from nf_robot.generated.nf import telemetry
 from nf_robot.host.component_client import ComponentClient
 from nf_robot.host.maneuver import Maneuver, verb
-from nf_robot.host.mcp_bridge.bridge import McpBridge, contact_sheet
+from nf_robot.host.mcp_bridge.bridge import McpBridge, contact_sheet, crop_frame
 from nf_robot.host.observer import AsyncObserver
 
 HELLO_V1 = '''
@@ -192,6 +194,24 @@ class TestAgentCode(BridgeTestCase):
         doc = next(e['doc'] for e in self.ob.maneuver_entries() if e['key'] == 'hello')
         self.assertEqual(doc, 'Say hello, version two.')
 
+    async def test_a_maneuver_reloads_from_its_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'hello.py'
+            path.write_text(HELLO_V1)
+            loaded = await self.call('load_maneuver', path=str(path))
+            self.assertTrue(loaded['loaded'], loaded)
+            path.write_text(HELLO_V2)
+            await self.call('load_maneuver', path=str(path))
+        self.assertIn('hello', self.bridge.agent_code.modules)
+        doc = next(e['doc'] for e in self.ob.maneuver_entries() if e['key'] == 'hello')
+        self.assertEqual(doc, 'Say hello, version two.')
+
+    async def test_load_wants_exactly_one_of_source_and_path(self):
+        result = await self.call_raw('load_maneuver', module_name='hello', source=HELLO_V1,
+                                     path='/nowhere.py')
+        self.assertTrue(result.is_error)
+        self.assertIn('exactly one', result.content[0].text)
+
     async def test_source_that_does_not_import_leaves_the_old_version_running(self):
         await self.call('load_maneuver', module_name='hello', source=HELLO_V1)
         result = await self.call('load_maneuver', module_name='hello', source='def (:')
@@ -274,6 +294,32 @@ class TestImages(BridgeTestCase):
         result = await self.call_raw('get_image', camera='anchor2')
         self.assertTrue(result.is_error)
         self.assertIn('anchor_cameras', result.content[0].text)
+
+    async def test_several_cameras_come_back_in_one_call_each_cropped(self):
+        self.ob.anchors[0] = FakeCamera()
+        self.ob.anchors[1] = FakeCamera()
+        blocks = await self.call('get_images', views=[
+            dict(camera='anchor0'),
+            dict(camera='anchor1', crop=[0.25, 0.25, 0.5, 0.5], max_px=320)])
+        captions = [b for b in blocks if isinstance(b, str)]
+        images = [b for b in blocks if not isinstance(b, str)]
+        self.assertEqual(len(images), 2)
+        self.assertIn('anchor0 320x240', captions[0])
+        self.assertIn('(80x60 px)', captions[1])
+
+    async def test_a_missing_camera_is_reported_without_failing_the_others(self):
+        self.ob.anchors[0] = FakeCamera()
+        blocks = await self.call('get_images', views=[dict(camera='anchor2'), dict(camera='anchor0')])
+        self.assertIn('anchor2: RuntimeError', blocks[0])
+        self.assertEqual(sum(not isinstance(b, str) for b in blocks), 1)
+
+    def test_a_crop_takes_fractions_of_the_frame(self):
+        frame = np.arange(100 * 200).reshape(100, 200)
+        part = crop_frame(frame, [0.5, 0.0, 1.0, 0.5])
+        self.assertEqual(part.shape, (50, 100))
+        self.assertEqual(part[0, 0], frame[0, 100])
+        with self.assertRaises(ValueError):
+            crop_frame(frame, [0.5, 0.5, 0.5, 1.0])
 
     def test_contact_sheet_lays_frames_in_a_grid(self):
         frames = [np.zeros((100, 200, 3), np.uint8)] * 5

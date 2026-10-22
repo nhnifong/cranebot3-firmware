@@ -38,7 +38,7 @@ This is a real machine in a real room, often a home. Read **Safety** before you 
 | Purpose | Tools |
 |---|---|
 | Read | `get_state`, `get_events`, `capabilities`, `api_docs`, `guide` |
-| See | `get_image`, `get_frames`, `record_clip` |
+| See | `get_image`, `get_images`, `get_frames`, `record_clip` |
 | Move (return at once) | `move_to`, `nudge`, `drive`, `run_command`, `run_verb` |
 | Gripper | `set_fingers`, `set_wrist`, `run_command('GRASP')` |
 | Wait and learn the outcome | `wait`, `get_events` |
@@ -91,6 +91,7 @@ Pass back `next_event_seq` to get only what is new.
 - **Cost:** images cost tokens, about 350 for a 512 px frame.
 - **`get_image(camera, fresh=True)`** waits for a frame captured after the call, so it shows the result of a move that just ended. Without `fresh` you get the newest frame already received, which may be a moment old.
 - **`wait(..., snapshot='gripper')`** waits and then captures a fresh frame in the same call.
+- **`get_images(views)`** takes several cameras in one call, each with an optional crop as fractions of the frame, e.g. the gripper view beside a close-up of part of the ortho. Small crops are enlarged so they stay legible.
 - **`get_frames(camera, count, interval_s)`** returns one grid image of a short sequence, for things that move: a swing settling, fingers closing, an object sliding.
 - **`record_clip(camera, seconds)`** writes an mp4 for the user to watch, and gives you six frames from it.
 - **Live streams:** the user can watch live video at the URLs in `get_state()['video_streams']`.
@@ -99,7 +100,7 @@ You cannot react to video in real time from here, because each of your turns tak
 
 ## Using automatic grasping
 
-A small visual servoing model is used when running `run_command('GRASP')` which is reliable for grasping a prominent object in the gripper's frame.
+A small visual servoing model is used when running `run_command('GRASP')` which is reliable for grasping a prominent object in the gripper's frame. It can steer some distance toward whatever it finds most prominent; from code, `await ob.grasp(max_wander_m=0.15)` keeps it within that distance of where it started and gives up on a target beyond it.
 
 ## The experimental loop
 
@@ -111,10 +112,10 @@ Use this loop to develop a behavior:
        return dict(range=ob.laser_range(), tilt=ob.pole_tilt(), holding=ob.is_holding())
    ```
 2. **Probe with primitives.** Try `nudge`, `move_to`, `set_fingers` and `run_command('GRASP')`, then `wait`. Learn how the robot responds before you automate anything.
-3. **Write a maneuver.** Load it with `load_maneuver(module_name, source)`. It answers to the verbs you declare.
+3. **Write a maneuver.** Save it to a file and load it with `load_maneuver(path=...)`, or pass `source` inline. It answers to the verbs you declare.
 4. **Run it** with `run_verb('yourverb args')`, then call `wait(until='motion_done', snapshot='gripper')`.
 5. **Judge the run.** Read the motion result, the `log` events your code wrote, and the images. Did it do what you meant? If not, form one specific hypothesis about why.
-6. **Make changes and reload** with `load_maneuver` under the same `module_name`. The old version is removed and the new one registered, with no restart. If the new source fails to import, the old version stays loaded and you get the error.
+6. **Make changes and reload** with `load_maneuver` under the same `module_name` (with a path, edit the file and load it again). The old version is removed and the new one registered, with no restart. If the new source fails to import, the old version stays loaded and you get the error.
 7. **Repeat**, keeping the moves small until the behavior is right.
 8. **Save it** when you have accomplished the goal: `save_maneuver(module_name)` writes it to the maneuver folder, and it loads on every start from then on.
 

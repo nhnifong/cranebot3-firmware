@@ -129,6 +129,11 @@ TARGET_EMA_RESET_M = 0.5
 STUCK_DISTANCE_M = 0.05
 STUCK_TIMEOUT_S = 5.0
 
+# (s) how long the target may sit outside a grasp's wander limit before the grasp gives up.
+# The filtered target still jitters with the swing, so one frame past the edge means little.
+WANDER_GIVE_UP_S = 1.0
+WANDER_REASON = 'target beyond the wander limit'
+
 APPROACH_TIMEOUT_S = 30.0
 PRESSURE_SENSE_WAIT = 6.0  # (s) how long a close may spend looking for a grip
 NUM_ATTEMPTS = 3            # tries per call, unless a caller says otherwise
@@ -275,6 +280,25 @@ def choose_wrist_setpoint(goal_deg, wrist_now, neutral=WRIST_NEUTRAL_DEG,
     roomy = [c for c in reachable if low + margin <= c <= high - margin]
     return min(roomy or reachable,
                key=lambda c: abs(c - wrist_now) + neutral_pull * abs(c - neutral))
+
+
+def limit_wander(lateral, error_xy, here_xy, origin_xy, limit_m, tolerance_m):
+    """Keep a lateral velocity from carrying the gantry further than limit_m from origin_xy.
+
+    Returns (lateral, target_beyond). At the edge of the circle the outward part of the
+    command is dropped and the part along the edge kept, so a target just inside can still
+    be reached. target_beyond says the target itself lies outside the circle by more than
+    the centering tolerance: no amount of steering inside it will get the jaws over that.
+    """
+    here = np.asarray(here_xy, dtype=float) - np.asarray(origin_xy, dtype=float)
+    target_beyond = float(np.linalg.norm(here + error_xy)) > limit_m + tolerance_m
+    dist = float(np.linalg.norm(here))
+    if dist >= limit_m and dist > 0:
+        outward = here / dist
+        radial = float(np.dot(lateral, outward))
+        if radial > 0:
+            lateral = lateral - radial * outward
+    return lateral, target_beyond
 
 
 class TargetFilter:
@@ -705,10 +729,13 @@ class VisualServo:
 
     # -- the modes ---------------------------------------------------------
 
-    async def run(self, mode=SERVO_MODE_GRASP, attempts=None):
+    async def run(self, mode=SERVO_MODE_GRASP, attempts=None, max_wander_m=0.7):
         """Run one of SERVO_MODES. True only if a grasp ended with the object held.
 
         `attempts` overrides how many tries a grasp gets before it reports failure.
+        `max_wander_m` keeps a grasp's gantry within that horizontal distance of where it
+        started, for grasping beside things that must not be touched; a target beyond it is
+        given up on rather than chased.
 
         The debugging modes run until the motion task is cancelled and return False, since
         nothing was grasped.
@@ -721,7 +748,7 @@ class VisualServo:
         try:
             if mode in (SERVO_MODE_OBSERVE, SERVO_MODE_CENTER):
                 return await self._watch(steering=mode == SERVO_MODE_CENTER)
-            return await self._grasp(NUM_ATTEMPTS if attempts is None else attempts)
+            return await self._grasp(NUM_ATTEMPTS if attempts is None else attempts, max_wander_m)
         except asyncio.CancelledError:
             raise
         finally:
@@ -791,9 +818,10 @@ class VisualServo:
                 f"k{prediction['axis_concentration']:.1f} "
                 f"lat {self.ob.gripper_client.video_latency(float('nan')):.02f}s")
 
-    async def _grasp(self, attempts):
+    async def _grasp(self, attempts, max_wander_m=None):
         """Try to pick up whatever the model sees below, up to `attempts` times."""
         tried, held, evidence = 0, False, 'no attempt made'
+        origin_xy = np.array(self.ob.pe.gant_pos[:2], dtype=float)
         while not held and tried < attempts and self.ob.run_command_loop:
             tried += 1
             # A retry opens all the way: whatever the last close missed, it gets the
@@ -803,7 +831,7 @@ class VisualServo:
             asyncio.create_task(
                 self.ob.gripper_client.send_commands({'set_finger_angle': opening}))
 
-            reason, held, evidence, asked_to_close = await self._approach()
+            reason, held, evidence, asked_to_close = await self._approach(origin_xy, max_wander_m)
             self.ob.slow_stop_all_spools()
             logger.info(f'Visual servo approach ended: {reason}')
 
@@ -818,6 +846,12 @@ class VisualServo:
                 # NOTHING_SEEN_TIMEOUT_S while high up (the approach climbed for a wider
                 # view), or the rangefinder stopped reporting. The fingers never closed.
                 continue
+
+            elif reason == WANDER_REASON:
+                # Every attempt starts from about the same place and would see the same
+                # target out of reach, so this ends the grasp rather than spending a try.
+                await self._recover(evidence)
+                break
 
             elif reason == 'stuck' and not asked_to_close:
                 # The gantry stopped making progress, and the model is not asking to
@@ -853,7 +887,7 @@ class VisualServo:
         logger.info(f'Gave up on visual servo grasp after {tried} attempt(s): {evidence}')
         return False
 
-    async def _approach(self):
+    async def _approach(self, origin_xy=None, max_wander_m=None):
         """Fly to the object and close on it, returning why the approach ended.
 
         Returns (reason, held, evidence, asked_to_close). `held` is the grasp completing
@@ -872,6 +906,7 @@ class VisualServo:
         reason, evidence, asked_to_close = 'approach timed out', 'no frames', False
         still_since = time.time()
         still_at = np.array(self.ob.pe.gant_pos, dtype=float)
+        beyond_since = None
 
         while time.time() < approach_timeout and self.ob.run_command_loop:
             # Stuck: the gantry has not gone anywhere for a while. Whatever the reason - a
@@ -948,6 +983,16 @@ class VisualServo:
             if lateral_speed > LATERAL_SPEED_MAX:
                 lateral = lateral * (LATERAL_SPEED_MAX / lateral_speed)
                 lateral_speed = LATERAL_SPEED_MAX
+            if max_wander_m is not None:
+                lateral, beyond = limit_wander(lateral, error_xy, self.ob.pe.gant_pos[:2],
+                                               origin_xy, max_wander_m, tolerance)
+                lateral_speed = float(np.linalg.norm(lateral))
+                if not beyond:
+                    beyond_since = None
+                elif beyond_since is None:
+                    beyond_since = time.time()
+                elif time.time() - beyond_since > WANDER_GIVE_UP_S:
+                    return WANDER_REASON, False, evidence, asked_to_close
             descent = self.descent_speed(range_to_target, lateral_speed) if centered else 0.0
             await self.ob.move_direction_speed([lateral[0], lateral[1], -descent])
 
