@@ -1,10 +1,10 @@
 {
   "_comment": "Hub commit each model is downloaded at. Written by nf_robot.ml.pin_latest_model; see the publish steps in ml/visual_servoing/readme.md and ml/ortho_target/readme.md.",
   "naavox/targeting": {
-    "revision": "e0e03a2dab0cbad52b23dbaecd820bcc6c40837a",
-    "pinned_at": "2026-10-18",
+    "revision": "80c264267fa9832a25fb0ea1ce0e0e92e117f758",
+    "pinned_at": "2026-10-22",
     "title": "Upload ortho_target.pth with huggingface_hub",
-    "committed_at": "2026-10-18"
+    "committed_at": "2026-10-22"
   },
   "naavox/visual_servo": {
     "revision": "e2a39819b22851407dac6103df5560715d947cdf",
