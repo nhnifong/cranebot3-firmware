@@ -33,6 +33,10 @@ PREDICTED_DROP_HEIGHT_M = 0.0
 FIND_TARGETS_INTERVAL_S = 0.5
 # targets this close to the route destination, horizontally, are left where they are
 DROPOFF_EXCLUSION_M = 0.10
+# (metres) targets closer than this to the edge of the anchor polygon are refused, whoever
+# placed them. Slack line prevention keeps the gripper from reaching all the way to the
+# walls, so a target out there could never be picked up.
+TARGET_BORDER_MARGIN_M = 0.20
 # (metres) side of the room grid squares predicted drop points are pooled into, so that a
 # fix found for one prediction serves every later one that lands in the same square.
 DROP_FIX_CELL_M = 0.3
@@ -201,7 +205,9 @@ class PickAndPlace(Maneuver):
         floor_point = self.ob.anchor_pixel_to_floor(item.anchor_num, (item.img_norm_x, item.img_norm_y))
         logger.info(f'Adding target at floor point ({floor_point}) from image point '
                     f'({item.img_norm_x}, {item.img_norm_y}) in anchor cam {item.anchor_num}')
-        if floor_point is not None:
+        if floor_point is not None and not self._target_reachable(floor_point):
+            self.notify('Target is too close to the edge of the room to reach')
+        elif floor_point is not None:
             if item.target_id is not None:
                 self.target_queue.set_target_position(item.target_id, floor_point)
             else:
@@ -213,9 +219,16 @@ class PickAndPlace(Maneuver):
     def add_room_target(self, item: control.AddTargetInRoom):
         # Used when the position arrives already in room coordinates.
         logger.info(f'Adding target at floor point ({item.x}, {item.y}) from the 3d view')
+        if not self._target_reachable((item.x, item.y)):
+            self.notify('Target is too close to the edge of the room to reach')
+            return
         self.target_queue.add_user_target((item.x, item.y), dropoff='hamper')
         self._schedule_target_submit()
         self.send_tq_to_ui()
+
+    def _target_reachable(self, position):
+        """Whether a floor point is far enough inside the work area to be picked up."""
+        return self.ob.inside_work_area_2d(position, margin=TARGET_BORDER_MARGIN_M)
 
     def _schedule_target_submit(self):
         """Submit the targets to the dataset once manual edits stop for AUTO_SUBMIT_TARGETS_S.
@@ -399,9 +412,9 @@ class PickAndPlace(Maneuver):
         return kept
 
     def _floor_target(self, x, y):
-        """A target dict for the queue, or None if it lies outside the work area."""
+        """A target dict for the queue, or None if it lies outside the reachable work area."""
         position = np.array([x, y, 0])
-        if not self.ob.inside_work_area_2d(position):
+        if not self._target_reachable(position):
             return None
         return {'position': position, 'dropoff': 'hamper'}
 

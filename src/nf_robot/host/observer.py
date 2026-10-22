@@ -3207,8 +3207,8 @@ class AsyncObserver:
         """Whether the fingers are closed on something, as the estimator judges it."""
         return bool(self.pe.holding)
 
-    def inside_work_area_2d(self, point):
-        return self.pe.point_inside_work_area_2d(np.asarray(point, dtype=float)[:2])
+    def inside_work_area_2d(self, point, margin=0.0):
+        return self.pe.point_inside_work_area_2d(np.asarray(point, dtype=float)[:2], margin=margin)
 
     def finger_angle(self):
         """The finger angle the gripper last reported, in degrees (-90 open to 90 closed)."""

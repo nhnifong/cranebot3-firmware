@@ -390,12 +390,14 @@ class Positioner2:
         # the gantry cannot be raised above the lowest anchor. cached for state clamping.
         self.ceiling_z = float(np.min(self.anchor_points[:, 2]))
 
-    def point_inside_work_area_2d(self, point):
-        """True if the horizontal point (x, y) lies within the anchor polygon."""
+    def point_inside_work_area_2d(self, point, margin=0.0):
+        """True if the horizontal point (x, y) lies within the anchor polygon, and at least
+        margin metres in from its edge."""
         if self.work_area is None:
             return True
-        # pointPolygonTest returns +1 inside, 0 on the edge, -1 outside.
-        return cv2.pointPolygonTest(self.work_area, (float(point[0]), float(point[1])), False) >= 0
+        # with measureDist, pointPolygonTest returns the signed distance to the nearest
+        # edge: positive inside, zero on the edge, negative outside.
+        return cv2.pointPolygonTest(self.work_area, (float(point[0]), float(point[1])), True) >= margin
 
     def point_inside_work_area(self, point):
         """True if the point lies within the anchor polygon horizontally and within
