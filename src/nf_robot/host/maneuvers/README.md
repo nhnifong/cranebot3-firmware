@@ -167,6 +167,9 @@ Things worth copying from it:
 |---|---|
 | `AsyncObserver(terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, auto_start=False, local_models=False, port=4245, debug=False, bind_address="127.0.0.1", rec_diagnostics=False, serve_ui=True, ui_port=8090, diamond_size=DIAMOND_SIZE, lerobot_grasp=False)` | Construct inside a running event loop. `config_path=None` uses an in-memory config that is never saved. |
 | `add_maneuver(maneuver_class, **options)` | Constructs `maneuver_class(ob, **options)`, routes everything it declared, and returns the instance. Raises `ValueError` on a duplicate name, command, control field, verb or startup step. Call before `main()`. |
+| `await add_running_maneuver(maneuver_class, **options)` | `add_maneuver` for an observer that is already running: also awaits `start()` and replays the maneuver's state to connected UIs. If `start()` raises, the maneuver is removed again. |
+| `await remove_maneuver(name)` | Stop a maneuver and unregister everything it answered to, so a new version can be added. A motion task it owns is cancelled with reason `'removed'`. Built-in maneuvers can't be removed. |
+| `maneuver_entries()` | Every command, verb, control item and startup step, with its owner and docstring. |
 | `maneuver(name)` | A registered maneuver, built-in or yours. |
 | `maneuvers` | Dict of every registered maneuver by name. |
 | `set_startup_sequence(names)` | Startup step names an `auto_start` robot runs in order once every component connects. The default is `['unpark', 'pick_and_place', 'park']`. Names are checked when `main()` starts. |

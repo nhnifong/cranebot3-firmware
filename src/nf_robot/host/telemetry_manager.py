@@ -97,6 +97,7 @@ class TelemetryManager:
         self._server = None
         self._buffer = deque(maxlen=100)
         self._buffer_lock = threading.RLock()
+        self._listeners = []
         # set when relay credentials change, so the cloud loop can retry immediately instead
         # of polling for them
         self._creds_updated = asyncio.Event()
@@ -152,6 +153,20 @@ class TelemetryManager:
         # Add item to batch
         with self._buffer_lock:
             self._buffer.append(item)
+
+        for listener in self._listeners:
+            try:
+                listener(key, msg)
+            except Exception:
+                logger.exception('telemetry listener failed')
+
+    def add_listener(self, listener):
+        """Call listener(key, message) with every item as it is sent, on whatever thread sent
+        it, so it must be quick and thread safe."""
+        self._listeners = self._listeners + [listener]
+
+    def remove_listener(self, listener):
+        self._listeners = [l for l in self._listeners if l is not listener]
 
     async def flush(self):
         """

@@ -66,6 +66,10 @@ pi = [
     "pyzbar",
     "damiao-motor",
 ]
+# the agent server (stringman-headless --mcp); mcp 2 renamed FastMCP to MCPServer
+mcp = [
+    "mcp>=2.3,<3",
+]
 
 [project.scripts]
 # Main Applications
@@ -83,6 +87,10 @@ qa-anchor-arp = "nf_robot.qa.anchor_arp_eval:main"
 "nf_robot.protos" = ["protos/*"]
 "nf_robot.ui" = ["assets/**"]
 "nf_robot.ml.ortho_target.labeler" = ["index.html"]
+# served to agents by the guide tool
+"nf_robot.host.mcp_bridge" = ["GUIDE.md"]
+# read by the api_docs tool
+"nf_robot.host.maneuvers" = ["README.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

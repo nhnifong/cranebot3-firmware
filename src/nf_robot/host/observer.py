@@ -517,7 +517,7 @@ class AsyncObserver:
 
         Refuses a name that is taken, and a command, control field, verb or startup step that
         the observer or another maneuver already answers to, since only one could ever run.
-        Call before main().
+        Call before main(); once it is running, use add_running_maneuver.
         """
         maneuver = maneuver_class(self, **options)
         if not maneuver.name:
@@ -554,6 +554,64 @@ class AsyncObserver:
         self._maneuver_verbs.update(verbs)
         self._startup_steps.update(steps)
         return maneuver
+
+    async def add_running_maneuver(self, maneuver_class, **options):
+        """add_maneuver for an observer that is already running: the maneuver is also started
+        and replays its state to connected UIs. If its start() raises, it is removed again and
+        the exception propagates."""
+        maneuver = self.add_maneuver(maneuver_class, **options)
+        try:
+            await maneuver.start()
+        except Exception:
+            await self.remove_maneuver(maneuver.name)
+            raise
+        maneuver.send_setup_telemetry()
+        return maneuver
+
+    async def remove_maneuver(self, name):
+        """Stop a maneuver and forget everything it answered to, so a new version of it can be
+        added. A motion task it owns is cancelled first, with reason 'removed'. Built-in
+        maneuvers cannot be removed."""
+        maneuver = self.maneuvers[name]
+        if type(maneuver) in BUILTIN_MANEUVERS:
+            raise ValueError(f'{name} is built in and cannot be removed')
+        task = self.motion_task
+        if task is not None and not task.done() and self._motion_owner is maneuver:
+            self._cancel_motion_task(task, 'removed')
+            # wait() rather than await, so the task's cancellation is not raised here
+            await asyncio.wait([task])
+        try:
+            await maneuver._cancel_spawned()
+            await maneuver.stop()
+        except Exception:
+            logger.exception(f'Maneuver {name} failed to stop cleanly')
+        del self.maneuvers[name]
+        for table in (self._maneuver_commands, self._maneuver_verbs, self._startup_steps):
+            for key in [k for k, entry in table.items() if entry[-1] is maneuver]:
+                del table[key]
+        for field in [f for f, handler in self._maneuver_controls.items()
+                      if handler.__self__ is maneuver]:
+            del self._maneuver_controls[field]
+
+    def maneuver_entries(self):
+        """Everything a client can trigger, as dicts of kind ('command', 'verb', 'control_item'
+        or 'startup_step'), key, owner (a maneuver name, or 'observer' for the observer's own
+        handlers), motion, and doc (the handler's docstring)."""
+        entries = [dict(kind='command', key=cmd.name, owner='observer', motion=None, doc=None)
+                   for cmd in sorted(BUILTIN_COMMANDS, key=lambda c: c.name)]
+        entries += [dict(kind='verb', key=word, owner='observer', motion=None, doc=None)
+                    for word in sorted(BUILTIN_VERBS)]
+        for kind, table in (('command', self._maneuver_commands), ('verb', self._maneuver_verbs)):
+            for key, (handler, motion, _, owner) in table.items():
+                entries.append(dict(kind=kind, key=getattr(key, 'name', key), owner=owner.name,
+                                    motion=motion, doc=inspect.getdoc(handler)))
+        for field, handler in self._maneuver_controls.items():
+            entries.append(dict(kind='control_item', key=field, owner=handler.__self__.name,
+                                motion=False, doc=inspect.getdoc(handler)))
+        for name, (handler, _, owner) in self._startup_steps.items():
+            entries.append(dict(kind='startup_step', key=name, owner=owner.name if owner else 'observer',
+                                motion=True, doc=inspect.getdoc(handler)))
+        return entries
 
     def maneuver(self, name):
         """The registered maneuver of that name."""
@@ -1914,7 +1972,8 @@ class AsyncObserver:
         detail = (f'line {line} reached {float(tensions[line]):.1f} N against a limit of '
                   f'{self.max_safe_tension:.1f} N')
         self._publish_safety_event(
-            'over_tension', f'Over tension: {detail}. Motor torque is being cycled to shed it.')
+            'over_tension', f'Over tension: {detail}. The motors are being put into a damped '
+                            f'mode for 1 s to relax the tension.')
         if self.motion_task is None or self.motion_task.done():
             return
         self.tension_over_limit = True
@@ -2242,9 +2301,11 @@ class AsyncObserver:
                 message = f'{title} was cancelled{took} because {detail} started in its place.'
             elif reason == 'tension':
                 message = (f'{title} was aborted{took} by the tension safety monitor: {detail}. '
-                           f'Motor torque was cycled to shed it.')
+                           f'The motors were put into a damped mode for 1 s to relax the tension.')
             elif reason == 'marker':
                 message = f'{title} was aborted{took} by the gantry marker monitor: {detail}.'
+            elif reason == 'removed':
+                message = f'{title} was cancelled{took} because its maneuver was removed.'
             else:
                 message = f'{title} was cancelled{took}.'
         elif task.exception() is not None:
@@ -5798,6 +5859,29 @@ def main():
     )
     parser.add_argument("--debug", action="store_true", help="Enable DEBUG level logging")
     parser.add_argument(
+        "--mcp",
+        nargs="?",
+        type=int,
+        const=4250,
+        default=None,
+        metavar="PORT",
+        help="Serve an MCP server for AI agents at http://127.0.0.1:PORT/mcp (4250 if no port "
+             "is given). Needs the mcp extra. See host/mcp_bridge/GUIDE.md."
+    )
+    parser.add_argument(
+        "--mcp_allow_code",
+        action="store_true",
+        help="Let MCP clients load maneuvers and run scripts: arbitrary Python inside this "
+             "process. Off unless given."
+    )
+    parser.add_argument(
+        "--maneuver_dir",
+        type=str,
+        default=None,
+        help="A folder of maneuver modules (*.py) to load at startup. Agents save the "
+             "maneuvers they write here."
+    )
+    parser.add_argument(
         "--rec_diagnostics",
         action="store_true",
         help="Record the arguments of every optimize_arp_anchors call during full_auto_calibration "
@@ -5867,6 +5951,16 @@ def main():
             diamond_size=tuple(args.diamond_size),
             lerobot_grasp=args.lerobot_grasp,
         )
+
+        agent_code = None
+        if args.maneuver_dir or args.mcp is not None:
+            from nf_robot.host.mcp_bridge.agent_code import AgentCode
+            agent_code = AgentCode(runner, args.maneuver_dir)
+            agent_code.load_directory()
+        if args.mcp is not None:
+            from nf_robot.host.mcp_bridge.bridge import McpBridge
+            runner.add_maneuver(McpBridge, port=args.mcp, allow_code=args.mcp_allow_code,
+                                agent_code=agent_code)
 
         # Idempotent stop trigger. Runs as a signal-handler callback on the event
         # loop thread, so it must not block: schedule the telemetry-socket abort

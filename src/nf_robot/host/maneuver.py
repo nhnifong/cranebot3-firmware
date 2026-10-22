@@ -84,8 +84,8 @@ class MotionResult:
     name: str                   # the task's coroutine name, e.g. 'seek_goal'
     owner: str | None           # the maneuver it belonged to, None for the observer's own
     outcome: str                # 'finished', 'cancelled', 'failed', or 'refused'
-    # why it was cancelled or refused: 'stopped', 'replaced', 'tension', 'marker', 'parked',
-    # or None when nothing recorded a reason (shutdown, a cancel from inside the task)
+    # why it was cancelled or refused: 'stopped', 'replaced', 'tension', 'marker', 'removed',
+    # 'parked', or None when nothing recorded a reason (shutdown, a cancel from inside the task)
     reason: str | None
     message: str                # the same in plain language, for a person or an agent
     started_at: float
@@ -262,8 +262,15 @@ class Maneuver:
         """Run coro in the background until it ends or this maneuver is stopped."""
         task = asyncio.create_task(coro, name=name)
         self._spawned.add(task)
-        task.add_done_callback(self._spawned.discard)
+        task.add_done_callback(self._spawned_done)
         return task
+
+    def _spawned_done(self, task):
+        self._spawned.discard(task)
+        # nothing awaits a spawned task, so its failure would otherwise go unreported
+        if not task.cancelled() and task.exception() is not None:
+            logger.error(f'{self.name}: background task {task.get_name()} failed',
+                         exc_info=task.exception())
 
     async def run_in_thread(self, fn, *args):
         return await asyncio.to_thread(fn, *args)
