@@ -318,31 +318,6 @@ class ArpeggioGripperClient(ComponentClient):
         """
         await self.send_commands({'set_config_vars': {'STREAM_MODE': CAPTURE_STREAM_MODE}})
 
-    async def capture_raw_frame(self, after_ts, timeout=5.0, expect_size=None):
-        """The newest camera frame captured after after_ts, as (timestamp, RGB array), or
-        (None, None) on timeout.
-
-        Reads self.frame, not last_output_frame, which process_frame has already resized
-        to SF_TARGET_SHAPE - throwing away the pixels capture mode exists to get. Waiting
-        on capture time rather than sleeping guarantees the frame is from after whatever
-        motion the caller just commanded, however far the stream is lagging.
-
-        expect_size (width, height) is the only reliable test that a resolution change has
-        landed: the old stream keeps delivering for seconds afterwards, and those frames
-        are new enough to pass any timestamp test at the wrong size.
-        """
-        fudge = 0.20 # I don't think the dts zeros are accurate enough
-        deadline = time.time() + timeout
-        while True:
-            with self.frame_lock:
-                timestamp, frame = self.last_frame_cap_time, self.frame
-                if frame is not None and timestamp is not None and timestamp > (after_ts + fudge):
-                    if expect_size is None or (frame.shape[1], frame.shape[0]) == tuple(expect_size):
-                        return timestamp, frame.copy()
-            if time.time() > deadline:
-                return None, None
-            await asyncio.sleep(0.02)
-
     async def restore_default_stream(self):
         """Put the camera back to the control stream."""
         await self.send_commands({'set_config_vars': {'STREAM_MODE': CONTROL_STREAM_MODE}})

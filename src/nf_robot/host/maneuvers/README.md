@@ -193,6 +193,8 @@ Built-in maneuvers are `parking`, `drop_point`, `lerobot`, `pick_and_place`, `pl
 | `send_setup_telemetry()` | Whenever a UI connects. Replay whatever it should see. |
 | `on_stop_all()` | When everything is being stopped. |
 | `on_over_tension(tensions)` | While your motion task runs under `OverTension.NOTIFY` and a line goes over the safe limit. `tensions` is a (4,) array in newtons. |
+| `on_motion_task_done(result)` | Whenever any motion task ends or is refused, yours or not. `result` is a `MotionResult`. |
+| `on_safety_event(kind, message)` | When a safety monitor acts: `kind` is `'over_tension'` or `'marker'`, `message` a sentence for a person. Comes whether or not a task was running or aborted. |
 | `on_component_connected(kind, anchor_num=None)` | A component's websocket came up. `kind` is `'gripper'` or `'anchor'`. |
 | `on_component_disconnected(kind, anchor_num=None)` | A component's websocket that was up went down. |
 
@@ -245,6 +247,8 @@ Whatever the policy, the observer always sheds an over-tension by briefly cyclin
 | Name | |
 |---|---|
 | `TiltWatch(ob, tilt_deg=8.0, confirm_s=0.3, max_age_s=1.0)` | Call `check()` steadily. It returns a reason once the pole has leaned past `tilt_deg` for `confirm_s`, else `None`. `worst_tilt` is the steepest lean seen. |
+| `MotionResult` | How a motion task ended: `name`, `owner` (maneuver name or `None`), `outcome` (`'finished'`, `'cancelled'`, `'failed'` or `'refused'`), `reason` (`'stopped'`, `'replaced'`, `'tension'`, `'marker'`, `'parked'` or `None`), `message` (plain language), `started_at`, `ended_at`, `error` (traceback of a failure), `value` (what a finished coroutine returned). `safety_trip` is true for `'tension'` and `'marker'`. |
+| `RunningMotion` | Named tuple: `name`, `owner`, `started_at`. |
 | `ItemImage` | Named tuple: `image_rgb`, `timestamp`, `laser_range`, `gantry_position`. |
 | `ROUTE_POINT_TAG_NAMES` | Maps each `common.RoutePoint` to the named position it flies to. |
 | `DROP_POSITION_NAME`, `PREDICTED_DROP_NAME` | Named positions for the recorded drop position and the drop point model's prediction. |
@@ -291,6 +295,8 @@ Positions are room-frame numpy arrays in metres, with z up and the floor at z=0.
 | `gripper_camera_to_room(vec)` | Rotate a vector from the camera's optical frame (x right, y down, z forward) into the room frame. |
 | `await gripper_frame(after=None, timeout=3.0)` | An RGB frame captured after `after` (now, by default), or `None`. `after=0` takes the newest frame. |
 | `await gripper_capture(after=None, timeout=3.0, expect_size=None)` | `(timestamp, RGB frame)`, optionally only at a given `(width, height)`. |
+| `anchor_cameras()` | The anchor numbers whose camera has delivered a frame. |
+| `await anchor_capture(anchor_num, after=None, timeout=3.0)` | `(timestamp, RGB frame)` from an anchor camera captured after `after` (now, by default), or `(None, None)`. `after=0` takes the newest frame. |
 | `last_clear_item_image()` | The newest `ItemImage` taken while the laser read 12 to 40 cm and, if the visual servo model is running, it saw the item in the inner third of the frame: an item under the gripper, centred, before the fingers close. |
 | `latest_ortho()` | The newest orthographic floor view (RGB), or `None`. |
 | `ortho_enabled()` | Whether the floor view is being rendered. |
@@ -324,7 +330,9 @@ Coroutines marked *motion* move the robot and may be cancelled at any `await`.
 | `prefer_swing_cancellation()` | An async context manager: swing cancellation on for the block, if verified. |
 | `set_swing_cancellation(enabled)` | Returns whether it was on. |
 | `await half_auto_calibration()` | *Motion.* Re-tension and re-reference the lines from the cameras' view of the gantry. |
-| `await invoke_motion_task(coro, owner=None, safety=None)` | Start `coro` as the motion task, cancelling the current one. Not from inside a motion task. |
+| `await invoke_motion_task(coro, owner=None, safety=None)` | Start `coro` as the motion task, cancelling the current one, and return its task. Returns `None` if it was refused because the robot is parked. Not from inside a motion task. |
+| `current_motion_task()` | A `RunningMotion` for the task running now, or `None`. |
+| `last_motion_result()` | The `MotionResult` of the most recent motion task to end or be refused, or `None`. |
 | `await stop_all()` | Stop everything. Not from inside a motion task; use `slow_stop_all_spools` there. |
 | `override_safety(**changes)` | See `Maneuver.override_safety`. |
 | `speed_limit()` | Maximum gantry speed, in m/s. |

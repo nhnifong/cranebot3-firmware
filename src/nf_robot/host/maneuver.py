@@ -79,6 +79,32 @@ class ItemImage(NamedTuple):
 
 
 @dataclass(frozen=True)
+class MotionResult:
+    """How one motion task ended, or why it never started."""
+    name: str                   # the task's coroutine name, e.g. 'seek_goal'
+    owner: str | None           # the maneuver it belonged to, None for the observer's own
+    outcome: str                # 'finished', 'cancelled', 'failed', or 'refused'
+    # why it was cancelled or refused: 'stopped', 'replaced', 'tension', 'marker', 'parked',
+    # or None when nothing recorded a reason (shutdown, a cancel from inside the task)
+    reason: str | None
+    message: str                # the same in plain language, for a person or an agent
+    started_at: float
+    ended_at: float
+    error: str | None = None    # the formatted traceback of a failure
+    value: object = None        # what the coroutine returned, when it finished
+
+    @property
+    def safety_trip(self):
+        return self.reason in ('tension', 'marker')
+
+
+class RunningMotion(NamedTuple):
+    name: str
+    owner: str | None
+    started_at: float
+
+
+@dataclass(frozen=True)
 class SafetyPolicy:
     on_over_tension: OverTension = OverTension.ABORT
     # A task that turns sightings of the gantry marker into stored results is aborted on a
@@ -166,6 +192,13 @@ class Maneuver:
 
     def on_over_tension(self, tensions):
         """Called while this maneuver's task runs under OverTension.NOTIFY and a line is over."""
+
+    def on_motion_task_done(self, result):
+        """Any motion task ended or was refused, whoever owned it. result is a MotionResult."""
+
+    def on_safety_event(self, kind, message):
+        """A safety monitor acted. kind is 'over_tension' or 'marker'. Comes whether or not
+        a motion task was running; one that was aborted also gets its MotionResult."""
 
     # -- helpers -------------------------------------------------------------
 

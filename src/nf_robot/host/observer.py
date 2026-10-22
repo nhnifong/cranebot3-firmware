@@ -30,7 +30,7 @@ import inspect
 import itertools
 from contextlib import asynccontextmanager, contextmanager
 from collections import deque, defaultdict
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import uuid
 from functools import partial, wraps
 from pathlib import Path
@@ -69,7 +69,8 @@ from nf_robot.host.position_estimator import Positioner2
 from nf_robot.host.telemetry_manager import TelemetryManager, LOCAL, normalize_control_plane_host
 from nf_robot.host.webui_server import WebUiServer
 from nf_robot.host.maneuver import (SafetyPolicy, OverTension, RESERVED_KEY_PREFIXES, ItemImage,
-                                    DROP_POSITION_NAME, PREDICTED_DROP_NAME, ROUTE_POINT_TAG_NAMES)
+                                    DROP_POSITION_NAME, PREDICTED_DROP_NAME, ROUTE_POINT_TAG_NAMES,
+                                    MotionResult, RunningMotion)
 from nf_robot.host.maneuvers import BUILTIN_MANEUVERS
 
 logger = logging.getLogger(__name__)
@@ -283,6 +284,15 @@ def with_swing_cancellation_preferred(func):
     return wrapper
 
 
+@dataclass
+class _MotionRun:
+    """What is known about a running motion task that its asyncio.Task does not hold."""
+    owner: str | None
+    started_at: float | None
+    cancel_reason: str | None = None
+    cancel_detail: str | None = None
+
+
 class TelemetryLogHandler(logging.Handler):
     """Forwards log records to the telemetry stream via send_ui."""
 
@@ -391,6 +401,9 @@ class AsyncObserver:
         # the policy the safety monitors apply to it
         self._motion_owner = None
         self._motion_safety = SafetyPolicy()
+        # motion task -> _MotionRun, from its start until its MotionResult is made
+        self._motion_runs = {}
+        self._last_motion_result = None
         # set by passive_safety when line tension exceeds the safe limit during a running
         # motion task. Swing latency cal runs under OverTension.NOTIFY and polls it to back
         # off and retry the current trial.
@@ -1302,7 +1315,10 @@ class AsyncObserver:
                     if attempts > MAX_TENSION_RETRIES:
                         logger.warning(f'Tension kept exceeding the limit at latency {lat:.3f}s; aborting calibration')
                         # leave tension_over_limit set so the abort reports the real reason
-                        self.motion_task.cancel()
+                        self._cancel_motion_task(
+                            self.motion_task, 'tension',
+                            f'a line went over the safe tension {attempts} times in a row '
+                            f'at latency {lat:.3f} s')
                         await asyncio.sleep(0)  # let the cancellation take effect
                         return out
                     logger.warning(f'Tension over limit during latency {lat:.3f}s trial (attempt {attempts}); waiting {TENSION_BACKOFF_S}s and returning to start')
@@ -1894,6 +1910,11 @@ class AsyncObserver:
 
     def _respond_to_over_tension(self, tensions):
         """Deal with the running motion task as its SafetyPolicy says, once a line is over."""
+        line = int(np.argmax(tensions))
+        detail = (f'line {line} reached {float(tensions[line]):.1f} N against a limit of '
+                  f'{self.max_safe_tension:.1f} N')
+        self._publish_safety_event(
+            'over_tension', f'Over tension: {detail}. Motor torque is being cycled to shed it.')
         if self.motion_task is None or self.motion_task.done():
             return
         self.tension_over_limit = True
@@ -1904,7 +1925,7 @@ class AsyncObserver:
                 logger.warning(f'Tension overload during motion task "{name}" - aborting it')
                 if owner is not None:
                     owner.abort_reason = 'tension'
-                self.motion_task.cancel()
+                self._cancel_motion_task(self.motion_task, 'tension', detail)
             case OverTension.NOTIFY:
                 logger.warning(f'Tension overload during motion task "{name}" - letting it back off')
                 if owner is not None:
@@ -1956,6 +1977,7 @@ class AsyncObserver:
         if not (once_per_session and key in self._gantry_marker_popped):
             self.send_ui(pop_message=telemetry.Popup(message=message))
         self._gantry_marker_popped.add(key)
+        self._publish_safety_event('marker', message)
         if (self.motion_task is not None and not self.motion_task.done()
                 and self._motion_safety.needs_gantry_marker):
             logger.warning(f'Gantry marker fault during motion task '
@@ -1963,7 +1985,7 @@ class AsyncObserver:
             self.gantry_marker_fault = phrase
             if self._motion_owner is not None:
                 self._motion_owner.abort_reason = 'marker'
-            self.motion_task.cancel()
+            self._cancel_motion_task(self.motion_task, 'marker', phrase)
 
     def _gantry_parked(self):
         """Whether the gantry is on the parking hook, as far as the saved park data knows."""
@@ -2145,11 +2167,17 @@ class AsyncObserver:
             coro.close()
             logger.info(f"Can't move while in the parking hook; ignoring {coro.__name__}. "
                         f"Unpark first.")
-            return
+            now = time.time()
+            self._publish_motion_result(MotionResult(
+                name=coro.__name__, owner=owner.name if owner else None, outcome='refused',
+                reason='parked', started_at=now, ended_at=now,
+                message=f'{self._title(coro.__name__)} was not started because the gantry is '
+                        f'parked on the hook. Unpark first.'))
+            return None
         if self.motion_task is not None and not self.motion_task.done():
             logger.debug(f'current motion task {self.motion_task} done={self.motion_task.done()}')
             logger.info(f"Cancelling previous motion task: {self.motion_task.get_name()}")
-            self.motion_task.cancel()
+            self._cancel_motion_task(self.motion_task, 'replaced', self._title(coro.__name__))
             try:
                 # Wait briefly for the old task's cleanup to complete.
                 result = await self.motion_task
@@ -2164,13 +2192,88 @@ class AsyncObserver:
             owner.abort_reason = None
         self.motion_task = asyncio.create_task(coro)
         self.motion_task.set_name(coro.__name__)
+        self._motion_runs[self.motion_task] = _MotionRun(owner.name if owner else None, time.time())
         self.motion_task.add_done_callback(self._report_motion_task_done)
         self._send_motion_task_status(self.motion_task)
+        return self.motion_task
+
+    def _cancel_motion_task(self, task, reason, detail=None):
+        """Cancel a motion task, recording why for its MotionResult. The first reason given
+        is kept: a stop that lands on a task a safety monitor already aborted changes nothing."""
+        run = self._motion_runs.get(task)
+        if run is not None and run.cancel_reason is None:
+            run.cancel_reason, run.cancel_detail = reason, detail
+        task.cancel()
+
+    def last_motion_result(self):
+        """The MotionResult of the most recent motion task to end or be refused, or None."""
+        return self._last_motion_result
+
+    def current_motion_task(self):
+        """A RunningMotion for the motion task running now, or None."""
+        task = self.motion_task
+        if task is None or task.done():
+            return None
+        run = self._motion_runs.get(task)
+        return RunningMotion(task.get_name(), run.owner if run else None,
+                             run.started_at if run else None)
 
     @staticmethod
-    def _motion_task_title(task):
-        """A motion task's coroutine name as something to show a person: seek_goal -> Seek goal."""
-        return task.get_name().replace('_', ' ').strip().capitalize()
+    def _title(name):
+        """A coroutine name as something to show a person: seek_goal -> Seek goal."""
+        return name.replace('_', ' ').strip().capitalize()
+
+    @classmethod
+    def _motion_task_title(cls, task):
+        return cls._title(task.get_name())
+
+    def _motion_result(self, task):
+        run = self._motion_runs.pop(task, None) or _MotionRun(None, None)
+        ended = time.time()
+        title = self._motion_task_title(task)
+        took = f' after {ended - run.started_at:.1f} s' if run.started_at else ''
+        reason = error = value = None
+        if task.cancelled():
+            outcome = 'cancelled'
+            reason, detail = run.cancel_reason, run.cancel_detail
+            if reason == 'stopped':
+                message = f'{title} was stopped{took} by a stop command.'
+            elif reason == 'replaced':
+                message = f'{title} was cancelled{took} because {detail} started in its place.'
+            elif reason == 'tension':
+                message = (f'{title} was aborted{took} by the tension safety monitor: {detail}. '
+                           f'Motor torque was cycled to shed it.')
+            elif reason == 'marker':
+                message = f'{title} was aborted{took} by the gantry marker monitor: {detail}.'
+            else:
+                message = f'{title} was cancelled{took}.'
+        elif task.exception() is not None:
+            outcome = 'failed'
+            exc = task.exception()
+            error = ''.join(traceback.format_exception(exc))
+            message = f'{title} failed{took} with {type(exc).__name__}: {exc}'
+        else:
+            outcome = 'finished'
+            value = task.result()
+            message = f'{title} finished{took}.'
+        return MotionResult(name=task.get_name(), owner=run.owner, outcome=outcome, reason=reason,
+                            message=message, started_at=run.started_at or ended, ended_at=ended,
+                            error=error, value=value)
+
+    def _publish_motion_result(self, result):
+        self._last_motion_result = result
+        for maneuver in list(self.maneuvers.values()):
+            try:
+                maneuver.on_motion_task_done(result)
+            except Exception:
+                logger.exception(f'{maneuver.name}.on_motion_task_done failed')
+
+    def _publish_safety_event(self, kind, message):
+        for maneuver in list(self.maneuvers.values()):
+            try:
+                maneuver.on_safety_event(kind, message)
+            except Exception:
+                logger.exception(f'{maneuver.name}.on_safety_event failed')
 
     def _send_motion_task_status(self, task, outcome=None):
         """Tell the UI which motion task is running, or that task ended and how."""
@@ -2182,21 +2285,19 @@ class AsyncObserver:
         ))
 
     def _report_motion_task_done(self, task):
-        """Done callback of every motion task: report how it ended. Skipped when a newer task
-        has already replaced it, so the UI does not see the new one reported as ended."""
-        current = self.motion_task
-        if current is not None and current is not task and not current.done():
-            return
-        if task.cancelled():
-            outcome = 'cancelled'
-        elif task.exception() is not None:
-            outcome = 'failed'
+        """Done callback of every motion task: publish its MotionResult, and show the UI how
+        it ended unless a newer task has already replaced it, so the UI does not see the new
+        one reported as ended."""
+        result = self._motion_result(task)
+        if result.outcome == 'failed':
             # reading the exception marks it retrieved, which silences asyncio's own report
             # of it, so say it here instead
             logger.error(f'Motion task {task.get_name()} failed', exc_info=task.exception())
-        else:
-            outcome = 'finished'
-        self._send_motion_task_status(task, outcome)
+        self._publish_motion_result(result)
+        current = self.motion_task
+        if current is not None and current is not task and not current.done():
+            return
+        self._send_motion_task_status(task, result.outcome)
 
     async def tension_lines(self):
         """Request all anchors to reel in all lines until tight."""
@@ -2283,7 +2384,7 @@ class AsyncObserver:
             # Only cancel the task if it's actually still running.
             if not task_to_stop.done():
                 logger.info(f"Cancelling motion task: {task_to_stop.get_name()}")
-                task_to_stop.cancel()
+                self._cancel_motion_task(task_to_stop, 'stopped')
 
             # await the task's completion.
             try:
@@ -3265,6 +3366,20 @@ class AsyncObserver:
             return None, None
         return await self.gripper_client.capture_raw_frame(
             time.time() if after is None else after, timeout=timeout, expect_size=expect_size)
+
+    def anchor_cameras(self):
+        """The anchor numbers whose camera has delivered a frame."""
+        return sorted(num for num, client in self.anchors.items() if client.frame is not None)
+
+    async def anchor_capture(self, anchor_num, after=None, timeout=3.0):
+        """(timestamp, RGB frame) from an anchor's camera captured after `after` (now, by
+        default), or (None, None) if none arrives within timeout or the anchor is not
+        connected. after=0 takes the newest frame without waiting for a fresher one."""
+        client = self.anchors.get(anchor_num)
+        if client is None:
+            return None, None
+        return await client.capture_raw_frame(
+            time.time() if after is None else after, timeout=timeout)
 
     async def use_gripper_capture_stream(self):
         """Switch the gripper camera to its full capture resolution. It stays there for the

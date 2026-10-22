@@ -58,6 +58,8 @@ class StubObserver:
         self.gantry_marker_fault = None
         self._gantry_marker_warned = set()
         self._gantry_marker_popped = set()
+        self.maneuvers = {}
+        self._motion_runs = {}
         self.popups = []
 
     def send_ui(self, **kwargs):
@@ -71,6 +73,8 @@ class StubObserver:
     monitor_gantry_visibility = AsyncObserver.monitor_gantry_visibility
     _report_gantry_marker_fault = AsyncObserver._report_gantry_marker_fault
     _gantry_parked = AsyncObserver._gantry_parked
+    _publish_safety_event = AsyncObserver._publish_safety_event
+    _cancel_motion_task = AsyncObserver._cancel_motion_task
 
 
 async def run_monitor(stub, polls):
