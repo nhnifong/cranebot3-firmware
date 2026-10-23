@@ -129,6 +129,9 @@ TARGET_EMA_RESET_M = 0.5
 STUCK_DISTANCE_M = 0.05
 STUCK_TIMEOUT_S = 5.0
 
+# (m) how far a grasp's gantry may wander horizontally from where it started, unless the
+# caller asks for another limit (None for none).
+DEFAULT_MAX_WANDER_M = 0.5
 # (s) how long the target may sit outside a grasp's wander limit before the grasp gives up.
 # The filtered target still jitters with the swing, so one frame past the edge means little.
 WANDER_GIVE_UP_S = 1.0
@@ -729,13 +732,13 @@ class VisualServo:
 
     # -- the modes ---------------------------------------------------------
 
-    async def run(self, mode=SERVO_MODE_GRASP, attempts=None, max_wander_m=0.7):
+    async def run(self, mode=SERVO_MODE_GRASP, attempts=None, max_wander_m=DEFAULT_MAX_WANDER_M):
         """Run one of SERVO_MODES. True only if a grasp ended with the object held.
 
         `attempts` overrides how many tries a grasp gets before it reports failure.
         `max_wander_m` keeps a grasp's gantry within that horizontal distance of where it
         started, for grasping beside things that must not be touched; a target beyond it is
-        given up on rather than chased.
+        given up on rather than chased. None lets it wander anywhere.
 
         The debugging modes run until the motion task is cancelled and return False, since
         nothing was grasped.

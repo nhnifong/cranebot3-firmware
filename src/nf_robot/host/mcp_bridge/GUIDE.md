@@ -23,7 +23,7 @@ This is a real machine in a real room, often a home. Read **Safety** before you 
 
 - **Frame and units:** room frame, metres, z up, the floor at z = 0. Angles are in degrees unless a docstring says radians. Tensions are in newtons. The origin is wherver the "origin" card was placed during calibration, and it is the center of the ortho image.
 - **Gantry vs gripper:** `gantry_position` is the gantry, and `gripper_position` is the gripper at the end of the pole below it. To put the gripper at a point, aim the gantry at `point + pole_offset`. `move_to(frame='gripper')` does this for you.
-- **Fingers and wrist:** fingers run from -90 (open) to 90 (closed) but these are not real angles, just arbitrary command units.  The wrist runs from 0 to 1080, these are real angles in degrees.
+- **Fingers and wrist:** fingers run from -90 (open) to 90 (closed) but these are not real angles, just arbitrary command units. Finger angles are for opening and shaping the empty hand; grasping is done by force (see **Gripping**). The wrist runs from 0 to 1080, these are real angles in degrees.
 - **Named positions:** places in the room such as `hamper`, `trash` and `parking_location`. They appear in `get_state()['named_positions']`. Only try to park and unpark robots with saved parking positions. If its not saved the user will handle it manually.
 
 ## First steps
@@ -40,7 +40,7 @@ This is a real machine in a real room, often a home. Read **Safety** before you 
 | Read | `get_state`, `get_events`, `capabilities`, `api_docs`, `guide` |
 | See | `get_image`, `get_images`, `get_frames`, `record_clip` |
 | Move (return at once) | `move_to`, `nudge`, `drive`, `run_command`, `run_verb` |
-| Gripper | `set_fingers`, `set_wrist`, `run_command('GRASP')` |
+| Gripper | `grip` (close and hold by force), `set_fingers` (open or shape the empty hand only), `set_wrist`, `run_command('GRASP')` |
 | Wait and learn the outcome | `wait`, `get_events` |
 | Stop | `stop` |
 | People | `answer_popup` |
@@ -102,6 +102,28 @@ You cannot react to video in real time from here, because each of your turns tak
 
 A small visual servoing model is used when running `run_command('GRASP')` which is reliable for grasping a prominent object in the gripper's frame. It can steer some distance toward whatever it finds most prominent; from code, `await ob.grasp(max_wander_m=0.15)` keeps it within that distance of where it started and gives up on a target beyond it.
 
+## Gripping
+
+**Close the fingers at a constant rate; never command a closed finger angle.** The gripper has a low-level controller for this. While the fingers close at the commanded finger speed, the pads sense pressure; on contact the gripper switches itself to force mode. From then on a finger speed is the rate the holding force changes (normalized 0 to 1, held by a PID loop): positive tightens, 0 holds the force where it is, and negative loosens until, below zero, it lets go. Finger speed commands expire after 0.2 s, so they have to be repeated.
+
+An angle command defeats all of this. The object stops the fingers short of the angle, the servo keeps pushing toward it, and its overload cutout drops whatever it held, typically mid-carry when the load rises. An angle command also takes the gripper out of force mode.
+
+- **`grip(hold_force)`** closes at a constant rate until the force is reached and then holds it. `await ob.close_grip(hold_force=0.25)` does the same from code. About 0.25 suits most things; soft or floppy things like cloth take less, heavy things more.
+- **`set_fingers(angle)`** is for opening (letting go) and for shaping the empty hand before a dive.
+- **`run_command('GRASP')`** (or `await ob.grasp()`) is the automatic grasp: it centres over an object with the visual servo model and closes by force itself.
+
+A grasp in a maneuver:
+
+```python
+await self.ob.set_finger_angle(-60)                  # open, before reaching the object
+...                                                  # descend until the jaws are around it
+grip = await self.ob.close_grip(hold_force=0.25)     # close at a constant rate, hold by force
+if not grip['held']:
+    raise RuntimeError(f'nothing between the fingers: {grip}')
+...                                                  # carry it; the gripper keeps the force
+await self.ob.set_finger_angle(-60)                  # let go
+```
+
 ## The experimental loop
 
 Use this loop to develop a behavior:
@@ -111,7 +133,7 @@ Use this loop to develop a behavior:
    async def run(ob, m):
        return dict(range=ob.laser_range(), tilt=ob.pole_tilt(), holding=ob.is_holding())
    ```
-2. **Probe with primitives.** Try `nudge`, `move_to`, `set_fingers` and `run_command('GRASP')`, then `wait`. Learn how the robot responds before you automate anything.
+2. **Probe with primitives.** Try `nudge`, `move_to`, `grip`, `set_fingers` and `run_command('GRASP')`, then `wait`. Learn how the robot responds before you automate anything.
 3. **Write a maneuver.** Save it to a file and load it with `load_maneuver(path=...)`, or pass `source` inline. It answers to the verbs you declare.
 4. **Run it** with `run_verb('yourverb args')`, then call `wait(until='motion_done', snapshot='gripper')`.
 5. **Judge the run.** Read the motion result, the `log` events your code wrote, and the images. Did it do what you meant? If not, form one specific hypothesis about why.

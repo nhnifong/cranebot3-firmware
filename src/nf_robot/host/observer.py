@@ -63,7 +63,7 @@ from nf_robot.host.arp_gripper_client import (ArpeggioGripperClient, rotate_vect
                                               OPEN, CLOSED, RANGE_MAX_AGE_S)
 from nf_robot.host import swing
 from nf_robot.host.person_locator import PersonLocator
-from nf_robot.host.visual_servo import VisualServo, SERVO_MODE_GRASP, SERVO_MODE_OBSERVE, SERVO_MODE_CENTER
+from nf_robot.host.visual_servo import VisualServo, DEFAULT_MAX_WANDER_M, SERVO_MODE_GRASP, SERVO_MODE_OBSERVE, SERVO_MODE_CENTER
 from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.position_estimator import Positioner2
 from nf_robot.host.telemetry_manager import TelemetryManager, LOCAL, normalize_control_plane_host
@@ -3196,9 +3196,46 @@ class AsyncObserver:
         return frame
 
     async def set_finger_angle(self, angle):
-        """Command the fingers to angle (degrees, -90 open to 90 closed) without waiting."""
+        """Command the fingers to angle (degrees, -90 open to 90 closed) without waiting.
+
+        For opening, or shaping the empty hand before a dive. Never close on an object
+        this way: an angle the object stops the fingers short of keeps the servo pushing
+        until its overload cutout drops what it held, and an angle command takes the
+        gripper out of force mode. Grasp with close_grip."""
         if self.gripper_client is not None:
             await self.gripper_client.send_commands({'set_finger_angle': angle})
+
+    async def close_grip(self, hold_force=0.25, speed=40.0, timeout=5.0):
+        """Close the fingers at a constant rate until they hold with hold_force, then keep
+        holding it. This is the way to grasp anything.
+
+        The gripper closes at the commanded finger speed until its pads feel contact, then
+        switches itself to force mode: from there a finger speed is the rate the force it
+        holds (normalized 0 to 1, by a PID loop) rises or falls, and speed 0 holds the force
+        where it is. Speed commands expire after 0.2 s, so they are repeated here every
+        50 ms. Release by opening with set_finger_angle.
+
+        Returns dict(held, force, angle). held is False if the fingers shut without
+        feeling anything, or timeout passed before the force was reached."""
+        if self.gripper_client is None:
+            return dict(held=False, force=0.0, angle=None)
+        held = False
+        deadline = time.time() + timeout
+        try:
+            while time.time() < deadline:
+                force = self.grip_target_force()
+                if force >= hold_force:
+                    held = True
+                    break
+                # fully shut and never felt anything: there was nothing between the pads
+                if force == 0 and self.finger_angle() >= 88:
+                    break
+                await self.gripper_client.send_commands({'set_finger_speed': float(speed)})
+                await asyncio.sleep(0.05)
+        finally:
+            # zero speed holds the force reached, it does not let go
+            await self.gripper_client.send_commands({'set_finger_speed': 0.0})
+        return dict(held=held, force=self.grip_target_force(), angle=self.finger_angle())
 
     async def set_wrist_angle(self, angle):
         """Command the wrist to angle (degrees, 0 to 1080) without waiting."""
@@ -3747,7 +3784,8 @@ class AsyncObserver:
         return actual
 
     async def settle_fingers(self, target, tol=2.0, timeout=6.0):
-        """Command the fingers to an absolute angle and wait until telemetry agrees."""
+        """Command the fingers to an absolute angle and wait until telemetry agrees.
+        For opening or shaping the empty hand; grasp with close_grip, never with this."""
         await self.gripper_client.send_commands({'set_finger_angle': target})
         deadline = time.time() + timeout
         actual = None
@@ -5369,7 +5407,10 @@ class AsyncObserver:
     async def send_gripper_move(self, line_speed, finger_speed, wrist_speed):
         """Command the gripper's motors in one update.
         finger speed is in degrees per second (but it's the fake degrees of the finger which range from -90 (open) to 90 (closed))
-        positive values close the fingers.
+        positive values close the fingers. Once the finger pads feel contact while closing,
+        the gripper switches to force mode and finger speed becomes the rate of change of
+        the grip force it holds; 0 holds the force, and driving it below zero lets go.
+        Speed commands expire after 0.2 s and have to be repeated. close_grip does this.
         wrist speed is in real degrees per second."""
         update = {}
 
@@ -5779,11 +5820,12 @@ class AsyncObserver:
             return None
         return latest[1]
 
-    async def grasp(self, max_wander_m=None):
+    async def grasp(self, max_wander_m=DEFAULT_MAX_WANDER_M):
         """Try to grasp whatever is directly below the gripper. True if it is now held.
 
         max_wander_m keeps the visual servo within that horizontal distance of where the
-        gantry started, so it cannot chase something further off; a lerobot grasp ignores it."""
+        gantry started, so it cannot chase something further off (None for no limit); a
+        lerobot grasp ignores it."""
         lerobot = self.maneuvers.get('lerobot')
         if lerobot is not None and lerobot.use_for_grasp:
             # A lerobot session may be driving from our own subprocess or connected

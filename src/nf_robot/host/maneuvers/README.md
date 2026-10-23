@@ -323,8 +323,9 @@ Coroutines marked *motion* move the robot and may be cancelled at any `await`.
 | `await settle_wrist(target, tol=2.0, timeout=6.0)` | Move the wrist and wait for it to arrive. |
 | `await ease_wrist(target, tol=2.0, peak_dps=90.0)` | Walk the wrist to an absolute angle, easing in and out so the gripper is not set swinging, and wait for it to arrive. |
 | `await settle_wrist_to_heading(angle_deg, tol=2.0, peak_dps=90.0)` | Like `ease_wrist`, choosing whichever equivalent angle faces the same way and is nearest. |
-| `await settle_fingers(target, tol=2.0, timeout=6.0)` | Move the fingers and wait for them to arrive. |
-| `await set_finger_angle(angle)` / `await set_wrist_angle(angle)` / `await set_wrist_speed(dps)` | Command without waiting. The wrist speed has to be repeated to keep turning. |
+| `await close_grip(hold_force=0.25, speed=40.0, timeout=5.0)` | Grasp: close at a constant rate until the gripper, in the force mode it switches to on contact, holds `hold_force` (0 to 1), and keep holding. Returns `dict(held, force, angle)`. |
+| `await settle_fingers(target, tol=2.0, timeout=6.0)` | Move the fingers and wait for them to arrive. For opening or shaping the empty hand, never for closing on an object. |
+| `await set_finger_angle(angle)` / `await set_wrist_angle(angle)` / `await set_wrist_speed(dps)` | Command without waiting. A finger angle is for opening or shaping the empty hand; it takes the gripper out of force mode, so grasp with `close_grip`. The wrist speed has to be repeated to keep turning. |
 | `await trim_altitude_to_range(target_range_m, tol_m=0.02, max_steps=4, ceiling_z=None, max_travel_m=None)` | *Motion.* Adjust height until the laser reads `target_range_m`. Returns the final reading. |
 | `await tension_and_wait()` | Tighten all lines and wait until they read tight. |
 | `await grasp()` | *Motion.* Grasp whatever is under the gripper. Returns `True` if it is held. |

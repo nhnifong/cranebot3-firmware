@@ -716,10 +716,24 @@ class McpBridge(Maneuver):
 
         @tool
         async def set_fingers(angle: float) -> str:
-            """Command the fingers to an angle in degrees, -90 open to 90 closed, without
-            waiting. Use run_command('GRASP') for an automatic grasp."""
+            """Command the fingers to an angle, -90 open to 90 closed, without waiting. Only
+            for opening (letting go) or shaping the empty hand before a dive. Never close on
+            an object with it: the servo keeps pushing toward an angle the object stops it
+            short of until its overload cutout drops the object. Grasp with grip, or
+            run_command('GRASP') for an automatic grasp."""
             await ob.set_finger_angle(float(np.clip(angle, -90, 90)))
             return 'sent'
+
+        @tool
+        async def grip(hold_force: float = 0.25, speed: float = 40.0) -> dict:
+            """Close the fingers at a constant rate until they hold something with
+            hold_force (0 to 1), then keep holding it. The gripper switches itself to a
+            force-holding mode when its pads feel contact. Starts a motion task and returns
+            at once; wait() gives value {held, force, angle}. Let go with set_fingers(-60)."""
+            async def close():
+                return await ob.close_grip(hold_force=float(np.clip(hold_force, 0.05, 1.0)),
+                                           speed=float(np.clip(speed, 5.0, 90.0)))
+            return await bridge.start_motion(close())
 
         @tool
         async def set_wrist(angle: float) -> str:

@@ -6,7 +6,7 @@ Practical lessons from driving the robot through MCP. Read alongside GUIDE.md.
 
 - **Dive with the fingers nearly closed in clutter.** Close to ~80 before descending, and open them only near the object (laser range ~0.08 m). Opening pushes neighbours aside instead of a finger landing on them and stalling the descent. On an isolated object it only adds a step; dive open.
 - **Be opportunistic in a pile.** Auto GRASP over a pile reliably comes up with one or two pieces in ~18 s, much faster than aiming at a particular one. Take whatever comes; if it is more than one, drop them from ~0.3 m onto open floor so they bounce apart, then pick them singly.
-- **Hold hard objects with force, not a finger angle.** Close at speed (`send_gripper_move(None, 40, None)`, repeated every 50 ms) until `grip_target_force()` reaches ~0.2, then send finger speed 0, which holds that force.
+- **Grip by force, never by finger angle.** Use `grip` / `ob.close_grip()`: it closes at a constant speed, the gripper switches to force mode on contact, and the force is held. Closing to a fixed angle on an object overloads the finger servo, whose cutout then drops the object, usually mid-carry.
 - **Open fingertips reach ~0.10 m below the rangefinder.** With the fingers open the laser never reads less than ~0.10 over bare floor; open them at ~0.15 m, then lower in small steps and stop when the pole starts to lean (fingertips on the floor) and close there.
 - **White objects are hard to segment** in the palm camera: the fingers are white too. Prefer auto GRASP after centering on an isolated white object.
 - **People and children come into the work area.** Watch the frames for hands and feet, and stop when someone is reaching in.
