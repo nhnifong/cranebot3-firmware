@@ -522,7 +522,7 @@ def floor_align_origin(anchor_poses, eyelet_positions, raw_obs, cam_tilts=(22, 2
         tilt_nodes.append((np.array([extratilt / 180.0 * np.pi, 0, 0], dtype=float), np.zeros(3, dtype=float)))
 
     # For every calibration card, gather the z of every sighting projected into
-    # the room, then average per card. CAL_MARKERS = origin + cal_assist_1..3.
+    # the room, then average per card, over whichever CAL_MARKERS were seen.
     per_card_avg_z = {}
     for marker_name in CAL_MARKERS:
         sightings = raw_obs.get(marker_name)

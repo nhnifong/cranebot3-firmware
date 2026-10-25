@@ -2325,7 +2325,7 @@ class AsyncObserver:
         The consistency residual reads a marker's batch as repeated looks at one static point, so
         restrict it to a window in which the gantry was standing still.
         """
-        markers = ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3', 'gantry']
+        markers = ['origin'] + CAL_ASSIST_MARKERS + ['gantry']
         raw_obs = defaultdict(lambda: [[]]*N_ANCHORS)
         for client in self.anchors.values():
             # copy each list of detections, but leave them in the camera's reference frame.
@@ -2751,7 +2751,8 @@ class AsyncObserver:
         # don't fly higher than just under the top of the work area
         upper_z = np.mean(self.pe.anchor_points[:, 2]) - TOP_MARGIN
 
-        survey_names = [n for n in ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3'] if n in card_positions]
+        # every card the anchor cameras located, however many were put out
+        survey_names = [n for n in ['origin'] + CAL_ASSIST_MARKERS if n in card_positions]
 
         async def measure_hover(name, target_range_m):
             """Center on the card, settle onto the requested height, and average the card-to-gantry
@@ -4066,9 +4067,10 @@ class AsyncObserver:
                 sc_was_running = self.set_swing_cancellation(False)
                 self.slow_stop_all_spools()
 
-                # Require a reading from all four cards (origin + 3 cal_assist). With fewer hovers the
-                # gripper term has too few length-delta pairs to pin the two far eyelets, and the
-                # under-constrained refinement distorts a good rectangular layout into a diamond.
+                # Require a reading from at least four cards; every card surveyed beyond that is used.
+                # With fewer hovers the gripper term has too few length-delta pairs to pin the two
+                # far eyelets, and the under-constrained refinement distorts a good rectangular
+                # layout into a diamond.
                 REQUIRED_GRIPPER_CARDS = 4
                 if len(gripper_obs) >= REQUIRED_GRIPPER_CARDS:
                     # Anchors are free here so the gripper's close-range views can refine them
@@ -4131,7 +4133,7 @@ class AsyncObserver:
                     await self._verify_swing_cancellation('with refined geometry',
                                                           'after calibration refinement')
                 else:
-                    logger.warning(f'Only {len(gripper_obs)} of {REQUIRED_GRIPPER_CARDS} gripper card observations; need all four to refine. Skipping 3rd pass.')
+                    logger.warning(f'Only {len(gripper_obs)} of {REQUIRED_GRIPPER_CARDS} gripper card observations; need at least four to refine. Skipping 3rd pass.')
                     # geometry is unchanged, so no damping re-test is needed to restore it, and
                     # nothing was measured, so the stored verdict stays whatever it already was
                     self.set_swing_cancellation(sc_was_running)
