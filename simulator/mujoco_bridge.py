@@ -100,7 +100,7 @@ FINGER_RAD_PER_STEP = (2.0 * math.pi / STEPS_PER_REV) * GEAR_RATIO
 FINGER_CLOSED_RAD = 0.0
 FINGER_CLOSED_STEPS = 128.0
 
-# How close to the lens a camera still renders, in metres. MuJoCo expresses the near
+# How close to the lens a camera still renders, in meters. MuJoCo expresses the near
 # clipping plane as a fraction of the model extent, so the usable value moves with the
 # room; this is pinned in absolute terms instead. It has to clear the gripper's own
 # fingertips, which come within about 40 mm of its palm camera.
@@ -161,7 +161,7 @@ class MujocoWorld:
         self._pad_geoms = {mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, n)
                            for n in ('pad_left', 'pad_right')}
 
-        # extent scales with the room, so express the near plane in metres and convert
+        # extent scales with the room, so express the near plane in meters and convert
         self.model.vis.map.znear = NEAR_PLANE_M / float(self.model.stat.extent)
 
         self._set_room_size(self.room_side)
@@ -171,7 +171,7 @@ class MujocoWorld:
     # -- configuring the room ---------------------------------------------------
 
     def _set_room_size(self, side):
-        """Move the four corner posts onto a square `side` metres across, and match the
+        """Move the four corner posts onto a square `side` meters across, and match the
         floor to it. The corner azimuths do not change, so the gantry's resting yaw and
         the line-to-arm rigging are unaffected."""
         half = side / 2.0
@@ -230,7 +230,7 @@ class MujocoWorld:
             # the affine bias is what converts a free-span command into a tendon length
             kp = float(self.model.actuator_gainprm[a][0])
             self.model.actuator_biasprm[a][0] = kp * self.fixed_run[i]
-            # a spool holds `full` metres of line, beyond its fixed run
+            # a spool holds `full` meters of line, beyond its fixed run
             self.model.tendon_range[a][0] = 0.0
             self.model.tendon_range[a][1] = full + self.fixed_run[i]
             if self.model.nkey:
@@ -285,7 +285,7 @@ class MujocoWorld:
 
     # -- lines -----------------------------------------------------------------
 
-    def set_line_length(self, line_index, metres):
+    def set_line_length(self, line_index, meters):
         """Command the total line a spool has paid out.
 
         The MuJoCo actuators are commanded in free span, eyelet to gantry, so the fixed
@@ -296,7 +296,7 @@ class MujocoWorld:
         run = self.fixed_run[line_index]
         lo, hi = self.model.actuator_ctrlrange[i]
         with self.lock:
-            self.data.ctrl[i] = float(np.clip(metres - run, lo, hi))
+            self.data.ctrl[i] = float(np.clip(meters - run, lo, hi))
 
     def get_line_tension(self, line_index):
         """Newtons, positive. The actuators only ever pull, so force is <= 0."""
@@ -351,7 +351,7 @@ class MujocoWorld:
             return np.array(self.data.sensordata[a:a + n])
 
     def get_range(self):
-        """Metres to whatever the gripper's rangefinder ray hits. -1 when nothing."""
+        """Meters to whatever the gripper's rangefinder ray hits. -1 when nothing."""
         a, _ = self._range
         with self.lock:
             return float(self.data.sensordata[a])
@@ -571,7 +571,7 @@ class MujocoDaMiaoController:
 class MujocoServoBus:
     """Stands in for nf_robot.robot.simple_st3215.SimpleSTS3215.
 
-    The finger is modelled as the servo actually is: a step count at a fixed angular
+    The finger is modeled as the servo actually is: a step count at a fixed angular
     resolution, with an encoder reference that reset_encoder_to_midpoint renumbers. The
     firmware's -90..90 is a fictitious range it maps onto whatever open/closed step
     positions its own calibration found, so the bridge must not assume that range spans
@@ -692,7 +692,7 @@ class MujocoIMU:
 
 
 class MujocoRangefinder:
-    """Stands in for adafruit_vl53l1x.VL53L1X. distance is centimetres."""
+    """Stands in for adafruit_vl53l1x.VL53L1X. distance is centimeters."""
 
     def __init__(self, world, *a, **k):
         self.world = world
@@ -733,8 +733,8 @@ class MujocoPressure:
     The response is not linear in force: the server flattens it back out with
     `norm_pressure = ((3.3 - v) / 3.3) ** 2.5`, which says the raw voltage drops steeply
     under a light touch and barely moves under a hard one. Using the inverse exponent
-    here makes the server's normalised pressure come out linear in pad force, which is
-    the behaviour that curve was written to recover.
+    here makes the server's normalized pressure come out linear in pad force, which is
+    the behavior that curve was written to recover.
 
     Sensitivity matters for more than realism: findTouchPoint closes until the voltage
     falls below 2.2, so if a light touch does not move the voltage the fingers keep
@@ -844,7 +844,7 @@ class CameraStreamer:
         # Tendons off. MuJoCo draws a line as an opaque 2.5 mm tube, and one of them
         # passes right across the marker card from the anchors' point of view, cutting
         # the tag's quad in half so the detector finds nothing. The real lines are thin
-        # fishing line at close range on a lens focused metres away: not visible enough
+        # fishing line at close range on a lens focused meters away: not visible enough
         # to break a tag. Drawn tendons are useful in the interactive viewer, so this
         # only turns them off for the camera feeds.
         self.scene_option.flags[mujoco.mjtVisFlag.mjVIS_TENDON] = False

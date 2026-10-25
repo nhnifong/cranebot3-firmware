@@ -85,7 +85,7 @@ const perspBottom = 3;
 const perspGripper = 5;
 let currentPerspective: number = perspGripper; // control the initial selection
 
-// Picks the colour scheme before anything reads a colour out of it.
+// Picks the color scheme before anything reads a color out of it.
 initTheme();
 
 // Scene Setup
@@ -298,7 +298,7 @@ const CONTROL_MENU_ITEMS: Record<string, string[]> = {
   'action-debug-send':        ['owner', 'full'],
 };
 
-// Grey out the controls the current access level can't use (the `disabled` class the
+// Gray out the controls the current access level can't use (the `disabled` class the
 // menu handlers respect) and show a level badge for non-owners.
 function applyAccessLevelUI() {
   for (const [id, allowed] of Object.entries(CONTROL_MENU_ITEMS)) {
@@ -1136,7 +1136,7 @@ function updateFloatingLabels() {
     }
   }
 
-    // Named positions shown as generic markers, labelled just above their rings
+    // Named positions shown as generic markers, labeled just above their rings
   const container = document.getElementById('floating-labels-container');
   const shown = new Set<string>();
   for (const [name, markerPos] of room.genericMarkerLabels()) {
@@ -1157,7 +1157,7 @@ function updateFloatingLabels() {
     labelEl.classList.remove('hidden');
     const x = (pos.x * halfWidth) + halfWidth;
     const y = -(pos.y * halfHeight) + halfHeight;
-    // bottom centre of the label on the point
+    // bottom center of the label on the point
     labelEl.style.transform = `translate(calc(${x}px - 50%), calc(${y}px - 100%))`;
   }
   for (const [name, labelEl] of namedPositionLabels) {
@@ -1536,7 +1536,7 @@ function setPopupButtons(labels: string[], onClick: (index: number) => void) {
 }
 
 // Show a popup whose message and buttons are already set. A single button is an
-// acknowledgement, so it takes focus and Enter dismisses; focus after unhiding, since a
+// acknowledgment, so it takes focus and Enter dismisses; focus after unhiding, since a
 // display:none element cannot take it. A popup offering a real choice gets no default.
 function revealPopup(overlay: HTMLElement) {
   overlay.classList.remove('hidden');
@@ -3287,7 +3287,7 @@ window.addEventListener('click', (event) => {
     for (const hit of intersects) {
       if (hit.object === room.mesh && Math.abs(hit.point.y) < 0.05) {
         // Clicking a target ring selects it (in every view); clicking bare floor
-        // clears the selection, matching the video feeds' behaviour.
+        // clears the selection, matching the video feeds' behavior.
         const clickedId = floorProjection.pickTarget(hit.point);
         targetListManager.setSelectedId(clickedId);
         targetListManager.showFloorPopup(event.clientX, event.clientY, hit.point, clickedId);

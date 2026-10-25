@@ -97,6 +97,6 @@ trim_to_grasp:
   # drop degenerate segments rather than keep near-empty episodes
   min_segment_seconds: 1.0
 
-# no contact labelling: gripper_vel has no contact_vec/episode_end components
+# no contact labeling: gripper_vel has no contact_vec/episode_end components
 label_contact_actions:
   enabled: false

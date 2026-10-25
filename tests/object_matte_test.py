@@ -44,7 +44,7 @@ class TestVignetteGeometry(unittest.TestCase):
         cx, cy = int(PRINCIPAL_NORM[0] * SHAPE[1]), int(PRINCIPAL_NORM[1] * SHAPE[0])
         self.assertEqual(alpha[cy, cx], 1.0)
 
-    def test_diameter_is_in_metres_on_the_floor(self):
+    def test_diameter_is_in_meters_on_the_floor(self):
         """A 0.5m object at 0.5m range spans the same pixels as the 0.5m vignette."""
         axes = vignette_axes(SHAPE, 0.5, diameter_m=0.5)
         doubled = vignette_axes(SHAPE, 0.5, diameter_m=1.0)
@@ -52,7 +52,7 @@ class TestVignetteGeometry(unittest.TestCase):
 
 
 class TestExtractCutout(unittest.TestCase):
-    """A green frame with a grey blob at the principal point and another out at the edge,
+    """A green frame with a gray blob at the principal point and another out at the edge,
     standing in for an object and an intruding board edge."""
 
     def _frame(self):

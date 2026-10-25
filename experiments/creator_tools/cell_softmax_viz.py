@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"""Live illustration of how the visual servo net picks a point: a softmax over cells, then its centre of mass near the peak.
+"""Live illustration of how the visual servo net picks a point: a softmax over cells, then its center of mass near the peak.
 
     python experiments/creator_tools/cell_softmax_viz.py
     python experiments/creator_tools/cell_softmax_viz.py --local_models --port 4250
@@ -10,10 +10,10 @@ at http://127.0.0.1:4250/ that draws, over the frame the model actually saw:
 
     - the cell grid: 18 x 32 cells over 1.25x the frame, so the edge cells are off-frame
     - the softmax over all cells, as orange heat
-    - the winning cell and the window around it that the centre of mass is taken over
-    - the centre of mass, which is the answer, with the grasp axis averaged over the
+    - the winning cell and the window around it that the center of mass is taken over
+    - the center of mass, which is the answer, with the grasp axis averaged over the
       same window drawn through it
-    - a magnified inset of the window, each cell labelled with its share of the weight
+    - a magnified inset of the window, each cell labeled with its share of the weight
 
 Press p on the page to toggle the 18 x 32 backbone patch grid.
 
@@ -239,20 +239,20 @@ function render(data, image, probs) {
 
   const R = data.radius, span = 2 * R + 1;
   const c = winner % cols, r = Math.floor(winner / cols);
-  const [mx, my] = data.centroid;          // cells, centres at i + 0.5
+  const [mx, my] = data.centroid;          // cells, centers at i + 0.5
   const x = mx * cw, y = my * ch;
 
-  // the window the centre of mass is taken over, then the winning cell inside it
-  function frame(g, x0, y0, w, h, colour, width) {
+  // the window the center of mass is taken over, then the winning cell inside it
+  function frame(g, x0, y0, w, h, color, width) {
     g.strokeStyle = "#000"; g.lineWidth = width + 4; g.strokeRect(x0, y0, w, h);
-    g.strokeStyle = colour; g.lineWidth = width; g.strokeRect(x0, y0, w, h);
+    g.strokeStyle = color; g.lineWidth = width; g.strokeRect(x0, y0, w, h);
   }
   ctx.setLineDash([14, 8]);
   frame(ctx, (c - R) * cw, (r - R) * ch, span * cw, span * ch, "#fff", 3);
   ctx.setLineDash([]);
   frame(ctx, c * cw, r * ch, cw, ch, WIN, 4);
 
-  // the answer: centre of mass, with the window-averaged grasp axis through it
+  // the answer: center of mass, with the window-averaged grasp axis through it
   function answer(g, px, py, len, dot) {
     const dx = Math.cos(data.axis_rad) * len, dy = Math.sin(data.axis_rad) * len;
     g.beginPath(); g.moveTo(px - dx, py - dy); g.lineTo(px + dx, py + dy);
@@ -351,7 +351,7 @@ def main():
     parser.add_argument("--port", type=int, default=4250)
     parser.add_argument("--device", default=None)
     # The mjpeg feed carries no telemetry, so the state the net is conditioned on is fixed.
-    parser.add_argument("--range", type=float, default=0.5, help="laser rangefinder reading, metres")
+    parser.add_argument("--range", type=float, default=0.5, help="laser rangefinder reading, meters")
     parser.add_argument("--finger_angle", type=float, default=0.0, help="degrees")
     parser.add_argument("--target_force", type=float, default=0.0)
     args = parser.parse_args()

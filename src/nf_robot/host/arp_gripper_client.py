@@ -448,7 +448,7 @@ class ArpeggioGripperClient(ComponentClient):
         upper_bound = 5.5 * math.pi
         center_point = 3 * math.pi
 
-        # near either limit, take a candidate that moves back toward the centre even if a
+        # near either limit, take a candidate that moves back toward the center even if a
         # closer one exists; otherwise just the closest
         if current_spin < lower_bound:
             target = min([c for c in candidates if c > current_spin] or [candidates[-1]])

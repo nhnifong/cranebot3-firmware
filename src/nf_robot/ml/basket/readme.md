@@ -3,25 +3,25 @@
 The placer network can see a laundry hamper from the overhead views, but its prediction is
 not close enough to drop into. To get an exact fix, the robot flies over with the gripper
 empty, looks down at the basket, and works out where it would drop clothes from. This model
-does the looking: from one gripper frame it predicts the gripper move that centres the
+does the looking: from one gripper frame it predicts the gripper move that centers the
 basket under the jaws at the right drop height.
 
 `find_basket()` in [host/maneuvers/find_basket.py](../../host/maneuvers/find_basket.py)
 wraps it. It looks, moves most of the way, and looks again until the model says it is
-centred, then returns the gantry position to drop from.
+centered, then returns the gantry position to drop from.
 
 ## How the labels are made
 
 Each episode is recorded by the `basketdata` maneuver. It starts with the gripper still
-and centred over the basket at the ideal drop height, then flies away in one move.
+and centered over the basket at the ideal drop height, then flies away in one move.
 
-- The first frame defines centred. The point straight below the jaws, at the rangefinder
+- The first frame defines centered. The point straight below the jaws, at the rangefinder
   distance, is the basket's drop point.
 - The miner follows that point forward with optical flow (the same tracker as the
   visual servoing `optical-flow` uv method) until the flow loses it.
-- Each frame it was tracked through is labelled with:
+- Each frame it was tracked through is labeled with:
   - where the point is in the image: (u, v, distance along the ray);
-  - the gripper move back to centre, in the gripper frame (`return_body`).
+  - the gripper move back to center, in the gripper frame (`return_body`).
 - The sideways part of the move comes from the flow. It is scaled by the point's depth:
   the first frame's rangefinder reading plus how far the gantry has climbed since then.
 - The vertical part is the gantry's height change alone.
@@ -69,7 +69,7 @@ python -m nf_robot.ml.basket.mine \
     --preview_dir datasets/basket_centering/preview
 ```
 
-This writes the labelled pool to `datasets/basket_centering/all/`. It then splits the pool
+This writes the labeled pool to `datasets/basket_centering/all/`. It then splits the pool
 into `train/` and `eval/` by whole episodes, with 15% of episodes going to eval. Several
 `--repo_id`s can be mined together. `--limit 5` mines only the first five episodes, for a
 quick look.
@@ -78,7 +78,7 @@ Before training, check two things:
 
 - **The log line `lateral flow vs gantry position`.** It compares the move the flow
   implies with the move the recorded gantry positions imply. Both should agree to a few
-  centimetres; a large 90th percentile means the flow slid off the basket somewhere.
+  centimeters; a large 90th percentile means the flow slid off the basket somewhere.
 - **The preview frames.** The crosshair should stay on the same spot of the basket, and the
   `flow` and `pos` lines should roughly agree.
 

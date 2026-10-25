@@ -105,7 +105,7 @@ class ArpeggioAnchorClient(ComponentClient):
             self.last_known_half_extents[name] = detection.get('half_extent')
 
             if name in CAL_MARKERS:
-                # kept raw, for calibration to analyse later
+                # kept raw, for calibration to analyze later
                 self.origin_poses[detection['n']].append(detection['p'])
 
             if name == 'gantry':

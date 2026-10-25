@@ -17,7 +17,7 @@ from nf_robot.host.maneuver import Maneuver, TiltWatch, command, startup_step
 
 logger = logging.getLogger(__name__)
 
-# (metres) how far out along the escape direction the mouth of the fork is: from there the
+# (meters) how far out along the escape direction the mouth of the fork is: from there the
 # gantry goes straight down the track into the fork with no room to correct. record_park
 # records the gantry tag pose from here and park steers back to it.
 MOUTH_OFFSET_M = 0.085
@@ -341,9 +341,9 @@ class Parking(Maneuver):
                     return f'{failed} entering the fork'
                 continue
             here = self.ob.gantry_position()
-            travelled = float(np.dot(here[:2] - start[:2], -track))
-            if travelled >= distance:
-                logger.info(f'Park: {travelled * 100:.1f}cm in, steepest lean '
+            traveled = float(np.dot(here[:2] - start[:2], -track))
+            if traveled >= distance:
+                logger.info(f'Park: {traveled * 100:.1f}cm in, steepest lean '
                             f'{tilt.worst_tilt:.1f} degrees')
                 return None
             await self.ob.move_direction_speed(np.array([-track[0], -track[1], 0.0]) * SPEED_MPS,
@@ -587,7 +587,7 @@ class Parking(Maneuver):
                 return None
 
             async def attempt(offset):
-                """One go at getting onto the hook, aiming offset metres from the recorded
+                """One go at getting onto the hook, aiming offset meters from the recorded
                 spot. None if it worked, or why it did not."""
                 # the mouth of the fork, which is where the tag pose was recorded from
                 lateral = offset[:2]
@@ -684,7 +684,7 @@ class Parking(Maneuver):
 
             async def back_out(offset):
                 """Lift clear of the hook and retreat to where the next attempt takes over
-                from, which is offset metres from the first one's."""
+                from, which is offset meters from the first one's."""
                 logger.info(f'Park: backing off the hook, next try aims '
                             f'{np.round(offset * 100, 1)}cm off the recorded spot')
                 # up first: everything that ends an attempt leaves the pole touching something

@@ -111,7 +111,7 @@ python src/nf_robot/ml/lerobot/train_modal.py \
 # It predicted the gripper's goal position in each camera's frame instead of velocities,
 # with contact-point or stopping-waypoint labels, and fused the goals back into a room
 # position at eval time. None of it remains: the action space, its dataset derivation,
-# its recipe, the waypoint labelling mode and the eval-side goal latch are all gone.
+# its recipe, the waypoint labeling mode and the eval-side goal latch are all gone.
 #
 # Datasets:
 #   naavox/move_clutter_camera_goal   (built with contact labels, then rebuilt with

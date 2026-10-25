@@ -355,24 +355,24 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
         n_pairs = n_samples * (n_samples - 1) // 2
         w_gripper = W_GRIPPER_DIST * np.sqrt((n_samples - 1) / n_pairs) if n_pairs else W_GRIPPER_DIST
 
-        # For every pair of hovers and every line, the modelled change in distance from the pull
+        # For every pair of hovers and every line, the modeled change in distance from the pull
         # point to the gantry must match the measured change in line length.
         for a in range(len(gantry_samples)):
             for b in range(a + 1, len(gantry_samples)):
                 name_a, g_a, L_a = gantry_samples[a]
                 name_b, g_b, L_b = gantry_samples[b]
                 for k in range(4):
-                    modelled = np.linalg.norm(g_b - pull_points[k]) - np.linalg.norm(g_a - pull_points[k])
+                    modeled = np.linalg.norm(g_b - pull_points[k]) - np.linalg.norm(g_a - pull_points[k])
                     measured = L_b[k] - L_a[k]
-                    res = (modelled - measured) * w_gripper
+                    res = (modeled - measured) * w_gripper
                     residuals.append(res)
                     cost_gripper += res ** 2
                     if debug:
                         # per-pair-per-line breakdown pinpoints an inconsistent card or line
                         logger.info(
                             f'  gripper resid {name_a}->{name_b} line{k}: '
-                            f'modelled_delta={modelled*100:+.2f}cm measured_delta={measured*100:+.2f}cm '
-                            f'residual={(modelled-measured)*100:+.2f}cm'
+                            f'modeled_delta={modeled*100:+.2f}cm measured_delta={measured*100:+.2f}cm '
+                            f'residual={(modeled-measured)*100:+.2f}cm'
                         )
 
     # ---------------------------------------------------------
@@ -546,15 +546,20 @@ class _OptTimeout(Exception):
 def refinement_is_plausible(fit_info):
     """Whether a warm-started pass improved its fit without deforming the room to do it.
 
-    Returns (ok, reason). A pass whose data term is fed a constraint the state vector has no
-    parameter for - a pull point in the wrong place, say - cannot correct the cause, so it
-    pays with the structural terms instead: it leans the anchors, spreads the pull points in
-    z, and drags the eyelets off their guess. That lowers the total cost while leaving a room
-    whose camera projections are all wrong, so the caller has to weigh the structural terms
-    on their own rather than trust the total.
+    Sometimes the measurements contain an error the optimizer has no parameter for, such as
+    a pull point in the wrong place. The optimizer then fits the measurements anyway by
+    tilting the anchors, moving the pull points to different heights, and moving the eyelets
+    away from their starting guess. The total cost goes down, but the resulting room
+    geometry is wrong, so a lower total cost doesn't mean the pass helped.
 
-    Only meaningful for a warm start, where the input point is a real geometry rather than the
-    crude cold-start guess.
+    This function compares the sum of the structural cost terms (STRUCTURAL_COST_TERMS)
+    before and after the pass. The pass is accepted if that sum is below
+    STRUCTURAL_COST_FLOOR, or grew by no more than STRUCTURAL_COST_GROWTH_LIMIT times.
+    Returns (ok, reason), where reason lists each term's cost before and after.
+
+    Only use this after a warm start, where the starting geometry came from a previous
+    calibration. After a cold start the starting geometry is a rough guess, so its
+    structural costs mean nothing as a baseline.
     """
     before = fit_info.get('input_costs')
     if not before:
@@ -589,7 +594,7 @@ CAM_TILT_RANGE_DEG = (10.0, 60.0)
 def estimate_cam_tilts(raw_obs, fallback):
     """Each anchor camera's downward pitch in degrees, measured from the cards it can see.
 
-    Every calibration card lies flat, so its own normal is the room vertical. The modelled
+    Every calibration card lies flat, so its own normal is the room vertical. The modeled
     mount carries that normal from the camera frame into the anchor frame, where a plumb
     anchor has to see it along z. The only unknown left in the chain is the tilt, and it turns
     about the camera's x axis, so the y and z components of one sighting's normal fix it
@@ -597,7 +602,7 @@ def estimate_cam_tilts(raw_obs, fallback):
     observation snapshot before the first pass, which is the pass that needs the tilts.
 
     A camera without enough usable sightings keeps its configured value, so a room where one
-    anchor sees almost nothing degrades to today's behaviour rather than to a guess.
+    anchor sees almost nothing degrades to today's behavior rather than to a guess.
 
     Reading tag orientation rather than tag position, this is the one place branch flips
     matter, so outliers are dropped against the median before it is taken again.
@@ -670,7 +675,7 @@ def rectangular_room_eyelet_guess(anchor_poses):
 
     Each eyelet takes its own anchor's height rather than an offset through the anchor's
     local frame: an anchor fitted a few degrees off plumb tips a 3 m local offset by most of
-    a metre in z, and this guess doubles as the eyelet_reg target that holds the answer near.
+    a meter in z, and this guess doubles as the eyelet_reg target that holds the answer near.
     """
     positions = np.asarray(anchor_poses, dtype=float)[:, 1, :]
     center = (positions[0] + positions[1]) / 2.0

@@ -76,16 +76,16 @@ def clean_mask(raw, border_only=True, min_component_fraction=MIN_COMPONENT_FRACT
 def build_matte(stack, green_low=GREEN_LOW, green_high=GREEN_HIGH, border_only=True,
                 min_component_fraction=MIN_COMPONENT_FRACTION):
     """One RGBA plate from a stack of (N, H, W, 3) frames of one finger angle."""
-    alphas, colours, greens = [], [], []
+    alphas, colors, greens = [], [], []
     for frame in stack:
-        alpha, colour = chroma_key(frame, green_low=green_low, green_high=green_high)
+        alpha, color = chroma_key(frame, green_low=green_low, green_high=green_high)
         alphas.append(alpha)
-        colours.append(colour)
+        colors.append(color)
         # Measured before chroma_key's despill removes the green cast.
         greens.append(green_fraction(frame, green_high))
     # Median over the turn, so anything that moved past is outvoted.
     alpha = np.median(np.stack(alphas), axis=0)
-    colour = np.median(np.stack(colours), axis=0)
+    color = np.median(np.stack(colors), axis=0)
 
     filled, kept, components = clean_mask(alpha > 0.5, border_only, min_component_fraction)
     # Keep the soft alpha ramp, but make enclosed holes solid.
@@ -93,7 +93,7 @@ def build_matte(stack, green_low=GREEN_LOW, green_high=GREEN_HIGH, border_only=T
     out = np.where(filled & ~kept, 1.0, out)
 
     rgba = np.dstack([
-        np.clip(colour, 0, 255).astype(np.uint8),
+        np.clip(color, 0, 255).astype(np.uint8),
         np.clip(out * 255, 0, 255).astype(np.uint8),
     ])
     diagnostics = {

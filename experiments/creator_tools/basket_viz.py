@@ -9,18 +9,18 @@ Reads the gripper MJPEG feed and live state from the observer's telemetry, runs 
 up to 30 fps, and serves a page at http://127.0.0.1:4256/ that draws, over the frame the
 model saw:
 
-    - the softmax over the 18 x 32 canvas cells as orange heat, with the window the centre
+    - the softmax over the 18 x 32 canvas cells as orange heat, with the window the center
       of mass is taken over
-    - the drop point: where the basket is, the centre of mass
-    - where that point would be if the basket were centred: straight below the jaws at the
+    - the drop point: where the basket is, the center of mass
+    - where that point would be if the basket were centered: straight below the jaws at the
       same depth, with the find_basket tolerance drawn around it as a ring on the basket's
       plane, and an arrow from the one to the other - the sideways move
     - the drop points of the last few frames, the ones one find_basket look would take the
       median of
-    - press d to swap the softmax heat for the per-cell distance head, in metres
+    - press d to swap the softmax heat for the per-cell distance head, in meters
 
 and a panel with the score, the move, the drop height change, and the verdict a find_basket
-look would reach on the last few frames: no basket, frames disagree, centred, or the step
+look would reach on the last few frames: no basket, frames disagree, centered, or the step
 it would take.
 """
 
@@ -80,7 +80,7 @@ def look_verdict(recent):
                 "spread": spread}
     lateral = float(np.linalg.norm(median[:2]))
     if lateral <= LATERAL_TOL_M and abs(median[2]) <= VERTICAL_TOL_M:
-        return {"verdict": "centred", "detail": f"spread {spread * 100:.0f} cm", "spread": spread}
+        return {"verdict": "centered", "detail": f"spread {spread * 100:.0f} cm", "spread": spread}
     step = median * GAIN
     norm = float(np.linalg.norm(step))
     if norm > MAX_STEP_M:
@@ -129,11 +129,11 @@ def run_model(model, device, live: LiveState, frames: Latest, results: Latest):
         if slow == FPS:
             logger.warning(f"inference takes {latency * 1000:.0f} ms, too slow for {FPS} fps")
 
-        # Where the drop point would sit in the image if the basket were centred: straight
+        # Where the drop point would sit in the image if the basket were centered: straight
         # below the jaws at the same depth, and the lateral tolerance as a ring on that plane.
         drop_body = target_body(unproject(uv[0], uv[1], distance, calibration))
-        centred = np.array([JAW_POS_BODY[0], JAW_POS_BODY[1], drop_body[2]])
-        ring = [body_to_uv(centred + LATERAL_TOL_M * np.array([np.cos(a), np.sin(a), 0.0]),
+        centered = np.array([JAW_POS_BODY[0], JAW_POS_BODY[1], drop_body[2]])
+        ring = [body_to_uv(centered + LATERAL_TOL_M * np.array([np.cos(a), np.sin(a), 0.0]),
                            calibration)
                 for a in np.linspace(0, 2 * np.pi, RING_POINTS, endpoint=False)]
 
@@ -153,7 +153,7 @@ def run_model(model, device, live: LiveState, frames: Latest, results: Latest):
             "winner": winner,
             "weights": [round(float(v), 4) for v in weights[0]],
             "uv": [round(float(v), 4) for v in uv],
-            "centred_uv": body_to_uv(centred, calibration),
+            "centered_uv": body_to_uv(centered, calibration),
             "ring": [p for p in ring if p is not None],
             "trail": [r["uv"] for r in recent],
             "trail_good": [r["score"] >= SCORE_MIN for r in recent],
@@ -269,7 +269,7 @@ function render(data, image, probs, distances) {
   ctx.strokeStyle = "#000"; ctx.lineWidth = 4;
   ctx.strokeRect(fx, fy, fw, fh);
 
-  // the window the centre of mass is taken over
+  // the window the center of mass is taken over
   const R = data.radius, c0 = winner % cols, r0 = Math.floor(winner / cols);
   ctx.setLineDash([14, 8]);
   ctx.strokeStyle = "#000"; ctx.lineWidth = 7;
@@ -278,8 +278,8 @@ function render(data, image, probs, distances) {
   ctx.strokeRect((c0 - R) * cw, (r0 - R) * ch, (2 * R + 1) * cw, (2 * R + 1) * ch);
   ctx.setLineDash([]);
 
-  // the tolerance ring around where a centred basket would be
-  const centred = data.centred_uv && px(data.centred_uv);
+  // the tolerance ring around where a centered basket would be
+  const centered = data.centered_uv && px(data.centered_uv);
   const inside = data.lateral_m <= data.lateral_tol;
   if (data.ring.length) {
     ctx.beginPath();
@@ -288,11 +288,11 @@ function render(data, image, probs, distances) {
     ctx.strokeStyle = "#000"; ctx.lineWidth = 8; ctx.stroke();
     ctx.strokeStyle = inside ? GOOD : "#fff"; ctx.lineWidth = 4; ctx.stroke();
   }
-  if (centred) {
+  if (centered) {
     ctx.strokeStyle = "#000"; ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(centred[0] - 18, centred[1]); ctx.lineTo(centred[0] + 18, centred[1]);
-    ctx.moveTo(centred[0], centred[1] - 18); ctx.lineTo(centred[0], centred[1] + 18);
+    ctx.moveTo(centered[0] - 18, centered[1]); ctx.lineTo(centered[0] + 18, centered[1]);
+    ctx.moveTo(centered[0], centered[1] - 18); ctx.lineTo(centered[0], centered[1] + 18);
     ctx.stroke();
   }
 
@@ -305,12 +305,12 @@ function render(data, image, probs, distances) {
     ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = "#000"; ctx.stroke();
   });
 
-  // arrow from the drop point to where it would be centred: the sideways move, as the image sees it
+  // arrow from the drop point to where it would be centered: the sideways move, as the image sees it
   const [dx, dy] = px(data.uv);
-  if (centred && !inside) {
-    const [tx, ty] = centred, ang = Math.atan2(ty - dy, tx - dx);
-    for (const [colour, width] of [["#000", 10], [WIN, 5]]) {
-      ctx.strokeStyle = colour; ctx.fillStyle = colour; ctx.lineWidth = width;
+  if (centered && !inside) {
+    const [tx, ty] = centered, ang = Math.atan2(ty - dy, tx - dx);
+    for (const [color, width] of [["#000", 10], [WIN, 5]]) {
+      ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = width;
       ctx.beginPath(); ctx.moveTo(dx, dy); ctx.lineTo(tx - 18 * Math.cos(ang), ty - 18 * Math.sin(ang)); ctx.stroke();
       ctx.beginPath();
       ctx.moveTo(tx, ty);
@@ -333,10 +333,10 @@ function panel(data) {
   ctx.fillStyle = "rgba(255,255,255,0.92)"; ctx.fillRect(x, y, w, h);
   ctx.strokeStyle = "#000"; ctx.lineWidth = 3; ctx.strokeRect(x, y, w, h);
   let ty = y + 40;
-  const line = (label, value, colour, size) => {
+  const line = (label, value, color, size) => {
     ctx.textAlign = "left"; ctx.fillStyle = "#4A5563";
     ctx.font = "600 20px system-ui, sans-serif"; ctx.fillText(label, x + 18, ty);
-    ctx.textAlign = "right"; ctx.fillStyle = colour || "#000";
+    ctx.textAlign = "right"; ctx.fillStyle = color || "#000";
     ctx.font = `700 ${size || 24}px system-ui, sans-serif`; ctx.fillText(value, x + w - 18, ty);
     ty += size ? size + 14 : 34;
   };
@@ -353,8 +353,8 @@ function panel(data) {
   ty += 6;
   ctx.strokeStyle = "#000"; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.moveTo(x + 18, ty - 22); ctx.lineTo(x + w - 18, ty - 22); ctx.stroke();
-  const verdictColour = { "centred": "#1A8F47", "move": "#000" }[look.verdict] || "#D00";
-  line(`look of ${data.trail.length}`, look.verdict, verdictColour, 30);
+  const verdictColor = { "centered": "#1A8F47", "move": "#000" }[look.verdict] || "#D00";
+  line(`look of ${data.trail.length}`, look.verdict, verdictColor, 30);
   line("", look.detail, "#4A5563", 18);
   if (look.step) {
     const s = look.step;

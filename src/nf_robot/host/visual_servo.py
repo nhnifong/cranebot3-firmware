@@ -2,19 +2,17 @@
 
 """Grasping with the visual servoing model, and the debugging modes around it.
 
-The model (ml/visual_servoing/readme.md) answers "where is the object and what is the
-grip doing", not "how fast to move". This module is the other half: it turns one gripper
-frame per pass into a gantry velocity, a wrist setpoint and a finger speed, and decides
-when the object is in hand.
+The model (ml/visual_servoing/readme.md) predicts object UV location, angle,
+ideal grip pressure, object presense, and whether held. But it does not predict how to move.
+this code is in charge of turning the predictions into motion.
 
-Three modes, of which only the first can grasp anything:
+It can be used in one of three modes.
 
-    grasp     centre, descend, close, lift, report
-    observe   run the model and report it, commanding nothing at all
-    center    steer sideways and turn the wrist, but never descend or touch the fingers
+    grasp     center, descend, close, lift, report
+    observe   run the model and report it, commanding no motion.
+    center    steer sideways and turn the wrist, but never descend or close the fingers
 
-The two debugging modes exist because this model can only really be judged on a robot,
-and watching what it wants is cheaper than watching what it does.
+The two debugging modes exist to aid with debugging the model on a robot.
 
 `VisualServo` holds no robot state of its own beyond the loaded checkpoint - the gripper
 client, the datastore, the position estimate and the motion primitives all belong to the
@@ -63,9 +61,9 @@ COMMIT_RANGE_M = 0.3
 #
 #   range   0.60  0.40  0.20  0.15  0.10  0.06
 #   m/s     0.12  0.12  0.12  0.08  0.05  0.03
-DESCENT_GAIN = 0.35         # (1/s) speed asked for per metre of range left to close
+DESCENT_GAIN = 0.35         # (1/s) speed asked for per meter of range left to close
 DESCENT_SPEED_MAX = 0.20    # (m/s) cap while there is plenty of room below
-DESCENT_SPEED_MIN = 0.07    # (m/s) floor, or the last centimetres never arrive
+DESCENT_SPEED_MIN = 0.07    # (m/s) floor, or the last centimeters never arrive
 LATERAL_GAIN = 0.9          # (1/s) fraction of the remaining offset commanded per second
 LATERAL_SPEED_MAX = 0.15    # (m/s)
 # Descent is gated on being centered, and the tolerance is a fraction of the range, which
@@ -114,7 +112,7 @@ TILT_RECOVER_EASE_S = 0.4
 TILT_MAX_AGE_S = 0.25
 
 # (s) time constant of the filter on the target's room position, at about one pendulum
-# period. The gripper hangs on half a metre of pole and swings, so a per-frame prediction
+# period. The gripper hangs on half a meter of pole and swings, so a per-frame prediction
 # is a picture of where the target was from wherever the lens happened to be at that
 # instant; anything faster than this steers at the swing rather than at the object.
 TARGET_EMA_S = 1.0
@@ -154,7 +152,7 @@ CLOSE_CONFIRM_FRAMES = 60
 CLOSE_PROB_THRESHOLD = 0.45
 # (normalized finger speed) how fast the close runs once it starts, and how long it takes
 # to get there. The ramp is not politeness: a step to full speed puts a jolt through half
-# a metre of hanging pole at the moment the jaws are arriving at the object.
+# a meter of hanging pole at the moment the jaws are arriving at the object.
 CLOSE_SPEED = 0.45
 CLOSE_RAMP_S = 0.3
 # (sensor units) how close the commanded force has to get to the predicted one before the
@@ -230,7 +228,7 @@ WRIST_NEUTRAL_DEG = 540.0
 WRIST_LIMIT_MARGIN_DEG = 20.0
 # How much a degree away from neutral costs, against a degree of travel, when choosing
 # between equivalent setpoints. Small: it should decide a near-tie and bias a long run
-# back toward the middle, not spend a half turn chasing the centre.
+# back toward the middle, not spend a half turn chasing the center.
 WRIST_NEUTRAL_PULL = 0.25
 # (s) time constant of the filter on the wrist goal. The axis head's angle wanders from
 # frame to frame, and acting on each one set the wrist hunting at about 2 Hz; this is
@@ -280,15 +278,17 @@ def choose_wrist_setpoint(goal_deg, wrist_now, neutral=WRIST_NEUTRAL_DEG,
 class TargetFilter:
     """The target's room position, smoothed over about one swing period.
 
-    What is filtered is the position, not the offset to it. They differ the moment the
-    gantry moves: an offset measured a second ago was measured from somewhere else, so
-    averaging offsets fights the loop's own corrections and reads as lag, while averaging
-    the point they name does not - the point holds still while the robot moves toward it.
-    The current offset is taken fresh from the smoothed point every pass.
+    The gripper swings on its pole, so the target position predicted from each frame
+    jumps around, and steering straight at it would chase the swing. Smoothing the
+    gripper-to-target offset doesn't work either: the offset changes as the gantry moves,
+    so averaging old offsets makes the loop lag behind its own motion.
 
-    Sampled against real elapsed time rather than a fixed per-frame weight, because the
-    loop rate is set by how long inference took and a fixed alpha would mean a different
-    time constant on a busy machine than on an idle one.
+    This class keeps an exponential moving average of the target's position in room
+    coordinates, which stays still while the gantry moves. Each call returns the offset
+    from the current jaw position to that averaged point. The averaging weight comes from
+    the actual time since the last call, not a fixed per-frame value, so the smoothing
+    time (TARGET_EMA_S) is the same however fast the loop runs. A jump of more than
+    TARGET_EMA_RESET_M is treated as a different object, and the average restarts there.
     """
 
     def __init__(self, tau_s=TARGET_EMA_S, reset_m=TARGET_EMA_RESET_M):
@@ -366,7 +366,7 @@ class VisualServo:
         # began on the last one says nothing about this one.
         self.close_started_at = None
         self.close_arrived = False
-        # (time, lateral offset in metres or None when no target is confidently seen) from
+        # (time, lateral offset in meters or None when no target is confidently seen) from
         # the newest pass of the centering loop
         self.center_offset = None
         # (time, prediction) of the newest frame the model was run on, in any mode
@@ -411,7 +411,6 @@ class VisualServo:
                 revision=pinned_revision(servo.SERVO_MODEL_REPOID))
             logger.info(f"Visual servoing model ready: epoch {checkpoint.get('epoch')}, "
                         f"input {tuple(checkpoint['image_size'])}, "
-                        f"axis loss {checkpoint.get('axis_loss')}, "
                         f"metrics {checkpoint.get('metrics')}")
             return model, device, None
 
@@ -510,7 +509,7 @@ class VisualServo:
         prediction['captured_at'] = captured_at
         self.last_prediction = (time.time(), prediction)
         self.ob.send_ui(grip_cam_preditions=telemetry.GripCamPredictions(
-            # the overlay draws the arrow from the centre of the frame, so it wants a
+            # the overlay draws the arrow from the center of the frame, so it wants a
             # displacement rather than a position. uv may fall outside 0..1 - that is the
             # target being off the edge, and an arrow leaving the frame is the right
             # picture of it.
@@ -562,7 +561,7 @@ class VisualServo:
                         f"{target:.3f} of grip force")
 
         # commanded > 0 is the gripper saying it is in force mode, which is to say the
-        # fingers are on the object rather than still travelling toward it
+        # fingers are on the object rather than still traveling toward it
         if commanded > 0.0 and commanded >= target - CLOSE_PRESSURE_TOLERANCE:
             self.close_arrived = True
             logger.info(f'Commanded force {commanded:.3f} reached the predicted '
@@ -581,33 +580,26 @@ class VisualServo:
         return prediction['close'] > CLOSE_PROB_THRESHOLD
 
     async def servo_wrist(self, prediction):
-        """Turn the wrist toward the predicted grasp axis, if the head means it.
+        """Turn the wrist toward the grasp axis predicted by the model.
 
         The command is an absolute setpoint measured from where the wrist was **when the
-        frame was captured**, not an increment on where it is now. That distinction is the
-        whole of this method.
+        frame was captured**, not an increment on where it is now.
 
-        The gripper camera runs about a quarter of a second behind the world, so a
+        The gripper camera runs about a quarter of a second behind, so a
         prediction is an angle relative to a wrist position from a quarter second ago,
-        while the wrist telemetry is current - it already contains whatever motion is in
-        flight. Adding a stale error to a fresh angle re-commands a correction that is
-        already happening, once per pass for as long as the video takes to catch up, and
-        the wrist arrives past the mark, reverses, and does it again. That is a limit
-        cycle: filtering only slows it down, and sampling faster makes it worse.
+        while the wrist telemetry is more current. Compensation for this latency prevents
+        wrist wobble/oscillation.
 
-        Anchoring to the capture-time angle removes the accumulation instead of damping
-        it. `wrist_at_capture + error` names one fixed angle, so every frame taken before
-        the wrist finished moving computes the same setpoint and re-sending it is
-        idempotent. The lookup is exact rather than estimated: frame capture times and
-        grip sensor records are both stamped by the gripper's own clock, so it crosses no
-        clock boundary and needs no latency constant. Where the telemetry has a hole, the
-        wrist is left alone - a wrong anchor is worse than no correction.
+        Frame capture times and grip sensor record timestamps are both in the gripper's clock.
+        so it crosses no clock boundary.
 
-        The kappa gate is the other half. The axis head is trained as a von Mises
-        likelihood, so the length of its output vector is a concentration: how sure it is,
-        not merely what it thinks. An unsure head still decodes to *some* angle - hedging
-        looks like a confident zero once atan2 has thrown the length away - and a wrist
-        that acts on that is turning to a number the network did not mean.
+        The axis head is trained as a von Mises likelihood.
+        This is a method for describing a predicted angle that is more suitable for learning. 
+        
+        A von Mises distribution is the circular version of a normal distribution: a peak at
+        one angle, with a concentration (kappa) setting how sharp it is, and it wraps around so
+        that angles either side of ±180° count as close together. The head outputs a 2D vector:
+        its direction is the angle and its length is kappa, i.e. how sure the model is.
 
         Returns True if the wrist was actually commanded, so a caller can say which.
         """
@@ -1112,23 +1104,16 @@ class VisualServo:
         """Grasp whatever is below, drop it, repeat, and keep score until cancelled.
 
         Each pass is one call allowed a single attempt, so a failure here is one grab that
-        missed rather than the routine exhausting its retries. That is the number worth
-        reporting: a hit rate over attempts, not over calls that each got three goes.
+        missed.
 
         Nothing re-targets between passes - the routine takes whatever is under the
-        gripper - so this measures the servo loop and not the room-level targeting. An
-        object flung out of view ends the useful part of a run, which is worth watching
-        for rather than reading the tally afterwards and wondering.
+        gripper - so this measures the servo loop and not the room-level targeting.
 
         After each drop the gantry moves to a random point within `radius_m` of where the
-        run began and the wrist to a random angle within a half turn of where it is (every
-        grasp orientation, without the long spins), so the object is
-        approached from a different direction, distance and orientation every time.
-        Without it the loop would measure one approach geometry repeatedly and report the
-        result as a hit rate.
+        run began and the wrist to a random angle within a half turn of where it is.
 
-        The drop is where the lift ended, a third of a metre or so up, which suits socks
-        and towels and is worth thinking about before running it on anything fragile.
+        It drops about a half meter up. This results in bouncing
+        which further increases randomness. Don't run the test on fragile items.
         """
         origin = np.array(self.ob.pe.gant_pos, dtype=float)
         logger.info(f'servoloop starting from {np.round(origin, 3)}; repositioning within '
@@ -1174,7 +1159,7 @@ class VisualServo:
                     # A random wrist angle too, so the axis head sees the object at a new
                     # orientation every attempt. The grasp axis is pi-periodic, so a window
                     # 180 degrees wide already holds every orientation once - drawing from
-                    # the whole range would only add long spins. The window is centred on
+                    # the whole range would only add long spins. The window is centered on
                     # where the wrist is and slid inward near a limit, but never so far that
                     # it stops containing the current angle, so the turn is at most 180.
                     wrist_now = self.ob.datastore.winch_line_record.getLast()[1]
@@ -1212,18 +1197,7 @@ class VisualServo:
         return False
 
     async def _reposition_near(self, origin, radius, max_drop=0.1, timeout=30.0):
-        """Fly the gantry to a random point within `radius` metres of `origin`.
-
-        Uniform over the ball rather than over the coordinates, so the middle does not get
-        visited more often than the edge - a benchmark that mostly repeats the same
-        approach is not sampling approaches.
-
-        Two constraints on the draw. The work area is the same test move_direction_speed
-        applies before it will move at all, so a point outside it would simply not be
-        flown to. `max_drop` is the vertical one: a gantry z below the start puts the
-        fingers nearer the floor than the operator's parking judgement allowed for, and
-        40cm of that finds the floor, the furniture, or the object just dropped. Upward is
-        left alone - the descent covers height variety anyway, from above.
+        """Fly the gantry to a random point within `radius` meters of `origin`.
 
         Returns the point actually flown to, or None if the draw kept landing outside the
         work area, in which case nothing moves.
@@ -1232,7 +1206,7 @@ class VisualServo:
         for _ in range(REPOSITION_DRAW_TRIES):
             direction = np.random.normal(size=3)
             direction /= np.linalg.norm(direction) + 1e-9
-            # cube root, so the samples fill the volume evenly instead of crowding the centre
+            # cube root, so the samples fill the volume evenly instead of crowding the center
             offset = direction * radius * np.random.random() ** (1 / 3)
             target = origin + offset
             target[2] = max(target[2], origin[2] - max_drop)
@@ -1246,7 +1220,7 @@ class VisualServo:
                     f'({np.linalg.norm(target - origin):.2f}m from the start point)')
         try:
             # auto_altitude off: it climbs to a traversal height and back down, which is
-            # the right move across a room and absurd for a hop of tens of centimetres
+            # the right move across a room and absurd for a hop of tens of centimeters
             await asyncio.wait_for(self.ob.seek_goal(target, auto_altitude=False), timeout)
         except asyncio.TimeoutError:
             logger.warning(f'Reposition did not arrive within {timeout}s; carrying on')

@@ -45,7 +45,7 @@ measured tensions.
 
 What this cannot see: the weight is only constant while the whole assembly hangs free. Setting
 the gripper down on the floor, or picking up a payload, changes W and therefore shifts every
-height and predicted tension this module reports. Line weight is also not modelled - at a few
+height and predicted tension this module reports. Line weight is also not modeled - at a few
 newtons of total load the cables sag noticeably, which biases the effective anchor direction.
 """
 import csv

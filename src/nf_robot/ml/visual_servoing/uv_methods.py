@@ -211,7 +211,7 @@ def _flow_step(prev_gray, next_gray, uv):
 
 def gray_frames(frames, rows, keep=2):
     """A function from row index to that row's frame in grayscale, caching only the few
-    nearest the last one asked for, since flow only ever compares neighbours."""
+    nearest the last one asked for, since flow only ever compares neighbors."""
     import cv2
 
     gray = {}

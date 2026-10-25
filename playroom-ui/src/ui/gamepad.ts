@@ -177,7 +177,7 @@ export class GamepadController {
                 // Standard mappings (0-3)
                 a: gp.buttons[0].pressed,
                 b: gp.buttons[1].pressed,
-                y: gp.buttons[2].pressed, // not always labelled y, but usually at the top
+                y: gp.buttons[2].pressed, // not always labeled y, but usually at the top
                 x: gp.buttons[3].pressed,
                 // Bumpers (4-5)
                 lb: gp.buttons[4].pressed,

@@ -18,16 +18,16 @@ from pathlib import Path
 
 import numpy as np
 
-# (metres) minimum gripper distance from the origin for the bearing back to it to be
+# (meters) minimum gripper distance from the origin for the bearing back to it to be
 # reliable.
 MIN_HORIZONTAL_M = 0.30
-# (metres) tolerance for a target's distance to equal the gripper's distance from the
+# (meters) tolerance for a target's distance to equal the gripper's distance from the
 # origin.
 ORIGIN_TOLERANCE_M = 1e-3
 # Frames an episode needs before its calibration constant is trusted.
 MIN_FRAMES_PER_EPISODE = 30
 # (degrees) how far the calibration constant may wander within an episode before it is left
-# unlabelled.
+# unlabeled.
 MAX_SPREAD_DEG = 1.0
 
 # Named targets whose bearing and distance the recorder wrote.

@@ -15,7 +15,7 @@ Those vectors are clustered with sklearn's AgglomerativeClustering. Writes clust
 (the snapshots in each cluster), thumbs/ and clusters.html (a thumbnail contact sheet, one
 section per cluster) into the output directory, plus embeddings.npy (one row per snapshot,
 in clusters.json's order) and graph.html: the snapshots on their three largest principal
-components as a 3D graph, linking each to its nearest neighbours closer than a slider's
+components as a 3D graph, linking each to its nearest neighbors closer than a slider's
 threshold, with the thumbnail of whichever node is under the mouse.
 
 Give exactly one of --n_clusters (fixed cluster count) or --distance_threshold
@@ -48,9 +48,9 @@ from nf_robot.ml.visual_servoing.model import DEFAULT_BACKBONE, DEFAULT_IMAGE_SI
 
 POOLS = ("cls", "cls_registers", "patch_mean")
 THUMB_WIDTH = 224
-# Nearest neighbours each node keeps a candidate link to in graph.html; the slider shows the
+# Nearest neighbors each node keeps a candidate link to in graph.html; the slider shows the
 # ones closer than its threshold. All pairs would be tens of millions of lines.
-GRAPH_NEIGHBOURS = 15
+GRAPH_NEIGHBORS = 15
 
 
 def pick_device():
@@ -182,9 +182,9 @@ def write_html(out_path, clusters, rows, thumbs, thumb_px, title, source):
         f.write("\n".join(parts))
 
 
-def write_graph_html(out_path, emb, clusters, rows, thumbs, title, neighbours=GRAPH_NEIGHBOURS):
-    """The snapshots on their top three principal components as a 3D graph, nodes coloured
-    by cluster, linked to their nearest neighbours in the full embedding space.
+def write_graph_html(out_path, emb, clusters, rows, thumbs, title, neighbors=GRAPH_NEIGHBORS):
+    """The snapshots on their top three principal components as a 3D graph, nodes colored
+    by cluster, linked to their nearest neighbors in the full embedding space.
 
     Thumbnail paths are relative to the html file so the page works over file://.
     """
@@ -198,7 +198,7 @@ def write_graph_html(out_path, emb, clusters, rows, thumbs, title, neighbours=GR
 
     # Distances in the full embedding, not the projection, so a link means the snapshots
     # really are alike. Sorted, so the page shows a threshold as a prefix of the list.
-    dist, idx = NearestNeighbors(n_neighbors=neighbours + 1).fit(x).kneighbors(x)
+    dist, idx = NearestNeighbors(n_neighbors=neighbors + 1).fit(x).kneighbors(x)
     edges = {}
     for a in range(len(x)):
         for d, b in zip(dist[a, 1:], idx[a, 1:]):
@@ -219,7 +219,7 @@ def write_graph_html(out_path, emb, clusters, rows, thumbs, title, neighbours=GR
         "nodes": nodes,
         "edges": [v for (a, b), _ in edge_list for v in (int(a), int(b))],
         "dist": [round(d, 4) for _, d in edge_list],
-        "neighbours": neighbours,
+        "neighbors": neighbors,
         "variance": [round(float(v), 4) for v in pca.explained_variance_ratio_],
     }
     page = GRAPH_PAGE.replace("__TITLE__", html.escape(title)).replace(
@@ -281,17 +281,17 @@ camera.position.set(1.8, 1.3, 2.2);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
-// nodes, coloured by cluster
+// nodes, colored by cluster
 const positions = new Float32Array(D.xyz);
-const colours = new Float32Array(N * 3);
-const colour = new THREE.Color();
+const colors = new Float32Array(N * 3);
+const color = new THREE.Color();
 for (let i = 0; i < N; i++) {
-  colour.setHSL((D.cluster[i] / D.n_clusters + 0.03) % 1, 0.75, 0.6);
-  colours.set([colour.r, colour.g, colour.b], i * 3);
+  color.setHSL((D.cluster[i] / D.n_clusters + 0.03) % 1, 0.75, 0.6);
+  colors.set([color.r, color.g, color.b], i * 3);
 }
 const nodeGeometry = new THREE.BufferGeometry();
 nodeGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-nodeGeometry.setAttribute("color", new THREE.BufferAttribute(colours, 3));
+nodeGeometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
 const nodes = new THREE.Points(nodeGeometry, new THREE.PointsMaterial({
   size: 0.022, vertexColors: true, sizeAttenuation: true }));
 scene.add(nodes);
@@ -323,7 +323,7 @@ function applyThreshold() {
   edgeGeometry.setDrawRange(0, n * 2);
   document.getElementById("thr").textContent = t.toFixed(3);
   document.getElementById("count").textContent =
-    `${n.toLocaleString()} links (of each node's ${D.neighbours} nearest)`;
+    `${n.toLocaleString()} links (of each node's ${D.neighbors} nearest)`;
 }
 slider.addEventListener("input", applyThreshold);
 applyThreshold();

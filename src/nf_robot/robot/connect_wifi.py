@@ -105,7 +105,7 @@ async def scan_and_configure_wifi(connected_event):
             
             # Extract the Green channel only.
             # frame[:, :, 1] takes the 2nd channel (Green) from every pixel.
-            # This creates a 2D array (480, 640) that acts as 'Greyscale'.
+            # This creates a 2D array (480, 640) that acts as 'Grayscale'.
             # pyzbar handles 2D numpy arrays as strictly grayscale (Y800).
             gray_view = frame[:, :, 1]
 

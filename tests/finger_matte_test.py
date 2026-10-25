@@ -69,12 +69,12 @@ class TestBuildMatte(unittest.TestCase):
         _, on_green = build_matte(stack)
         self.assertGreater(on_green["green_fraction"], 0.8)
 
-        grey = np.full_like(stack, 90.0)
-        grey[:, 40:80, 0:30] = 40.0
-        _, off_green = build_matte(grey)
+        gray = np.full_like(stack, 90.0)
+        gray[:, 40:80, 0:30] = 40.0
+        _, off_green = build_matte(gray)
         self.assertLess(off_green["green_fraction"], 0.01)
 
-    def test_spill_is_pulled_out_of_the_kept_colour(self):
+    def test_spill_is_pulled_out_of_the_kept_color(self):
         """A finger lit by the backdrop carries a green cast that must not composite."""
         stack = stack_with_fingers(intruder=False)
         stack[:, 40:80, 0:30] = (40.0, 120.0, 40.0)
@@ -126,7 +126,7 @@ class TestGreenFraction(unittest.TestCase):
     def test_counts_only_decisive_green(self):
         frame = green_frame()
         self.assertAlmostEqual(green_fraction(frame), 1.0)
-        frame[:, :100] = 90.0  # grey
+        frame[:, :100] = 90.0  # gray
         self.assertAlmostEqual(green_fraction(frame), 0.5)
 
 

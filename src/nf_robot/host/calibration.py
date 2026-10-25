@@ -92,7 +92,7 @@ def is_blurry(image, threshold=6.0):
     return laplacian_var < threshold
 
 def fit_intrinsics(opts, ipts, image_shape):
-    """cv2.calibrateCamera with the principal point held at the image centre.
+    """cv2.calibrateCamera with the principal point held at the image center.
     Returns (rms reprojection error, intrinsic matrix, distortion, rvecs, tvecs)."""
     # Initialize the Matrix with the Image Center
     # This tells OpenCV: "Start assuming the lens is perfectly centered"
@@ -139,13 +139,13 @@ class CalibrationInteractive:
 
     def addImage(self, image):
         #Convert to grayscale
-        grey_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        self.image_shape = grey_image.shape[::-1]
+        gray_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        self.image_shape = gray_image.shape[::-1]
         #Find chessboard corners
         logging.debug(f'Searching image {self.cnt}')
         self.cnt+=1
-        found, corners = cv2.findChessboardCornersSB(grey_image, (self.board_w,self.board_h), cv2.CALIB_CB_EXHAUSTIVE + cv2.CALIB_CB_ACCURACY)
-        # found, corners = cv2.findChessboardCorners(grey_image, (board_w,board_h), cv2.CALIB_CB_EXHAUSTIVE + cv2.CALIB_CB_NORMALIZE_IMAGE + cv2.CALIB_CB_ADAPTIVE_THRESH)
+        found, corners = cv2.findChessboardCornersSB(gray_image, (self.board_w,self.board_h), cv2.CALIB_CB_EXHAUSTIVE + cv2.CALIB_CB_ACCURACY)
+        # found, corners = cv2.findChessboardCorners(gray_image, (board_w,board_h), cv2.CALIB_CB_EXHAUSTIVE + cv2.CALIB_CB_NORMALIZE_IMAGE + cv2.CALIB_CB_ADAPTIVE_THRESH)
 
         if found == True:
             #Add the "true" checkerboard corners
@@ -396,10 +396,10 @@ def calibrate_continuous(address, ws_port=8765, board_w=board_w, board_h=board_h
                 continue
             last_seq = seq
 
-            grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            image_shape = grey.shape[::-1]
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            image_shape = gray.shape[::-1]
             found, corners = cv2.findChessboardCornersSB(
-                grey, (board_w, board_h), cv2.CALIB_CB_EXHAUSTIVE + cv2.CALIB_CB_ACCURACY)
+                gray, (board_w, board_h), cv2.CALIB_CB_EXHAUSTIVE + cv2.CALIB_CB_ACCURACY)
             if found:
                 corners = corners.reshape(-1, 1, 2)
                 novel = not ipts or np.linalg.norm(corners - ipts[-1], axis=2).mean() >= min_motion_px

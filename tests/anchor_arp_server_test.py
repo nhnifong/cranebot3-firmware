@@ -1,9 +1,9 @@
 """
 Tests for AnchorArpServer.
 Mocks all hardware interfaces (DaMiaoController, DamiaoSpoolController) to test
-command dispatch, tighten/stow state machines, sensor polling, and shutdown behaviour.
+command dispatch, tighten/stow state machines, sensor polling, and shutdown behavior.
 
-Behaviour already covered by spool_dm_test.py (DamiaoSpoolController internals,
+Behavior already covered by spool_dm_test.py (DamiaoSpoolController internals,
 tracking loop math, jog logic, etc.) is not repeated here.
 
 Now that the pilot anchor is gone, this is also the home of the shared

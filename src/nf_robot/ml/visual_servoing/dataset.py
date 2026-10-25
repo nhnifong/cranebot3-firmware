@@ -10,7 +10,7 @@ from nf_robot.ml.shard_dataset import ShardDataset
 
 # Scales that put each state component roughly in -1..1 before it reaches the FiLM MLP.
 STATE_SCALES = {
-    "laser_rangefinder": 1.0,   # metres; the sensor tops out near 1.3
+    "laser_rangefinder": 1.0,   # meters; the sensor tops out near 1.3
     "finger_angle": 90.0,       # degrees, roughly -90..90
     "target_force": 1.0,        # already normalized
 }
@@ -32,7 +32,7 @@ class VisualServoDataset(ShardDataset):
 
     LABEL_COLUMNS = LABEL_COLUMNS
 
-    def labelled_uv(self):
+    def labeled_uv(self):
         """Every present target_uv, for the constant-prediction baseline."""
         return np.array([r["target_uv"] for r in self.rows if r["target_uv"] is not None],
                         dtype=np.float32)
@@ -40,7 +40,7 @@ class VisualServoDataset(ShardDataset):
     def has_close_labels(self):
         return any(r.get("close_now") is not None for r in self.rows)
 
-    def labelled_axis(self):
+    def labeled_axis(self):
         """Every present grasp_axis_rad, for the loss's angle-bin weights."""
         return np.array([r["grasp_axis_rad"] for r in self.rows
                          if r["grasp_axis_rad"] is not None], dtype=np.float32)

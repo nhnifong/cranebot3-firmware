@@ -157,9 +157,9 @@ def gripper_samples(args, anchor_poses, eyelet_positions):
 
 
 def gripper_split(args, anchor_poses, eyelet_positions):
-    """Within-card vs across-card fit of the gripper term, as (n, mean |modelled|,
+    """Within-card vs across-card fit of the gripper term, as (n, mean |modeled|,
     mean |measured|, slope, rms, cost) per group. slope is the least-squares gain of measured
-    onto modelled; 1.0 means the two accounts of the same move agree in scale."""
+    onto modeled; 1.0 means the two accounts of the same move agree in scale."""
     samples, _ = gripper_samples(args, anchor_poses, eyelet_positions)
     pulls = pull_points(anchor_poses, eyelet_positions)
     groups = {'within-card': ([], []), 'across-card': ([], [])}
@@ -168,8 +168,8 @@ def gripper_split(args, anchor_poses, eyelet_positions):
         name_b, g_b, L_b = samples[j]
         key = 'within-card' if name_a == name_b else 'across-card'
         for k in range(4):
-            modelled = np.linalg.norm(g_b - pulls[k]) - np.linalg.norm(g_a - pulls[k])
-            groups[key][0].append(modelled)
+            modeled = np.linalg.norm(g_b - pulls[k]) - np.linalg.norm(g_a - pulls[k])
+            groups[key][0].append(modeled)
             groups[key][1].append(L_b[k] - L_a[k])
 
     stats = {}
@@ -207,9 +207,9 @@ def best_card_layout_scale(args, anchor_poses, eyelet_positions):
         total = 0.0
         for i, j in itertools.combinations(range(len(scaled)), 2):
             for k in range(4):
-                modelled = (np.linalg.norm(scaled[j][0] - pulls[k])
+                modeled = (np.linalg.norm(scaled[j][0] - pulls[k])
                             - np.linalg.norm(scaled[i][0] - pulls[k]))
-                total += (modelled - (scaled[j][1][k] - scaled[i][1][k])) ** 2
+                total += (modeled - (scaled[j][1][k] - scaled[i][1][k])) ** 2
         return total
 
     result = optimize.minimize_scalar(cost, bounds=(0.7, 1.3), method='bounded')
@@ -238,8 +238,8 @@ def best_room_scale(args, anchor_poses, eyelet_positions):
         total = 0.0
         for i, j in itertools.combinations(range(len(pts)), 2):
             for k in range(4):
-                modelled = np.linalg.norm(pts[j][0] - pulls[k]) - np.linalg.norm(pts[i][0] - pulls[k])
-                total += (modelled - (pts[j][1][k] - pts[i][1][k])) ** 2
+                modeled = np.linalg.norm(pts[j][0] - pulls[k]) - np.linalg.norm(pts[i][0] - pulls[k])
+                total += (modeled - (pts[j][1][k] - pts[i][1][k])) ** 2
         return total
 
     def diamond_cost(s):
@@ -261,9 +261,9 @@ def best_room_scale(args, anchor_poses, eyelet_positions):
             measured = {k: deltas[k][eyelet_idx] for _, _, k in edges if k}
             measured[None] = -sum(measured.values())
             for a, b, key in edges:
-                modelled = (np.linalg.norm(centroids[b] - E[eyelet_idx])
+                modeled = (np.linalg.norm(centroids[b] - E[eyelet_idx])
                             - np.linalg.norm(centroids[a] - E[eyelet_idx]))
-                total += (modelled - measured[key]) ** 2
+                total += (modeled - measured[key]) ** 2
         return total
 
     out = {}
@@ -429,7 +429,7 @@ def main(argv=None):
             print('    they compare the gripper camera against the encoders. across-card pairs')
             print("    compare the anchor cameras' card layout against the encoders.")
             for key, s in gripper_split(args, anchors, eyelets).items():
-                print(f'    {key:12s} n={s["n"]:4d}  |modelled| {s["mean_model"] * 100:6.1f} cm  '
+                print(f'    {key:12s} n={s["n"]:4d}  |modeled| {s["mean_model"] * 100:6.1f} cm  '
                       f'|measured| {s["mean_meas"] * 100:6.1f} cm  slope {s["slope"]:.4f}  '
                       f'rms {s["rms"] * 100:5.2f} cm  cost {s["cost"]:.3f}')
             scale = best_card_layout_scale(args, anchors, eyelets)

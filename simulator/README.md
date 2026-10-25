@@ -31,7 +31,7 @@ The model loads paused at keyframe 0. In the viewer:
 - **space** — start/pause the simulation
 - **Control** panel on the left — six sliders. The four spool sliders
   (`spool_0_direct`, `spool_1_indirect`, `spool_2_direct`, `spool_3_indirect`) are each
-  that line's **free span in metres**: the straight-line distance from the last eyelet
+  that line's **free span in meters**: the straight-line distance from the last eyelet
   it leaves to the gantry, 0 to 7 m. The two indirect lines also carry a fixed ~6 m
   cross-room run to their far eyelet post, but you never control that, so it is added
   inside the model and kept off the slider — all four sliders mean the same thing and
@@ -65,7 +65,7 @@ The model loads paused at keyframe 0. In the viewer:
   that `assumed_full_line_length` (7.5 m) allows.
 
 - **backspace** — reset (to qpos0 with ctrl 0; click **Load key** again after)
-- **Rendering** panel → check **Tendon** and **Actuator** to see line tension colouring
+- **Rendering** panel → check **Tendon** and **Actuator** to see line tension coloring
 - double-click a body to select it, then **ctrl + right-drag** to apply a force —
   the easiest way to set the pole swinging
 - **Watch** panel, or the **Sensor** figure, for line lengths and tensions
@@ -102,7 +102,7 @@ layout in `conf_simulator.json`, and the GLB models in
 
 `meshes/` holds four OBJs pulled out of the playroom GLBs by walking the glTF
 node hierarchy, baking each node's world transform into the vertices, and welding
-duplicates. They are in metres and already in the frame of the body that uses them.
+duplicates. They are in meters and already in the frame of the body that uses them.
 
 **Gripper** (`gripper.glb` → `gripper_shell.obj`, `finger_left.obj`, `finger_right.obj`).
 That file's scene frame turned out to be exactly `definitions.py`'s gripper frame — its
@@ -119,7 +119,7 @@ joint 0 is closed and they swing outward over the **59°** of
 They are geared together on one servo, so one actuator drives `finger_left` and an
 equality constraint carries `finger_right`.
 
-The servo is modelled at its real resolution — 4096 steps/rev through the 10/45
+The servo is modeled at its real resolution — 4096 steps/rev through the 10/45
 reduction, 0.0195° per step — and **increasing steps open the finger**, which is the
 direction `findTouchPoint` and `measureFingerContact` work in. The firmware's −90..90 is
 a fictitious scale mapped onto whatever open/closed step positions its calibration
@@ -136,7 +136,7 @@ the lines attach to. Both come straight out of the file:
 | | |
 |---|---|
 | card | 91.5 × 91.5 mm, 14.0 mm thick, dead flat (0.00 mm out of plane) |
-| card centre | 37.0 mm below the gantry origin, on the vertical axis |
+| card center | 37.0 mm below the gantry origin, on the vertical axis |
 | card facing | horizontal, normal at 45° to the GLB's axes |
 | tagged faces | both front and back |
 | cross arms | 4, at ±45° and ±135°, reaching r = 0.0563 m |
@@ -150,7 +150,7 @@ if you ever point the anchor cameras at it. 91.5 mm agrees well with
 The pole is *not* taken from the GLB: that file's pole is 0.41 m, which is no configured
 pole, so it is drawn from `pole_offset_carbon270` instead.
 
-Colours are cosmetic: copper gripper shell, `#0079b9` fingers.
+Colors are cosmetic: copper gripper shell, `#0079b9` fingers.
 
 ## Driving it from the real firmware
 
@@ -263,7 +263,7 @@ It compiles, settles, and behaves. Checks that were run:
 | gripper hanging | `getAngleFromVertical` reads 0.1°, and tracks true tilt to 0.1° out to 90° |
 
 Driving it is open-loop here: feed each slider the geometric distance from its pull
-point to that line's own hook and the gantry lands within a few centimetres. Compute the
+point to that line's own hook and the gantry lands within a few centimeters. Compute the
 distance to the gantry *origin* instead and you will be off by 0.1–0.2 m, because at
 these shallow line angles a 20 mm length error becomes ~170 mm of height. That is worth
 knowing before using this model to check anything host-side.
@@ -295,12 +295,12 @@ Known to be wrong or guessed, in rough order of how much it matters:
   horizontal exactly as the GLB has it, which also settles that the `definitions.py`
   gantry frame is z-up while the gripper frame is y-up. Only the offset is in dispute,
   and if `definitions.py` is what the vision stack calibrates against, that 28 mm is a
-  real bias worth chasing rather than a modelling detail.
+  real bias worth chasing rather than a modeling detail.
 - **Line stretch is the accuracy floor, and it may be too stiff rather than too soft.**
   Lines act as springs at 4000 N/m, so 13 N of tension is ~3 mm of stretch per line and,
-  at these shallow angles, a few centimetres of droop. Real monofilament stretches
+  at these shallow angles, a few centimeters of droop. Real monofilament stretches
   considerably more than that.
-- **Spools are modelled as pure length commands.** No spiral spool geometry
+- **Spools are modeled as pure length commands.** No spiral spool geometry
   (`damiao_spool_geometry`), no line stretch model, no eyelet friction. Each line is
   capped at 25 N, about 2.6x the resting tension; that cap is also what stops an
   over-reel from squeezing the gantry up through the anchor plane, which

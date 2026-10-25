@@ -1,11 +1,13 @@
 #!/usr/bin/env python
 
-"""Hand-label ortho floor frames, starting from what the model already thinks.
+"""Hosts a page at localhost:8022 for labelling ortho frames
 
 Teleop gives one label a frame - the thing the operator actually grabbed - and says
 nothing about the rest of the floor. This is where the other kind of label comes from:
 frames where *every* target is marked, so the absence of one means the floor really is
 empty there. ortho_target's objectness head has no other source for that.
+
+Run from frames extracted from a teleop dataset
 
     python -m nf_robot.ml.ortho_target.labeler --root ~/data/combined_targets_reblend
     python -m nf_robot.ml.ortho_target.labeler --repo_id naavox/combined_targets_reblend
@@ -13,45 +15,24 @@ empty there. ortho_target's objectness head has no other source for that.
 Then open the printed URL. Frames are extracted from the LeRobot dataset once, into
 ortho_labeler_frames/<source>/, so a restart is instant; --refresh re-extracts them.
 
-Episodes are taken spread across the whole dataset rather than from the front of it. A
-merged dataset is its sources concatenated, so a limit applied to the front stops inside
-the first room or two and never reaches the rest. `--add N` extracts another N frames that
-are neither cached nor already labelled, which is how a second pass gets new work.
+Episodes are taken spread across the whole dataset.
+`--add N` extracts another N frames that are neither cached nor already labeled.
 
 The model seeds each frame with its own predictions, at a threshold well below the one
 the robot acts on, because deleting a wrong dot is faster than placing a right one. A
 seeded dot is amber and carries its probability; anything you place is green. Nothing is
 saved until you press save, so a frame you never visit costs nothing.
 
-After the first frame of a scene the model steps aside: each frame starts from the points
-just saved on the previous one, jittered a few pixels, shown in blue. Frames arrive several
-to an episode and several episodes to a recording session, and consecutive ones are mostly
-the same floor with one object missing, so the labels are nearly right already and the work
-is pruning rather than placing. Whether it is the same floor is decided by comparing the
-frames, not by their numbering - a merged dataset puts different rooms in consecutive
-episodes - so the model seeds each new scene afresh. --no_carry turns this off.
+Subsequent frames use your previous labells jittered a few pixels, shown in blue.
+ --no_carry turns this off.
 
-Frames already saved or skipped can be walked past with the "Skip finished" toggle, which
-is what a second pass over a part-labelled set wants; the page opens on the first
-unlabelled frame regardless.
+Frames already saved or skipped can be walked past with the "Skip finished" toggle.
 
 Labels are written with ortho_target.write_user_labels, one parquet per frame, named for
-the source dataset and the frame - so re-labelling one overwrites it rather than leaving
-both, while the same episode and offset of another dataset stays a different label - and
-the result merges with the ordinary command:
+the source dataset and the frame. re-labeling one overwrites it.
 
     python -m nf_robot.ml.ortho_target merge_labels
     python -m nf_robot.ml.ortho_target train --data_root ortho_target_data
-
-No opencv GUI: this repo installs headless opencv, so the tool is a local HTTP server
-driven from a browser tab, the same shape the target_heatmap labeler had.
-
-A frame with nothing graspable in it is a label too, and the strongest negative the
-dataset can hold: every cell of it is a confirmed no, where an ordinary frame only says
-where one operator reached. Press E to save one. It is a separate key from save-and-next
-on purpose - space on a frame nobody has looked at would otherwise write "this floor is
-bare" about a floor that is not - and skip still means "I am not judging this one",
-which is a different statement and stores nothing.
 """
 
 import argparse
@@ -97,7 +78,7 @@ def spread_order(count):
     """Every index of a run, ordered so that any prefix of it is spread over the whole run.
 
     A limit has to cut the episode list somewhere, and cutting it at the front is what
-    kept the first labelling pass inside the first two rooms of a merged dataset: sources
+    kept the first labeling pass inside the first two rooms of a merged dataset: sources
     are concatenated, so the front of the episode range is the front of the merge. Taking
     them in this order instead means 300 frames out of 500 episodes covers every room, and
     so does the first 50 of them if blank frames or a smaller limit stop it early.
@@ -115,11 +96,11 @@ def extract_frames(repo_id, root, cache: Path, per_episode, limit, min_coverage,
 
     Evenly spaced within each episode rather than random, so one episode cannot donate two
     frames of the same moment, and blank frames are dropped on the way out - an ortho map
-    with almost no coverage is a picture of nothing and wastes a labelling slot.
+    with almost no coverage is a picture of nothing and wastes a labeling slot.
 
     Whole episodes are taken at a time, so the frames of one arrive together and the
-    labeller's carry-over has a run of the same scene to work along. Which episodes is
-    decided by spread_order, and `skip` names frames to leave out - already labelled, or
+    labeler's carry-over has a run of the same scene to work along. Which episodes is
+    decided by spread_order, and `skip` names frames to leave out - already labeled, or
     already in the cache - so a second pass lands on new work rather than the same frames.
     """
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -196,7 +177,7 @@ class Session:
         self.seed_threshold = seed_threshold
         self._model = None
         # frame -> (what the seeds came from, the seeds). The origin is kept so that a
-        # frame seeded before its neighbour was labelled is re-seeded from the label once
+        # frame seeded before its neighbor was labeled is re-seeded from the label once
         # there is one, rather than serving a stale guess for the rest of the run.
         self._seeds: dict[str, tuple[str | None, list]] = {}
         self.skipped: set[str] = set()
@@ -259,7 +240,7 @@ class Session:
         """The checkpoint, loaded on first use, or None if there is none to seed from.
 
         A missing or unreadable checkpoint leaves the tool working with empty frames rather
-        than failing: hand labelling is the point, and seeds are the convenience. That
+        than failing: hand labeling is the point, and seeds are the convenience. That
         matters most for the checkpoint load_checkpoint refuses - one from before the
         objectness head - because retraining is the fix and there is no reason to be
         unable to label in the meantime.
@@ -279,10 +260,10 @@ class Session:
         return self._model or None
 
     def _thumb(self, frame_id):
-        """A small grey copy of one frame, for asking whether two frames are the same scene."""
+        """A small gray copy of one frame, for asking whether two frames are the same scene."""
         if frame_id not in self._thumbs:
-            grey = cv2.imread(str(self.image_path(frame_id)), cv2.IMREAD_GRAYSCALE)
-            small = cv2.resize(grey, (CARRY_THUMB_PX, CARRY_THUMB_PX),
+            gray = cv2.imread(str(self.image_path(frame_id)), cv2.IMREAD_GRAYSCALE)
+            small = cv2.resize(gray, (CARRY_THUMB_PX, CARRY_THUMB_PX),
                                interpolation=cv2.INTER_AREA).astype(np.float32)
             self._thumbs[frame_id] = small - small.mean()
         return self._thumbs[frame_id]
@@ -377,7 +358,7 @@ class Session:
         return "carried" if self.carry_origin(frame_id) else "model"
 
     def save(self, frame_id, points, allow_empty=False):
-        """Write one frame's targets, replacing whatever it was labelled with before.
+        """Write one frame's targets, replacing whatever it was labeled with before.
 
         allow_empty carries through to write_user_labels, where an empty list means the
         floor really is bare rather than that nothing was placed yet.
@@ -386,7 +367,7 @@ class Session:
         if bgr is None:
             raise FileNotFoundError(frame_id)
         height, width = bgr.shape[:2]
-        # The page works in the frame's own pixels; write_user_labels wants room metres and
+        # The page works in the frame's own pixels; write_user_labels wants room meters and
         # converts back with the same projection, so this round-trips exactly.
         targets_m = [(*ot.ortho_px_to_room(float(u), float(v), width, height), 0.0)
                      for u, v in points]
@@ -519,7 +500,7 @@ def main():
                         help=f"where extracted frames live (default {DEFAULT_CACHE}/<source>)")
     parser.add_argument("--refresh", action="store_true", help="re-extract frames before serving")
     parser.add_argument("--add", type=int, default=0, metavar="N",
-                        help="extract N more frames that are not already cached or labelled, "
+                        help="extract N more frames that are not already cached or labeled, "
                              "keeping the ones already there, and serve the lot")
     parser.add_argument("--frames_per_episode", type=int, default=3)
     parser.add_argument("--limit", type=int, default=300, help="0 for every frame the spacing gives")
@@ -551,7 +532,7 @@ def main():
     output = Path(args.output)
     logging.info(f"Labels are named for source '{source}'")
     if args.refresh or args.add or not any(cache.glob("*.jpg")):
-        # Frames already labelled are never worth extracting again, and with --add the ones
+        # Frames already labeled are never worth extracting again, and with --add the ones
         # already sitting in the cache are not either: N means N to work on, not N drawn.
         # Untagged labels are skipped too: they may be another dataset's, but that costs a
         # frame not drawn, where drawing it could show someone else's label as done.
@@ -581,7 +562,7 @@ def main():
     server.shutdown()
     server.server_close()
     progress = session.progress()
-    logging.info(f"{progress['saved']} frame(s) labelled in {session.output}")
+    logging.info(f"{progress['saved']} frame(s) labeled in {session.output}")
     logging.info("Merge them with: python -m nf_robot.ml.ortho_target merge_labels"
                  + (f" --source {session.output}" if str(session.output) != ot.USER_LABEL_ROOT else ""))
 

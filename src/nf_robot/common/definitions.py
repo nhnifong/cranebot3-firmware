@@ -87,7 +87,7 @@ damiao_full_spool_diameter_power_line = 86.1
 #   (winding, spool, line type) -> (full_length_m, full_diameter_mm)
 damiao_spool_geometry = {
     # Short winding keeps the values every already-calibrated robot was built against. The low
-    # spool carries 15 m but has always been modelled at 7.5; correcting that would shift the
+    # spool carries 15 m but has always been modeled at 7.5; correcting that would shift the
     # indirect line on every short-wound robot, so it is left alone here.
     ('short', 'high', 'fishing'): (assumed_full_line_length, damiao_full_spool_diameter_fishing_line),
     ('short', 'high', 'power'):   (assumed_full_line_length, damiao_full_spool_diameter_power_line),

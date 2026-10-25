@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"""The gripper camera's mount: room to camera for labelling, and back for the robot."""
+"""The gripper camera's mount: room to camera for labeling, and back for the robot."""
 
 import numpy as np
 from scipy.spatial.transform import Rotation

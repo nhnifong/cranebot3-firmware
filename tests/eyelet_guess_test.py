@@ -43,7 +43,7 @@ class RectangularRoomEyeletGuessTest(unittest.TestCase):
 
     def test_height_ignores_anchor_yaw(self):
         # the guess is built in the room frame, so an anchor fitted off plumb cannot tip a
-        # multi-metre offset down out of the pull-point plane.
+        # multi-meter offset down out of the pull-point plane.
         level = rectangular_room_eyelet_guess(anchors_at((3, 3, 2), (-3, -3, 2)))
         spun = rectangular_room_eyelet_guess(
             anchors_at((3, 3, 2), (-3, -3, 2), yaw0=1.1, yaw1=-2.4))

@@ -23,28 +23,28 @@ MIN_GOOD_FRAMES = 3
 # The cell softmax's peak probability below which a frame is taken to show no basket. The
 # softmax is over 900 cells, so even a confident answer spreads over a few of them.
 SCORE_MIN = 0.05
-# (metres) the frames of one look disagreeing by more than this, median absolute deviation
+# (meters) the frames of one look disagreeing by more than this, median absolute deviation
 # of the lateral move, means the model is not looking at one basket.
 SPREAD_MAX_M = 0.1
-# (metres) close enough to call it centred.
+# (meters) close enough to call it centered.
 LATERAL_TOL_M = 0.05
 VERTICAL_TOL_M = 0.07
 # Fraction of each predicted move taken, so a wrong first guess from far off does not
 # carry the gripper all the way past the basket.
 GAIN = 0.8
-# (metres) cap on one step, which is about how far off the training data's moves went.
+# (meters) cap on one step, which is about how far off the training data's moves went.
 MAX_STEP_M = 1.0
-# (metres) how much higher than the usual drop height the search starts over a guess, so a
+# (meters) how much higher than the usual drop height the search starts over a guess, so a
 # guess that is well off still has the basket in view.
 START_EXTRA_HEIGHT_M = 0.3
-# (metres) never put the gripper lower than this over the floor while searching.
+# (meters) never put the gripper lower than this over the floor while searching.
 MIN_GRIPPER_Z_M = 0.2
 # (seconds) wait after each move for the pole to stop swinging before looking.
 SETTLE_S = 1.0
 TILT_DEG = 12.0
 TILT_CONFIRM_S = 0.3
 SEEK_POLL_S = 0.1
-# (metres) a fix taken from a coarse position this far from where that place is now seen is
+# (meters) a fix taken from a coarse position this far from where that place is now seen is
 # a fix on where it used to be.
 FIX_STALE_M = 0.3
 
@@ -154,7 +154,7 @@ class FindBasket(Maneuver):
         guess is a rough floor position of the basket, which the gantry flies over at the
         usual drop height plus START_EXTRA_HEIGHT_M first; with None, the search starts from wherever the gripper is.
         Then it looks, moves by most of what the basket centering model says, and looks
-        again, until the model says it is centred. Returns the gantry position to drop
+        again, until the model says it is centered. Returns the gantry position to drop
         from, or None if no basket was found or it did not settle on one. This is a
         motion task, and leaves the gripper wherever the search ended.
 
@@ -209,7 +209,7 @@ class FindBasket(Maneuver):
                 fix = gantry + move
                 if not silent:
                     ob.set_named_position(BASKET_FIX_NAME, fix, save=False)
-                finish(f'Centred after {look + 1} look(s)')
+                finish(f'Centered after {look + 1} look(s)')
                 return fix
 
             step = move * GAIN
@@ -230,12 +230,12 @@ class FindBasket(Maneuver):
                 finish('Stopped')
                 return None
 
-        say(f'Find basket: not centred after {MAX_LOOKS} looks')
+        say(f'Find basket: not centered after {MAX_LOOKS} looks')
         finish('Did not converge')
         return None
 
     async def _look(self):
-        """The median room-frame move to centre the basket over FRAMES_PER_LOOK fresh
+        """The median room-frame move to center the basket over FRAMES_PER_LOOK fresh
         frames, or None if too few saw it or they disagree."""
         from nf_robot.ml.basket.model import predict_frame
 

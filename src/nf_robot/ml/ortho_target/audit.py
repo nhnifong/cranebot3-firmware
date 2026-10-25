@@ -51,7 +51,7 @@ CLUSTER_MIN_EPISODES = 4
 # Frames painted less than this are mostly black, and say little either way.
 LOW_COVERAGE = 0.25
 
-# Salience: grey-level std in a box around the label, against random painted boxes of
+# Salience: gray-level std in a box around the label, against random painted boxes of
 # the same frame. An object has texture; bare floor has little.
 SALIENCE_RADIUS_M = 0.06
 SALIENCE_SAMPLES = 48
@@ -83,8 +83,8 @@ REASONS = {
     "low_coverage": f"under {LOW_COVERAGE:.0%} of the frame painted",
     "flat_label": "label on featureless floor",
     "cross_duplicate": "same picture as a row from another episode or run; merge_labels drops teleop ones",
-    "label_disagreement": "same picture hand-labelled twice, differently",
-    "grasp_not_labelled": "teleop grasp (green) far from the same picture's hand labels (magenta)",
+    "label_disagreement": "same picture hand-labeled twice, differently",
+    "grasp_not_labeled": "teleop grasp (green) far from the same picture's hand labels (magenta)",
     "duplicate_file_name": "file_name shared with another row",
 }
 
@@ -207,9 +207,9 @@ def audit_composition(rows, findings, split):
         per_frame = Counter(len(r.points) for r in complete)
         print(f"\n-- complete frames: {len(complete)}, {empty} with no targets")
         print("   targets per frame: " + "  ".join(f"{n}:{c}" for n, c in sorted(per_frame.items())))
-        labelled = [r for r in complete if r.kind in ("labeler", "ui")]
-        if labelled and all(not len(r.points) for r in labelled):
-            findings.warn(f"{split}: every hand-labelled frame is empty")
+        labeled = [r for r in complete if r.kind in ("labeler", "ui")]
+        if labeled and all(not len(r.points) for r in labeled):
+            findings.warn(f"{split}: every hand-labeled frame is empty")
 
     tasks = Counter(r.raw["task"] for r in rows if r.kind == "teleop")
     if tasks:
@@ -227,7 +227,7 @@ def audit_composition(rows, findings, split):
             f"{split}: {shared} file_name(s) appear on more than one row. Labeler names from "
             f"before the source dataset was part of them say only episode and offset, so two "
             f"datasets that share episode numbers collide - which also makes sample_group "
-            f"treat unrelated rooms as one run. Two people labelling one frame collide too.")
+            f"treat unrelated rooms as one run. Two people labeling one frame collide too.")
 
 
 def audit_integrity(rows, findings, split):
@@ -334,14 +334,14 @@ def audit_contacts(rows, findings, split):
 
 
 def audit_placement(rows, findings, split):
-    """Where labels sit on the map, as a coarse text heatmap in room metres."""
-    labelled = [r for r in rows if len(r.contacts)]
-    if not labelled:
+    """Where labels sit on the map, as a coarse text heatmap in room meters."""
+    labeled = [r for r in rows if len(r.contacts)]
+    if not labeled:
         return
     bins = 10
     half = ORTHO_EXTENT_M / 2
     grid = np.zeros((bins, bins), dtype=int)
-    for r in labelled:
+    for r in labeled:
         for x, y, _ in r.contacts:
             i = int(np.clip((half - y) / ORTHO_EXTENT_M * bins, 0, bins - 1))
             j = int(np.clip((x + half) / ORTHO_EXTENT_M * bins, 0, bins - 1))
@@ -352,12 +352,12 @@ def audit_placement(rows, findings, split):
     for line in grid:
         print("    |" + "".join(shades[int(round((len(shades) - 1) * c / peak))] * 2
                              for c in line) + "|")
-    for kind in sorted({r.kind for r in labelled}):
-        c = np.concatenate([r.contacts for r in labelled if r.kind == kind])
+    for kind in sorted({r.kind for r in labeled}):
+        c = np.concatenate([r.contacts for r in labeled if r.kind == kind])
         print(f"   {kind:9s} mean ({c[:, 0].mean():+.2f}, {c[:, 1].mean():+.2f}) m  "
               f"std ({c[:, 0].std():.2f}, {c[:, 1].std():.2f}) m")
 
-    for r in labelled:
+    for r in labeled:
         if r.complete and len(r.contacts) > 1:
             d = np.linalg.norm(r.contacts[:, None, :2] - r.contacts[None, :, :2], axis=-1)
             d[np.diag_indices(len(d))] = np.inf
@@ -374,7 +374,7 @@ def audit_placement(rows, findings, split):
 # ==========================================
 
 def box_std(gray_int, gray_sq_int, u, v, r):
-    """Grey std over the (2r+1)^2 box centred on each (u, v), from integral images."""
+    """Gray std over the (2r+1)^2 box centered on each (u, v), from integral images."""
     h, w = gray_int.shape[0] - 1, gray_int.shape[1] - 1
     x0 = np.clip(u - r, 0, w)
     x1 = np.clip(u + r + 1, 0, w)
@@ -485,7 +485,7 @@ def audit_images(rows, findings, split, seed):
 
     audit_height_vs_salience(rows, findings, split)
 
-    print(f"\n-- label salience: grey texture within {SALIENCE_RADIUS_M * 100:.0f}cm of a label, "
+    print(f"\n-- label salience: gray texture within {SALIENCE_RADIUS_M * 100:.0f}cm of a label, "
           f"as a multiple of the same frame's typical patch.")
     print("   An object is busier than floor, so ~1 means labels land on nothing in particular.")
     print("   A peak away from (0,0) means labels are systematically displaced from what they mark.")
@@ -493,21 +493,21 @@ def audit_images(rows, findings, split, seed):
     for r in rows:
         if r.label_rank is not None:
             ranks[r.kind].append(r.label_rank)
-    centre = len(offsets_m) // 2
+    center = len(offsets_m) // 2
     for kind, maps in sorted(salience.items()):
         mean = np.mean(maps, axis=0)
         best = int(np.argmax(mean))
         flat = sum(1 for x in ranks[kind] if x < FLAT_LABEL_RANK)
-        print(f"   {kind:9s} at label {mean[centre]:.2f}x, best {mean[best]:.2f}x at offset "
+        print(f"   {kind:9s} at label {mean[center]:.2f}x, best {mean[best]:.2f}x at offset "
               f"({offsets_m[best][0] * 100:+.0f}, {offsets_m[best][1] * 100:+.0f}) cm in (+u, +v); "
               f"{flat}/{len(ranks[kind])} labels flatter than {1 - FLAT_LABEL_RANK:.0%} of their frame")
         if len(maps) < 20:
             continue
-        if mean[centre] < 1.15:
+        if mean[center] < 1.15:
             findings.warn(f"{split}: {kind} labels are barely busier than the floor around them "
-                          f"({mean[centre]:.2f}x); look at the flat_label preview to see whether "
+                          f"({mean[center]:.2f}x); look at the flat_label preview to see whether "
                           f"they mark objects at all")
-        if np.linalg.norm(offsets_m[best]) >= 0.06 and mean[best] > 1.1 * mean[centre]:
+        if np.linalg.norm(offsets_m[best]) >= 0.06 and mean[best] > 1.1 * mean[center]:
             findings.warn(
                 f"{split}: {kind} labels are most salient {np.linalg.norm(offsets_m[best]) * 100:.0f}cm "
                 f"away from where they sit ({offsets_m[best][0] * 100:+.0f}, "
@@ -517,7 +517,7 @@ def audit_images(rows, findings, split, seed):
 
 
 def unmatched(points_a, points_b, tol_m):
-    """How many of points_a have no point of points_b within tol_m (room metres, xy)."""
+    """How many of points_a have no point of points_b within tol_m (room meters, xy)."""
     if not len(points_a):
         return 0
     if not len(points_b):
@@ -568,7 +568,7 @@ def audit_duplicates(rows, findings):
     for i, j in pairs:
         parent[find(i)] = find(j)
 
-    print(f"\n{'=' * 78}\nsame picture (no local difference over {SAME_PICTURE_PEAK:g} grey "
+    print(f"\n{'=' * 78}\nsame picture (no local difference over {SAME_PICTURE_PEAK:g} gray "
           f"levels at {SIGNATURE_FINE}x{SIGNATURE_FINE})\n{'=' * 78}")
     print("   distinct pictures per producer, which is what the frame counts are really worth:")
     for kind in sorted({r.kind for r in have}):
@@ -608,25 +608,25 @@ def audit_duplicates(rows, findings):
             if unmatched(partial.contacts, complete.contacts, AGREE_M):
                 unconfirmed += 1
                 note = f"grasp not among {complete.split}/{complete.name}'s {len(complete.points)} targets"
-                partial.flag("grasp_not_labelled", note)
+                partial.flag("grasp_not_labeled", note)
                 partial.partner = complete
 
     if agreements:
         total = sum(n for n, _ in agreements)
         missing = sum(m for _, m in agreements)
-        print(f"   {len(agreements)} pair(s) of complete frames labelled twice: {disagreements} "
+        print(f"   {len(agreements)} pair(s) of complete frames labeled twice: {disagreements} "
               f"disagree, {missing} of {total} targets have no partner within "
               f"{AGREE_M * 100:.0f}cm")
         if disagreements:
             findings.warn(
-                f"{disagreements} of {len(agreements)} twice-labelled pictures disagree by at "
+                f"{disagreements} of {len(agreements)} twice-labeled pictures disagree by at "
                 f"least one target. Those are exactly the frames the head treats as ground "
                 f"truth for negatives; see the label_disagreement sheet.")
         if contradictions:
-            findings.fail(f"{contradictions} picture(s) are labelled empty once and with "
+            findings.fail(f"{contradictions} picture(s) are labeled empty once and with "
                           f"targets once")
     if teleop_checked:
-        print(f"   {teleop_checked} teleop frame(s) also appear hand-labelled; in "
+        print(f"   {teleop_checked} teleop frame(s) also appear hand-labeled; in "
               f"{unconfirmed} the grasped spot has no hand label within {AGREE_M * 100:.0f}cm")
         if gaps:
             dist = np.array([g for g, _ in gaps]) * 100
@@ -638,9 +638,9 @@ def audit_duplicates(rows, findings):
                     print(f"     {name:18s} n={len(sub):4d} median {np.median(sub):5.1f}cm")
         if unconfirmed:
             findings.warn(
-                f"{unconfirmed} of {teleop_checked} teleop frames that were also hand-labelled "
-                f"have their grasp point outside every hand label. Either the labeller missed "
-                f"the object or the contact position is off; see the grasp_not_labelled sheet.")
+                f"{unconfirmed} of {teleop_checked} teleop frames that were also hand-labeled "
+                f"have their grasp point outside every hand label. Either the labeler missed "
+                f"the object or the contact position is off; see the grasp_not_labeled sheet.")
 
 
 # ==========================================
@@ -654,7 +654,7 @@ def audit_leakage(by_split, findings):
     evals = by_split["eval"]
     shared = [r for r in evals if r.group in trained]
     print(f"\n{'=' * 78}\ntrain vs eval\n{'=' * 78}")
-    print(f"   {len(shared)} of {len(evals)} eval frames share an episode or labelling run "
+    print(f"   {len(shared)} of {len(evals)} eval frames share an episode or labeling run "
           f"with train")
     for kind in sorted({r.kind for r in evals}):
         sub = [r for r in evals if r.kind == kind]
@@ -673,11 +673,11 @@ def draw_tile(row, image_bytes, note, partner=None):
     scale = PREVIEW_TILE / max(w, h)
     tile = cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
     # The partner's labels in magenta, under this row's own in green.
-    for points, colour in (((partner.points if partner else []), (255, 0, 255)), (row.points, (0, 255, 0))):
+    for points, color in (((partner.points if partner else []), (255, 0, 255)), (row.points, (0, 255, 0))):
         for u, v in points:
             p = (int(round(u * scale)), int(round(v * scale)))
-            cv2.circle(tile, p, 10, colour, 2)
-            cv2.drawMarker(tile, p, colour, cv2.MARKER_CROSS, 8, 1)
+            cv2.circle(tile, p, 10, color, 2)
+            cv2.drawMarker(tile, p, color, cv2.MARKER_CROSS, 8, 1)
     canvas = np.zeros((PREVIEW_TILE + 36, PREVIEW_TILE, 3), np.uint8)
     canvas[:tile.shape[0], :tile.shape[1]] = tile
     for k, text in enumerate((f"{row.split}/{row.name}", note[:52])):
@@ -730,7 +730,7 @@ def write_previews(root, by_split, preview_dir, per_reason, seed):
             if blob is None:
                 continue
             note = "; ".join(r.notes) or f"{r.kind}, {len(r.points)} target(s)"
-            partner = r.partner if sheet in ("grasp_not_labelled", "label_disagreement") else None
+            partner = r.partner if sheet in ("grasp_not_labeled", "label_disagreement") else None
             tiles.append(draw_tile(r, blob, note, partner))
         if tiles:
             cv2.imwrite(str(preview_dir / f"{sheet}.jpg"), contact_sheet(tiles))
@@ -754,7 +754,7 @@ def write_previews(root, by_split, preview_dir, per_reason, seed):
           f"to {preview_dir}")
 
 
-def summarise_flags(rows, split):
+def summarize_flags(rows, split):
     counts = Counter(x for r in rows for x in r.reasons)
     if not counts:
         return
@@ -817,7 +817,7 @@ def main():
     if not args.labels_only:
         audit_duplicates(everything, findings)
     for split, rows in by_split.items():
-        summarise_flags(rows, split)
+        summarize_flags(rows, split)
     audit_leakage(by_split, findings)
     if args.preview_dir:
         write_previews(root, by_split, args.preview_dir, args.preview_count, args.seed)

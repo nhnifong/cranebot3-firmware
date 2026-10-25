@@ -334,7 +334,7 @@ def read_rows(split_dir: Path):
 
 
 def sample_group(sample):
-    """What a row's near-duplicates share: its episode, or its labelling run."""
+    """What a row's near-duplicates share: its episode, or its labeling run."""
     if not is_complete(sample):
         return ("episode", int(sample["episode_index"]))
     # Everything up to the last field is the run: user-<source>-<episode>-<offset> from the
@@ -370,7 +370,7 @@ def split_pool(output_root, eval_fraction=0.1, seed=0):
     trained = {sample_group(r) for r in picked["train"]}
     shared = sum(1 for r in picked["eval"] if sample_group(r) in trained)
     logging.info(
-        f"{shared} of {len(picked['eval'])} eval frame(s) come from an episode or labelling run "
+        f"{shared} of {len(picked['eval'])} eval frame(s) come from an episode or labeling run "
         f"that also appears in train, so they are near-duplicates of something trained on; see "
         f"split_pool for what that makes the eval numbers mean")
     return len(picked["train"]), len(picked["eval"])
@@ -564,7 +564,7 @@ def resize_rows(rows, size):
 
 # The same picture stored twice: close at SIGNATURE_THUMB to find candidates, then confirmed
 # by the largest local difference at SIGNATURE_FINE. A mean hides one moved object; the local
-# peak is ~2 grey levels for a re-encoded frame and 80+ once anything has moved.
+# peak is ~2 gray levels for a re-encoded frame and 80+ once anything has moved.
 SIGNATURE_THUMB = 32
 SIGNATURE_FINE = 128
 CANDIDATE_RMS = 4.0
@@ -572,7 +572,7 @@ SAME_PICTURE_PEAK = 12.0
 
 
 def picture_signature(gray):
-    """(coarse, fine) grey copies of a frame, for same_picture_pairs."""
+    """(coarse, fine) gray copies of a frame, for same_picture_pairs."""
     fine = cv2.resize(gray, (SIGNATURE_FINE, SIGNATURE_FINE), interpolation=cv2.INTER_AREA)
     coarse = cv2.resize(fine, (SIGNATURE_THUMB, SIGNATURE_THUMB), interpolation=cv2.INTER_AREA)
     return coarse.astype(np.float64).ravel(), fine.astype(np.float32)
@@ -593,11 +593,11 @@ def same_picture_pairs(signatures, others=None):
     if not signatures or not others:
         return []
 
-    def centred(sigs):
+    def centered(sigs):
         coarse = np.stack([s[0] for s in sigs])
         return coarse - coarse.mean(axis=1, keepdims=True)
 
-    a, b = centred(signatures), centred(others)
+    a, b = centered(signatures), centered(others)
     sq_a, sq_b = (a ** 2).sum(axis=1), (b ** 2).sum(axis=1)
     limit = (CANDIDATE_RMS ** 2) * a.shape[1]
     pairs = []
@@ -620,8 +620,8 @@ def same_picture_pairs(signatures, others=None):
 GRASP_AGREE_M = 0.10
 
 
-def drop_superseded_rows(split_dir: Path, labelled_rows):
-    """Delete distilled rows that show the same picture as a hand-labelled row.
+def drop_superseded_rows(split_dir: Path, labeled_rows):
+    """Delete distilled rows that show the same picture as a hand-labeled row.
 
     Both label the same frame, and the hand label is the complete one: it marks the grasped
     object and every other, where the distilled row marks only the grasp and trains the rest
@@ -630,10 +630,10 @@ def drop_superseded_rows(split_dir: Path, labelled_rows):
     """
     import pyarrow as pa
 
-    labelled = [r for r in labelled_rows if is_complete(r)]
-    if not labelled:
+    labeled = [r for r in labeled_rows if is_complete(r)]
+    if not labeled:
         return 0, 0
-    label_sigs = [jpeg_signature(r["image"]) for r in labelled]
+    label_sigs = [jpeg_signature(r["image"]) for r in labeled]
 
     dropped, disputed, episodes = 0, 0, set()
     for shard in sorted(split_dir.glob("shard-*.parquet")):
@@ -651,7 +651,7 @@ def drop_superseded_rows(split_dir: Path, labelled_rows):
             continue
         for index, j in matches.items():
             grasp = np.asarray(rows[index]["contacts_m"], dtype=float).reshape(-1, 3)[:, :2]
-            hand = np.asarray(labelled[j]["contacts_m"], dtype=float).reshape(-1, 3)[:, :2]
+            hand = np.asarray(labeled[j]["contacts_m"], dtype=float).reshape(-1, 3)[:, :2]
             if len(grasp) and (not len(hand) or np.linalg.norm(hand - grasp[0], axis=1).min() > GRASP_AGREE_M):
                 disputed += 1
             episodes.add(rows[index]["episode_index"])
@@ -665,7 +665,7 @@ def drop_superseded_rows(split_dir: Path, labelled_rows):
 
     if dropped:
         logging.info(f"Dropped {dropped} distilled frame(s) from {len(episodes)} episode(s) that "
-                     f"show the same picture as a hand-labelled one; in {disputed} of them the "
+                     f"show the same picture as a hand-labeled one; in {disputed} of them the "
                      f"grasp is more than {GRASP_AGREE_M * 100:.0f}cm from every hand label")
     return dropped, disputed
 
@@ -920,7 +920,7 @@ def translate(img, u, v, max_px: int, rng):
 # ==========================================
 
 # Labels kept per frame, padded so the default collate can stack them. Above the densest
-# hand-labelled frame, since a dropped target in a complete frame trains as floor.
+# hand-labeled frame, since a dropped target in a complete frame trains as floor.
 MAX_TARGETS = 64
 
 

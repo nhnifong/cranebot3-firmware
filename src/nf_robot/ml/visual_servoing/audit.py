@@ -94,16 +94,16 @@ def histogram_line(values, bins, low, high, width=40):
 def audit_axis(table, findings, split, by_source):
     """The grasp axis head: how many labels, how concentrated, and per producer."""
     axis = column(table, "grasp_axis_rad")
-    labelled = np.array([a for a in axis if a is not None], dtype=float)
-    print(f"\n-- grasp_axis_rad: {len(labelled)}/{len(axis)} labelled "
-          f"({len(labelled) / max(len(axis), 1):.1%})")
-    if not len(labelled):
+    labeled = np.array([a for a in axis if a is not None], dtype=float)
+    print(f"\n-- grasp_axis_rad: {len(labeled)}/{len(axis)} labeled "
+          f"({len(labeled) / max(len(axis), 1):.1%})")
+    if not len(labeled):
         findings.fail(f"{split}: no grasp axis labels at all; that head trains on nothing")
         return
 
-    degrees = np.degrees(labelled)
+    degrees = np.degrees(labeled)
     near_zero = float(np.mean(np.abs(degrees) < 5.0))
-    resultant, mean_deg = circular_summary(labelled)
+    resultant, mean_deg = circular_summary(labeled)
     print(f"   std {degrees.std():.1f} deg   within 5 deg of zero: {near_zero:.1%}")
     print(f"   concentration R {resultant:.3f}; the best constant prediction is "
           f"{mean_deg:+.2f} deg")
@@ -139,13 +139,13 @@ def audit_flags(table, findings, split):
     """The two probability heads, which are only as good as having both classes."""
     for name, key in (("target_present", "target_present"), ("holding", "holding")):
         values = column(table, key)
-        labelled = [v for v in values if v is not None]
-        positives = sum(1 for v in labelled if v)
-        negatives = len(labelled) - positives
-        print(f"\n-- {name}: {len(labelled)}/{len(values)} labelled "
-              f"({len(labelled) / max(len(values), 1):.1%}), "
+        labeled = [v for v in values if v is not None]
+        positives = sum(1 for v in labeled if v)
+        negatives = len(labeled) - positives
+        print(f"\n-- {name}: {len(labeled)}/{len(values)} labeled "
+              f"({len(labeled) / max(len(values), 1):.1%}), "
               f"{positives} positive / {negatives} negative")
-        if not labelled:
+        if not labeled:
             findings.warn(f"{split}: {name} has no labels; that head trains on nothing")
         elif not negatives:
             findings.fail(
@@ -164,24 +164,24 @@ def audit_flags(table, findings, split):
 
 
 def audit_position(table, findings, split):
-    """Where the targets are, and whether they sit off-centre as a body."""
+    """Where the targets are, and whether they sit off-center as a body."""
     uv = [v for v in column(table, "target_uv") if v is not None]
     total = table.num_rows
-    print(f"\n-- target_uv: {len(uv)}/{total} labelled ({len(uv) / max(total, 1):.1%})")
+    print(f"\n-- target_uv: {len(uv)}/{total} labeled ({len(uv) / max(total, 1):.1%})")
     if not uv:
         findings.fail(f"{split}: no position labels at all")
         return
     array = np.array(uv, dtype=float)
-    centred = array - 0.5
+    centered = array - 0.5
     off_frame = np.mean((array < 0) | (array > 1), axis=0)
     print(f"   mean {array.mean(axis=0).round(3)}  std {array.std(axis=0).round(3)}")
     print(f"   off the visible frame: u {off_frame[0]:.1%}, v {off_frame[1]:.1%}")
-    print(f"   signed offset from centre: u {centred[:, 0].mean():+.3f}, "
-          f"v {centred[:, 1].mean():+.3f} (frame widths)")
+    print(f"   signed offset from center: u {centered[:, 0].mean():+.3f}, "
+          f"v {centered[:, 1].mean():+.3f} (frame widths)")
     # Compare this against the model's mean prediction when chasing a systematic lean.
-    if abs(centred[:, 0].mean()) > UV_BIAS_WARN:
+    if abs(centered[:, 0].mean()) > UV_BIAS_WARN:
         findings.warn(
-            f"{split}: position labels lean {centred[:, 0].mean():+.3f} frame widths in u. "
+            f"{split}: position labels lean {centered[:, 0].mean():+.3f} frame widths in u. "
             f"Horizontal has no mount offset to explain it, so this is either a real bias "
             f"in the labels or an unbalanced set of approaches.")
 
@@ -194,7 +194,7 @@ def audit_position(table, findings, split):
 def audit_finger(table, findings, split):
     finger = [f for f in column(table, "finger") if f is not None]
     total = table.num_rows
-    print(f"\n-- finger: {len(finger)}/{total} labelled ({len(finger) / max(total, 1):.1%})")
+    print(f"\n-- finger: {len(finger)}/{total} labeled ({len(finger) / max(total, 1):.1%})")
     if not finger:
         findings.warn(f"{split}: finger has no labels; that head trains on nothing")
         return

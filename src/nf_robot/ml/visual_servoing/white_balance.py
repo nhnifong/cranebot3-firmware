@@ -1,14 +1,14 @@
 """White balance for the synthetic frame ingredients: neutralize each plate, then re-light
-finished frames at a random colour temperature."""
+finished frames at a random color temperature."""
 
 import numpy as np
 
 # Minkowski norm for the illuminant estimate, between gray-world (1) and white-patch (inf).
-SHADES_OF_GREY_P = 6
+SHADES_OF_GRAY_P = 6
 # Estimate from every Nth pixel.
 ESTIMATE_PIXEL_STEP = 4
 
-# Colour temperatures to re-light finished frames at, in Kelvin.
+# Color temperatures to re-light finished frames at, in Kelvin.
 KELVIN_RANGE = (3000.0, 7500.0)
 # Green-magenta tint, the axis fluorescent and LED lighting sits off the blackbody curve.
 TINT_RANGE = 0.05
@@ -42,7 +42,7 @@ def apply_gains(image, gains):
 
 
 def estimate_illuminant(images, alpha_min=1):
-    """The illuminant these images were shot under, a shades-of-grey estimate in linear
+    """The illuminant these images were shot under, a shades-of-gray estimate in linear
     light normalized to green."""
     totals = np.zeros(3, dtype=np.float64)
     count = 0
@@ -54,11 +54,11 @@ def estimate_illuminant(images, alpha_min=1):
         if not len(pixels):
             continue
         linear = _srgb_to_linear(pixels.astype(np.float64) / 255.0)
-        totals += np.sum(linear ** SHADES_OF_GREY_P, axis=0)
+        totals += np.sum(linear ** SHADES_OF_GRAY_P, axis=0)
         count += len(pixels)
     if not count:
         return np.ones(3)
-    illuminant = (totals / count) ** (1 / SHADES_OF_GREY_P)
+    illuminant = (totals / count) ** (1 / SHADES_OF_GRAY_P)
     return illuminant / illuminant[1]
 
 
@@ -67,7 +67,7 @@ def neutralize_gains(illuminant):
 
 
 def kelvin_rgb(kelvin):
-    """Approximate RGB of a blackbody radiator at `kelvin`, normalised to green."""
+    """Approximate RGB of a blackbody radiator at `kelvin`, normalized to green."""
     t = float(np.clip(kelvin, 1000.0, 40000.0)) / 100.0
     if t <= 66:
         red = 255.0

@@ -31,7 +31,7 @@ class of failure that costs a whole training run.
 
 ## Preview without mining (`--preview_only`)
 
-The loop to iterate on labelling in. Every frame is labelled exactly as a real run would
+The loop to iterate on labeling in. Every frame is labeled exactly as a real run would
 label it, a random `--preview_count` of the rows survive, and only those frames are
 decoded:
 
@@ -54,7 +54,7 @@ frames, so between two runs the labels are the only thing that moved.
 
     python -m nf_robot.ml.visual_servoing.label_video \
         --root datasets/chuck-aug28 \
-        --output_dir datasets/labelling_test/label_video
+        --output_dir datasets/labeling_test/label_video
 
 One mp4 per episode, named for it, at the recording's native frame size rather than the
 mined 448x252 - the question here is where the mark goes, and more pixels make that easier
@@ -68,7 +68,7 @@ that makes it worth watching.
 Two things it shows that the stills do not:
 
 - **The whole episode**, not the mined window. The window is marked in the caption and the
-  mark turns from green to grey outside it, but every frame is rendered, so the approach
+  mark turns from green to gray outside it, but every frame is rendered, so the approach
   before training's window and the carry after it are both visible.
 - **The mark's own history**, as a fading trail of the last `TRAIL_FRAMES` (60, two
   seconds at 30fps). A slow drift reads as a curve across the frame and as nothing at all
@@ -95,14 +95,14 @@ Ideally the mark is pinned to the object all the way down.
 However, under the current methods, the mark usually deviates signifigantly and shows the following patterns.
 
 1. A constant offset, usually vertical in frame
-2. A lot of waving around. probably due to unaccounted for swing or poorly modelled swing.
+2. A lot of waving around. probably due to unaccounted for swing or poorly modeled swing.
 3. Video Latency
 4. when the gripper touches the ground, huge positional errors are introduces from some lines going slack and causing flipping between various hang points feeding the position estimator. Fixed very recently and the fix is observable in the later episodes of naavox/nick-sep14
 
 ## Choosing how uv is decided (`--uv_method`)
 
 Three of those four patterns are properties of one input - the gripper position
-`Positioner2` reported at record time - and not of the labelling. So the labelling now has
+`Positioner2` reported at record time - and not of the labeling. So the labeling now has
 a choice of what to trust, and `mine_teleop` and `label_video` take the same flag for it
 and share one implementation in `uv_methods.py`. Rendering one episode under each is the
 way to tell the patterns apart.
@@ -169,7 +169,7 @@ from the lens. Nothing said where the jaws are.
 
 `naavox/red-dot` settles both. One episode: a 15mm red chapstick lid left sitting exactly
 between the fingertips, gripper climbing straight up from 0.11m to 1.0m with the dot
-centred below it. The dot therefore marks the jaw axis at every range, and how its place in
+centered below it. The dot therefore marks the jaw axis at every range, and how its place in
 the frame changes with range separates the two unknowns - the tilt sets where the answers
 converge as the gripper climbs, and the lens-to-jaw offset sets how fast they get there.
 Neither is identifiable from one range, which is why this went unnoticed so long.
@@ -189,7 +189,7 @@ The tilt is wrong in CAD by nearly a factor of three, and its sign was right. Bo
 readings of this file were wrong: the original -9.06 leaned the right way and far too far,
 and the flip to +9.06 leaned the wrong way while landing within 2px of the truth at
 *grasping range*. That is why the flip looked like a clear improvement on mined frames,
-which cluster near the grasp, and fell apart on a descent - at half a metre it is a quarter
+which cluster near the grasp, and fell apart on a descent - at half a meter it is a quarter
 of a frame out.
 
 So where the jaws appear is not a constant. It runs:
@@ -228,7 +228,7 @@ canvas are dropped, and "blind" ones are kept with their position labels masked:
     optical-flow          1833 mined, 1126 dropped,  0 blind
 
 Optical flow's zero is structural rather than good news: it has no answer for a target it
-cannot see, so those frames are dropped instead of being labelled off-canvas.
+cannot see, so those frames are dropped instead of being labeled off-canvas.
 
 The sharper measurement is how far each one sits from the answer the pixels give, in frame
 widths, over 24 episodes. Optical flow is the reference here because it is the only method

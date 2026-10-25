@@ -318,10 +318,10 @@ class TestMineEpisode(unittest.TestCase):
     def test_a_close_approach_keeps_its_position_labels(self):
         result, dropped, blind = self._mine([0.02] * 90)
         self.assertIsNotNone(result)
-        labelled = [r for r in result if r["target_uv"] is not None]
-        self.assertGreater(len(labelled), 0)
+        labeled = [r for r in result if r["target_uv"] is not None]
+        self.assertGreater(len(labeled), 0)
         self.assertEqual(blind, 0)
-        self.assertTrue(all(r["target_present"] == 1 for r in labelled))
+        self.assertTrue(all(r["target_present"] == 1 for r in labeled))
 
     def test_a_target_outside_the_frame_loses_its_position_labels(self):
         """The frame is kept - it is a real picture with the object out of shot - and
@@ -370,7 +370,7 @@ class TestMineEpisode(unittest.TestCase):
             self.assertIsNone(row["target_present"])
 
     def test_carry_frames_are_unchanged(self):
-        """After the grasp the object rides in the jaws; those rows were already unlabelled
+        """After the grasp the object rides in the jaws; those rows were already unlabeled
         for position and are not what the new masking is about.
 
         What they do keep is the labels that describe the gripper rather than where the
@@ -413,7 +413,7 @@ class TestMineEpisode(unittest.TestCase):
 class TestFalseGrabs(unittest.TestCase):
     """A recording where closing the jaws would catch nothing.
 
-    Only two heads can be labelled from that: the close should not begin, and nothing is
+    Only two heads can be labeled from that: the close should not begin, and nothing is
     held. Everything else has to stay masked, and target_present is the one that matters -
     a false grab happens next to graspable things, so claiming the picture is empty would
     teach the target head the opposite of what the frame shows.

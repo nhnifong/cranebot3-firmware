@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"""The basket centering network: one gripper frame in, the move that centres a basket out.
+"""The basket centering network: one gripper frame in, the move that centers a basket out.
 
     input   448x252 RGB from the gripper camera, plus laser_rangefinder, finger_angle and
             target_force, exactly as the visual servoing model takes them
@@ -8,11 +8,11 @@
     trunk   gripper_grid.GripperGridNet, the visual servoing trunk
 
     heads   1. the basket's drop point, 3D, in the gripper camera frame: a softmax over the
-               canvas cells, the centre of mass around the winner, and a log distance per
+               canvas cells, the center of mass around the winner, and a log distance per
                cell - the visual servoing position head, aimed at a basket
-            2. the vertical move to the drop height, metres, from the global vector
+            2. the vertical move to the drop height, meters, from the global vector
 
-The sideways move back to centre is decoded from head 1: where the basket is, less straight
+The sideways move back to center is decoded from head 1: where the basket is, less straight
 below the jaws, by geometry.lateral_return_body, the same function the miner labels with.
 The vertical move is head 2 as it stands, trained on the gantry's height change. Taking it
 as a difference of two depths instead would hang it on the rangefinder, which reads into
@@ -82,7 +82,7 @@ def predict(model, images, state):
 
 
 def return_body_of(uv, distance, rise, calibration=None):
-    """The move back to centre, in the body frame, for decoded (N, 2) uv, (N,) distance and
+    """The move back to center, in the body frame, for decoded (N, 2) uv, (N,) distance and
     (N,) vertical move. Unprojects through the same calibration the miner labels with."""
     from nf_robot.ml.basket.geometry import lateral_return_body
     from nf_robot.ml.visual_servoing.uv_methods import gripper_camera_calibration, unproject
@@ -121,7 +121,7 @@ def load_model(device, local_models=False, revision=None):
 
 
 def predict_frame(model, rgb, state, device, spin):
-    """What one RGB gripper frame says about the basket, with the move to centre it in both
+    """What one RGB gripper frame says about the basket, with the move to center it in both
     the body and room frames; blocking, so call it from a thread."""
     from nf_robot.ml.basket.geometry import body_to_room
     from nf_robot.ml.image_input import input_batch

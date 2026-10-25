@@ -392,7 +392,7 @@ class Positioner2:
 
     def point_inside_work_area_2d(self, point, margin=0.0):
         """True if the horizontal point (x, y) lies within the anchor polygon, and at least
-        margin metres in from its edge."""
+        margin meters in from its edge."""
         if self.work_area is None:
             return True
         # with measureDist, pointPolygonTest returns the signed distance to the nearest

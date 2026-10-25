@@ -2,7 +2,7 @@
 
 """The ortho targeting network: frozen DINOv2 patch tokens -> objectness per floor cell.
 
-    input   448x448 RGB, the ortho floor view: 5m of floor per side, room origin centred
+    input   448x448 RGB, the ortho floor view: 5m of floor per side, room origin centered
 
     trunk   frozen DINOv2 ViT-B/14, last 4 hidden states, patch tokens only
               -> concat on channels                       (B, 3072,  32,  32)
@@ -25,12 +25,12 @@ from nf_robot.ml.dino_trunk import SharedTrunkMixin, load_head_state
 from nf_robot.ml.grid_head import AttentionBlock, attend, local_maxima
 from nf_robot.ml.image_input import input_batch
 
-# Metres of floor the ortho map spans per side, matching host/floor_view.py's EXTENT_M.
+# Meters of floor the ortho map spans per side, matching host/floor_view.py's EXTENT_M.
 ORTHO_EXTENT_M = 5.0
 
 
 def room_to_ortho_px(x_m, y_m, width, height, extent_m=ORTHO_EXTENT_M):
-    """Room-frame metres -> ortho pixel coordinates, mirroring
+    """Room-frame meters -> ortho pixel coordinates, mirroring
     floor_view.generate_orthographic_floor_maps."""
     u = x_m * (width / extent_m) + width / 2.0
     v = -y_m * (height / extent_m) + height / 2.0
@@ -134,7 +134,7 @@ class OrthoTargetNet(SharedTrunkMixin, nn.Module):
 def target_map(cells, mask, grid, sigma):
     """Per-cell objectness target: the max of Gaussian bumps around each label."""
     axis = torch.arange(grid, device=cells.device, dtype=cells.dtype)
-    # cell centres are at +0.5, and a label is a continuous cell coordinate
+    # cell centers are at +0.5, and a label is a continuous cell coordinate
     dx = axis[None, None, :] - (cells[..., 0:1] - 0.5)
     dy = axis[None, None, :] - (cells[..., 1:2] - 0.5)
     gauss = torch.exp(-(dy[..., :, None] ** 2 + dx[..., None, :] ** 2) / (2 * sigma ** 2))
@@ -191,7 +191,7 @@ def dihedral_image(img, t: int):
 
 
 def dihedral_point(u, v, t: int, size: int):
-    """The same symmetry applied to a point, in pixel-centre coordinates."""
+    """The same symmetry applied to a point, in pixel-center coordinates."""
     last = size - 1
     for _ in range(t % 4):
         u, v = v, last - u  # rot90 on dims (-2, -1) is counter-clockwise

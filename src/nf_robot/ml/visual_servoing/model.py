@@ -12,7 +12,7 @@
             self-attention blocks over 576 tokens       (B,  256, 18, 32)
             skip: concat the pre-attention map, 1x1 -> 256 (B,  256, 18, 32)
 
-    heads   1. target position, 3D, in the gripper camera frame: the centre of mass
+    heads   1. target position, 3D, in the gripper camera frame: the center of mass
                of the cell softmax in a window around the winning cell
             2. grasp axis, 2 channels, averaged over that same window
             3. finger speed, scalar in [-1, 1], from the global vector
@@ -67,7 +67,7 @@ class VisualServoNet(GripperGridNet):
 
         # Head 1: one softmax over canvas cells, plus log distance.
         self.logit_head = nn.Conv2d(channels, 1, 1)
-        # Log metres per cell, since objects at different heights have different distances.
+        # Log meters per cell, since objects at different heights have different distances.
         self.distance_head = nn.Conv2d(channels, 1, 1)
         # Head 2: (sin 2t, cos 2t), because the grasp axis is pi-periodic.
         self.axis_head = nn.Conv2d(channels, 2, 1)

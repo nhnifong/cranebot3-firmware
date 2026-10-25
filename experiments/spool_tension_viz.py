@@ -227,7 +227,7 @@ PAGE = r"""<!doctype html>
 <main id="cards"></main>
 <script>
 const NAMES = ["upper (direct)", "lower (indirect)"];
-const MODE_COLOUR = { "floor": "#5aa9ff", "payout floor": "#b48cff", "hold": "#ffaa33", "off": "#6b7380" };
+const MODE_COLOR = { "floor": "#5aa9ff", "payout floor": "#b48cff", "hold": "#ffaa33", "off": "#6b7380" };
 const cards = document.getElementById("cards");
 for (let i = 0; i < 4; i++) {
   cards.insertAdjacentHTML("beforeend", `
@@ -260,9 +260,9 @@ const f = (i, name) => document.querySelector(`#c${i} [data-f="${name}"]`);
 const N = v => v == null ? "–" : v.toFixed(2);
 const TWO_PI = 2 * Math.PI;
 
-function badge(el, text, colour) {
+function badge(el, text, color) {
   el.textContent = text;
-  el.style.color = colour; el.style.borderColor = colour;
+  el.style.color = color; el.style.borderColor = color;
   el.style.display = text ? "" : "none";
 }
 
@@ -317,8 +317,8 @@ function draw(canvas, samples, now, cfg, windowS) {
     g.strokeStyle = "#ffaa33"; g.lineWidth = 1.5;
     g.beginPath(); g.moveTo(x(s.t), y(s.target)); g.lineTo(x(t2), y(s.target)); g.stroke();
   }
-  function series(key, colour, dash) {
-    g.strokeStyle = colour; g.lineWidth = 1.8; g.setLineDash(dash || []);
+  function series(key, color, dash) {
+    g.strokeStyle = color; g.lineWidth = 1.8; g.setLineDash(dash || []);
     g.beginPath(); let on = false;
     for (const s of samples) {
       if (s[key] == null) { on = false; continue; }
@@ -332,7 +332,7 @@ function draw(canvas, samples, now, cfg, windowS) {
   // regulator mode strip
   for (let k = 0; k < samples.length - 1; k++) {
     const s = samples[k];
-    g.fillStyle = MODE_COLOUR[s.mode] || "#2a313c";
+    g.fillStyle = MODE_COLOR[s.mode] || "#2a313c";
     g.fillRect(x(s.t), T + ph + 4, Math.max(1, x(samples[k + 1].t) - x(s.t)), strip);
   }
 }
@@ -354,7 +354,7 @@ function render(d) {
     const diag = s.mode != null;
     const mpr = s.mpr;
     badge(f(i, "mode"), diag ? (s.mode === "off" ? "regulation off" : s.mode) : "no diag",
-          MODE_COLOUR[s.mode] || "#6b7380");
+          MODE_COLOR[s.mode] || "#6b7380");
     if (!diag || s.mode === "off") badge(f(i, "muteb"), "", "");
     else if (!cfg.SOFT_MUTE_ENABLED && s.mute >= 0.999) badge(f(i, "muteb"), "soft mute disabled", "#6b7380");
     else if (s.mute < 0.01) badge(f(i, "muteb"), "soft mute: payout stopped", "#ff5d5d");

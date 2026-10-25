@@ -13,7 +13,7 @@ The segment is defined as:
          the beginning of the unbroken run of frames leading into the grasp during
          which the gripper stayed within `near_radius_m` (horizontally) of the grasp
          position. An episode that never traverses - the gripper was already in the
-         neighbourhood the whole time - simply starts at frame 0, so "if there is any
+         neighborhood the whole time - simply starts at frame 0, so "if there is any
          traversal" needs no special case.
 
   end    The first frame after the grasp at which the gripper has risen
@@ -57,12 +57,12 @@ from pathlib import Path
 
 import numpy as np
 
-# (metres) how close to the eventual grasp point the gripper must be, horizontally,
+# (meters) how close to the eventual grasp point the gripper must be, horizontally,
 # to count as "arrived". Chosen from the sensitivity of real move_clutter episodes:
 # below ~0.2 m the start creeps forward into the grasp itself, and by ~1.0 m most
 # episodes start at frame 0 because the whole traversal falls inside the radius.
 NEAR_RADIUS_M = 0.3
-# (metres) how far the gripper must climb above the grasp height to call it lifted.
+# (meters) how far the gripper must climb above the grasp height to call it lifted.
 RISE_M = 0.10
 # (seconds) how much of the carry to keep after the lift, so the episode doesn't end
 # the instant the object clears its resting place. Clipped to the episode's own end.
@@ -115,7 +115,7 @@ def grasp_window(
 ) -> tuple[tuple[int, int] | None, str]:
     """Find one episode's grasp segment.
 
-    pressure is (N,) finger_pressure, pos is (N, 3) gripper position in metres.
+    pressure is (N,) finger_pressure, pos is (N, 3) gripper position in meters.
     Returns ((start, end) inclusive, "ok") or (None, reason).
     """
     n = len(pressure)
@@ -133,7 +133,7 @@ def grasp_window(
     end = grasp + int(risen[0]) + max(0, int(round(post_lift_seconds * fps)))
     end = min(end, n - 1)
 
-    # Walk back from the grasp for as long as the gripper stayed in the neighbourhood.
+    # Walk back from the grasp for as long as the gripper stayed in the neighborhood.
     # Hitting frame 0 means the episode had no traversal to trim.
     near = np.linalg.norm(pos[:, :2] - grasp_pos[:2], axis=1) <= near_radius_m
     start = grasp

@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-# Cells either side of the winner whose softmax centre of mass gives the sub-cell position.
+# Cells either side of the winner whose softmax center of mass gives the sub-cell position.
 CENTROID_RADIUS = 2
 
 
@@ -74,7 +74,7 @@ def gather_cells(maps, index):
 
 
 def local_centroid(logits, index, radius=CENTROID_RADIUS):
-    """Centre of mass of the cell softmax in a window around one cell per batch item, as
+    """Center of mass of the cell softmax in a window around one cell per batch item, as
     (cell, weights, window)."""
     batch, rows, cols = logits.shape
     steps = torch.arange(-radius, radius + 1, device=logits.device)
@@ -86,8 +86,8 @@ def local_centroid(logits, index, radius=CENTROID_RADIUS):
     window = cy.clamp(0, rows - 1) * cols + cx.clamp(0, cols - 1)
     local = logits.flatten(1).gather(1, window).masked_fill(~valid, float("-inf"))
     weights = local.softmax(dim=1)
-    centres = torch.stack([cx, cy], dim=-1).to(logits.dtype) + 0.5
-    return (weights.unsqueeze(-1) * centres).sum(dim=1), weights, window
+    centers = torch.stack([cx, cy], dim=-1).to(logits.dtype) + 0.5
+    return (weights.unsqueeze(-1) * centers).sum(dim=1), weights, window
 
 
 def window_average(maps, weights, window):
@@ -107,7 +107,7 @@ def masked_mean(values, mask):
 
 
 def soft_cell_target(cell, grid, sigma):
-    """A normalized Gaussian over the cell grid centred on the true position."""
+    """A normalized Gaussian over the cell grid centered on the true position."""
     rows, cols = grid
     xs = torch.arange(cols, device=cell.device, dtype=cell.dtype).view(1, 1, cols) + 0.5
     ys = torch.arange(rows, device=cell.device, dtype=cell.dtype).view(1, rows, 1) + 0.5

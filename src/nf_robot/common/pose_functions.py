@@ -61,7 +61,7 @@ def compose_poses(poses):
     return rvec_global.reshape((3,)), tvec_global
 
 # Tilt the arpeggio anchor model has its camera at. A config's cam_tilt records what
-# the anchor was actually set to, and the difference rotates the modelled camera onto it.
+# the anchor was actually set to, and the difference rotates the modeled camera onto it.
 ARP_CAMERA_MODEL_TILT_DEG = 22.0
 
 

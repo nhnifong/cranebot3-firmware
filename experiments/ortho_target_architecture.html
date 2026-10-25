@@ -53,7 +53,7 @@ function el(tag, attrs, text) {
   return e;
 }
 
-// A block: bold title plus optional detail lines, centred. "" in subs is a spacer.
+// A block: bold title plus optional detail lines, centered. "" in subs is a spacer.
 function box(x, y, w, h, kind, title, subs = [], opt = {}) {
   const ts = opt.titleSize || 24, tl = opt.titleLine || 30;
   const ss = opt.subSize || 20, sl = opt.subLine || 25;
@@ -113,7 +113,7 @@ el("text", { x: 16, y: 60, "font-size": 44, "font-weight": 800 }, "Ortho target 
     return x + 38 + label.getComputedTextLength() + 40;
   }, 700);
 
-// The diagram is shorter than the page; centre it under the title.
+// The diagram is shorter than the page; center it under the title.
 parent = el("g", { transform: "translate(0, 45)" });
 
 // Five rows every column shares.

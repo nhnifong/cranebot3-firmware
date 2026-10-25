@@ -32,7 +32,7 @@ Which merge is right is an open question; nothing here has been ablated.
 ## Reading out the position
 
 As in visual servoing: softmax over the 1024 cells, take the winning cell, and the answer
-is the centre of mass of the softmax in a 2-cell window around it. A cell is 5m / 32 =
+is the center of mass of the softmax in a 2-cell window around it. A cell is 5m / 32 =
 15.6cm of floor, so the sub-cell centroid is what puts the answer inside the container
 rather than merely on it. `top_k > 1` suppresses everything that is not a local maximum
 first, so several candidate drop points come back as distinct places.
@@ -51,7 +51,7 @@ gripper camera hangs one way up. Both get photometric jitter.
 ## Scoring
 
 Error is the distance from the predicted drop point to the one the operator used, in
-centimetres of floor. Reported as `median_cm`, `mean_cm`, recall inside 15/30/60cm, and
+centimeters of floor. Reported as `median_cm`, `mean_cm`, recall inside 15/30/60cm, and
 `top3@30cm`, which asks whether any of three candidates was right.
 
 Two guards against fooling yourself, both printed by a run:

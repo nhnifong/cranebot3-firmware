@@ -84,9 +84,9 @@ def video_path(root: Path, camera_key: str, chunk: int, file_index: int) -> Path
 
 
 def _fit(frame: np.ndarray, size: int) -> np.ndarray:
-    """Center-crop to square then nearest-neighbour scale to size x size.
+    """Center-crop to square then nearest-neighbor scale to size x size.
 
-    Nearest-neighbour keeps this dependency-light; at mosaic tile sizes the
+    Nearest-neighbor keeps this dependency-light; at mosaic tile sizes the
     difference from a smooth resize is invisible.
     """
     h, w = frame.shape[:2]

@@ -140,10 +140,10 @@ def ImageProcessing(n_boards, board_w, board_h, board_dim):
 
     
         #Converting to grayscale
-        grey_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        gray_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
 
         #Find chessboard corners
-        found, corners = cv2.findChessboardCorners(grey_image, (board_w,board_h),cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE)
+        found, corners = cv2.findChessboardCorners(gray_image, (board_w,board_h),cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE)
         print(found)
 
         if found == True:
@@ -152,7 +152,7 @@ def ImageProcessing(n_boards, board_w, board_h, board_dim):
             opts.append(objp)
 
             #Improve the accuracy of the checkerboard corners found in the image and save them to the ipts variable.
-            cv2.cornerSubPix(grey_image, corners, (20, 20), (-1, -1), criteria)
+            cv2.cornerSubPix(gray_image, corners, (20, 20), (-1, -1), criteria)
             ipts.append(corners)
 
             #Draw chessboard corners
@@ -171,7 +171,7 @@ def ImageProcessing(n_boards, board_w, board_h, board_dim):
     #Calibrate the camera
     print('Running Calibrations...')
     print(' ')
-    ret, intrinsic_matrix, distCoeff, rvecs, tvecs = cv2.calibrateCamera(opts, ipts, grey_image.shape[::-1],None,None)
+    ret, intrinsic_matrix, distCoeff, rvecs, tvecs = cv2.calibrateCamera(opts, ipts, gray_image.shape[::-1],None,None)
 
     #Save matrices
     print('Intrinsic Matrix: ')

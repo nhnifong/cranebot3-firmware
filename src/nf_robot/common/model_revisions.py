@@ -5,7 +5,7 @@
 hf_hub_download with no revision re-resolves the tip of main on every start, so publishing
 a checkpoint would change what every robot in the field runs at its next restart - no
 version bump, nothing in the logs, and no way back without knowing which commit the old
-behaviour was. The pins live in model_revisions.json beside this module so that bumping one
+behavior was. The pins live in model_revisions.json beside this module so that bumping one
 is a data change that shows up in a diff as a data change.
 
 Write them with `python -m nf_robot.ml.pin_latest_model`, which is the step after

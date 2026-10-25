@@ -44,7 +44,7 @@ _DEFAULT_LEROBOT_REF = "public"
 # ---------------------------------------------------------------------------
 # Parse Modal-specific flags at import time so they can be baked into the
 # @app.function decorator (Modal 1.x removed with_options).
-# parse_known_args is used so unrecognised lerobot-train args are ignored here.
+# parse_known_args is used so unrecognized lerobot-train args are ignored here.
 # ---------------------------------------------------------------------------
 _modal_parser = argparse.ArgumentParser(add_help=False)
 _modal_parser.add_argument("--gpu_type", default="H200")

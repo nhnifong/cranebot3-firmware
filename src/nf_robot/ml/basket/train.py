@@ -40,7 +40,7 @@ def basket_loss(outputs, batch, grid, cell_sigma=CELL_SIGMA):
     parts, _, _ = position_losses(
         outputs["logits"], outputs["log_distance"], batch["target_uv"],
         batch["target_range_m"], batch["has_uv"], grid, cell_sigma)
-    # Metres, Huber at 5cm: the vertical moves run to half a metre either way.
+    # Meters, Huber at 5cm: the vertical moves run to half a meter either way.
     parts["rise"], _ = masked_mean(
         F.smooth_l1_loss(outputs["rise"], batch["return_body"][:, 2], reduction="none",
                          beta=0.05), batch["has_uv"])

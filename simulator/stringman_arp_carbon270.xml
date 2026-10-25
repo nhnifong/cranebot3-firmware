@@ -42,7 +42,7 @@
     <rgba haze="0.15 0.25 0.35 1"/>
     <global azimuth="140" elevation="-20" offwidth="1920" offheight="1080"/>
     <!--
-      znear and zfar are fractions of the model extent, not metres. The default 0.02 put
+      znear and zfar are fractions of the model extent, not meters. The default 0.02 put
       the near plane 120 mm from the lens, and the gripper's own fingertips sit 41 to 82
       mm from its camera, so they fell inside it and the palm camera saw straight past
       its own fingers. mujoco_bridge pins this to a few mm at load so it stays right
@@ -86,7 +86,7 @@
     <!--
       Geometry extracted from playroom-ui/public/assets/playroom/models/*.glb by walking
       the glTF node hierarchy, baking each node's world transform into the vertices and
-      welding duplicates. Metres, and already in the frame of the body that uses them:
+      welding duplicates. Meters, and already in the frame of the body that uses them:
       the gripper meshes in the definitions.py gripper frame, each finger about its own
       pivot, the gantry body in gantry.glb's own y-up frame (turned upright at its geom).
     -->
@@ -132,7 +132,7 @@
       plate, so the plate is 10/8 of the marker size for the black square to come out at
       0.169 m:  0.169 * 10/8 = 0.21125, half-extent 0.105625.
 
-      The origin card sits at the room centre, with the three assist cards on a 1.5 m
+      The origin card sits at the room center, with the three assist cards on a 1.5 m
       circle around it 120 deg apart.
 
       Visual only, via class "viz": a 1 mm plate lying on the floor is something for the
@@ -148,7 +148,7 @@
           size="0.105625 0.105625 0.0005" pos="1.29904 -0.75 0.0005"/>
 
     <!--
-      ANCHOR 0 at (2, 2, 2), yaw -pi/4 (facing the room centre).
+      ANCHOR 0 at (2, 2, 2), yaw -pi/4 (facing the room center).
       Eyelet sites are configuration.anchors[].pose composed with
       definitions.arp_anchor_right_eyelet / arp_anchor_left_eyelet, evaluated to world.
     -->
@@ -256,7 +256,7 @@
         the tag square of gantry_tex.png:
 
           91.5 x 91.5 mm, 14.0 mm thick, dead flat (0.00 mm out of plane)
-          centre 37.0 mm below the gantry origin, on the vertical axis
+          center 37.0 mm below the gantry origin, on the vertical axis
           faces normal to +/-(0.707, 0, 0.707) in the GLB frame, i.e. horizontal and at
             45 deg to that file's axes - so the card looks out along a diagonal
 
@@ -264,7 +264,7 @@
         solvePnP is given for this tag (the separate 0.94 GLOBAL_MARKER_SIZE_BIAS is a
         scale fudge, not a dimension).
 
-        The site below just marks the card's centre and plane for inspection; the tag you
+        The site below just marks the card's center and plane for inspection; the tag you
         see is the mesh.
 
         DISAGREEMENT WITH definitions.py, worth knowing about: gantry_flat_april puts this
@@ -275,7 +275,7 @@
         definitions gantry frame is z-up while the gripper frame is y-up. Only the offset
         is in dispute. This model follows the GLB. If definitions.py is the number the
         vision stack actually calibrates against, that 28 mm is a real bias worth
-        chasing down rather than a modelling detail.
+        chasing down rather than a modeling detail.
       -->
       <site name="gantry_marker" pos="0 0 -0.037" euler="0 0 -0.7853981634"
             size="0.007 0.04575 0.04575" type="box" rgba="1 0.9 0.2 0.25"/>
@@ -285,7 +285,7 @@
 
       <!--
         Line attachment points: the four arms of the cross on top of the marker card,
-        55 mm out from the centre on the diagonals. Both numbers are in gantry.glb - the
+        55 mm out from the center on the diagonals. Both numbers are in gantry.glb - the
         top component's arms reach r = 0.0563 m and their azimuths cluster at +/-45 and
         +/-135 deg - so unlike the earlier version of this file, the spread here is real
         hardware rather than a fudge invented to give the gantry yaw stiffness.
@@ -363,7 +363,7 @@
               euler="1.5707963268 0 0"/>
         <!--
           Wide camera, definitions.gripper_camera: 27 mm toward the nose, aimed down but
-          tilted 9.06 deg back toward the hang centreline. MuJoCo cameras look down local
+          tilted 9.06 deg back toward the hang centerline. MuJoCo cameras look down local
           -z, so -pi/2 puts the axis along -y (straight down) and the extra -9.06 deg
           leans it back: -(pi/2 + radians(9.06)) = -1.728957.
 
@@ -460,7 +460,7 @@
     the gantry toward its anchor but never push: commanding more length than the
     geometry needs just goes slack, like real string.
 
-    ctrl is the line's FREE SPAN in metres: the straight-line distance from the eyelet
+    ctrl is the line's FREE SPAN in meters: the straight-line distance from the eyelet
     the line last leaves to the gantry. Range 0 .. 7 m on all four, which is what it
     takes to reach the whole work area - a gantry near (2, 2, 1) wants spans of about
     1.7, 5.2, 5.1 and 7.1 m on the four lines, so anything narrower than this confines

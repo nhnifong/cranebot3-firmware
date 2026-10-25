@@ -3,7 +3,7 @@
 The UI can orbit its controls around either the gamepad tag or the named position
 'person' published here. RF-DETR (COCO weights, from the `rfdetr` package) runs on every
 anchor camera about once a second, and the person found is placed at the floor point
-under their feet - the bottom centre of their box, cast to the floor - averaged over the
+under their feet - the bottom center of their box, cast to the floor - averaged over the
 cameras that see them.
 
 With more than one person in the room the one wanted is the one holding the gamepad.
@@ -118,7 +118,7 @@ class PersonLocator:
                      if n == 'person' and s >= PERSON_THRESHOLD]
             held = [(b, s) for b, s, n in zip(det.xyxy, det.confidence, names) if n in HELD_CLASSES]
             for box, score in boxes:
-                held_score = max((float(s) for b, s in held if _centre_inside(b, box)), default=0.0)
+                held_score = max((float(s) for b, s in held if _center_inside(b, box)), default=0.0)
                 feet = project_pixels_to_floor(
                     [[(box[0] + box[2]) / 2 / w, box[3] / h]], pose, self.ob.config.camera_cal)
                 if len(feet) == 1:
@@ -151,6 +151,6 @@ class PersonLocator:
         return min(holders, key=lambda p: np.linalg.norm(p[1] - tag[:2]))
 
 
-def _centre_inside(inner, outer):
+def _center_inside(inner, outer):
     cx, cy = (inner[0] + inner[2]) / 2, (inner[1] + inner[3]) / 2
     return outer[0] <= cx <= outer[2] and outer[1] <= cy <= outer[3]
