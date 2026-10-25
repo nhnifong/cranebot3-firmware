@@ -40,8 +40,10 @@ pole_offset_abs500 = 0.5334
 pole_offset_carbon400 = 0.5757
 pole_offset_carbon270 = pole_offset_carbon400 - 0.13
 
-# z offset of the gripper laser rangefinder from the origin of the gantry when the winch is zeroed.
-laser_offset = 0.14 # meters
+# How far the gripper's laser rangefinder sits below the gripper origin, in meters. From CAD it
+# is 2.3 mm above it, hence negative, and 50.125 mm behind it, which only matters when the
+# gripper tilts. Rangefinder height above the floor = gantry z - pole offset - laser_offset.
+laser_offset = -0.0023
 
 # position of the anchor grommet point in the reference frame of the anchor. rotation is irrelevant
 anchor_grommet = (np.array([0,0,0], dtype=float), np.array([0.018,-0.033,-0.035], dtype=float))
@@ -60,7 +62,8 @@ anchor_wall_corner = (np.array([0,0,0], dtype=float), np.array([0.005978, 0.0894
 # gantry_april = (np.array([0,pi/2,0], dtype=float), np.array([0.055,0,0.105], dtype=float))
 gantry_april = (np.array([pi/2,0,0], dtype=float), np.array([0, -0.065, -0.055], dtype=float))
 # flat marker
-gantry_flat_april = (np.array([pi/2,0,0], dtype=float), np.array([0, -0.007, -0.0652], dtype=float))
+# tag center is 85.1875 mm below the cross where the lines meet, from CAD
+gantry_flat_april = (np.array([pi/2,0,0], dtype=float), np.array([0, -0.007, -0.0851875], dtype=float))
 
 # position in front of a basket marker where objects should be dropped
 basket_offset = (np.array([0,0,0], dtype=float), np.array([0,0,0.20], dtype=float))
@@ -102,10 +105,13 @@ damiao_spool_geometry = {
 
 # arp anchor model
 # your "right" when looking at it's face. right is direct line
-arp_anchor_right_eyelet = (np.array([0,0,0], dtype=float), np.array([0.031,-0.068,-0.022], dtype=float))
-arp_anchor_left_eyelet = (np.array([0,0,0], dtype=float), np.array([-0.031,-0.068,-0.022], dtype=float))
-# compose_poses([(np.array([0,pi,0], dtype=float), np.array([0.007, -0.033, 0.071], dtype=float)), (np.array([(90-22)/180*pi,0,0], dtype=float), np.array([0,0,0], dtype=float))])
-arp_anchor_camera = (np.array([0.0, 2.60449835, -1.75675632]), np.array([ 0.007, -0.033,  0.071]))
+# Positions from CAD, in meters. The line exit sits 94 mm above the camera lens; these once had
+# both z values negated, which put it 93 mm below and every calibrated pull point ~19 cm low.
+# The left eyelet is the right one mirrored in x.
+arp_anchor_right_eyelet = (np.array([0,0,0], dtype=float), np.array([0.0313,-0.061,0.0205], dtype=float))
+arp_anchor_left_eyelet = (np.array([0,0,0], dtype=float), np.array([-0.0313,-0.061,0.0205], dtype=float))
+# compose_poses([(np.array([0,pi,0], dtype=float), np.array([0.0075, -0.039868, -0.07382], dtype=float)), (np.array([(90-22)/180*pi,0,0], dtype=float), np.array([0,0,0], dtype=float))])
+arp_anchor_camera = (np.array([0.0, 2.60449835, -1.75675632]), np.array([ 0.0075, -0.039868, -0.07382]))
 
 rpi_cam_3_wide_fov = np.array([102, 67])
 

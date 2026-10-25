@@ -269,6 +269,11 @@ class Positioner2:
         * task to periodically predict forwards the kalman filter model
         * task to wait for updates that affect hang point and recalculate it, then update filter
         * task to wait for updates that affect visual estimates and update filter.
+
+        Every position here (gant_pos, hang_pos, visual_pos) is the gantry origin: the cross
+        where the four lines meet, not the gantry's apriltag. The hang point is that cross by
+        construction. Camera sightings are moved from the tag to the cross by the anchor
+        clients, through the pole geometry's gantry_april offset, before they get here.
         """
         self.run = False # false until main is called
         self.datastore = datastore

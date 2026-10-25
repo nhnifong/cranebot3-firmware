@@ -8,6 +8,7 @@ from nf_robot.common.pose_functions import *
 logger = logging.getLogger(__name__)
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.cv_common import *
+from nf_robot.host.tension_height import vertical_force_anomaly_kg
 
 # Each weight scales one residual: the gap between two measurements of the same thing, which
 # the fit drives to zero. The comment names what should equal what.
@@ -26,6 +27,10 @@ W_GRIPPER_DIST = 0.6 # change in pull-point-to-gantry distance between two gripp
                      # change that line's measured length reports (as W_DIAMOND_DIST, close range).
                      # Scaled down at use, so this is the weight of one independent delta, not one pair.
 W_ROOM_YAW = 5.0 # yaw of the anchor layout == yaw of the reference layout (see room_yaw_offset)
+W_TENSION_ANOMALY = 0.0 # weight the measured line tensions hold up at each gripper hover, in kg ==
+                        # the nominal hanging weight. Per kg, so at 0.2 a 0.05 kg anomaly costs about
+                        # what a 1 cm length residual does. Temporarily 0 (off) while the anchor
+                        # geometry fix is evaluated on its own; 0.2 is the value to restore.
 
 # Terms that say the room is physically possible rather than that it matches a measurement:
 # the anchors stand plumb, the four pull points share a height, the anchor pair and the eyelet
@@ -103,7 +108,8 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
     gripper_obs, when provided, is a dict keyed by calibration card name (as returned by
     Observer.collect_gripper_card_observations). Each value is a list of per-height samples; each
     sample has 'gantry_minus_card' (the room vector from the card to the gantry, measured
-    close-range by the gripper camera) and 'line_lengths' (the four line lengths at that hover).
+    close-range by the gripper camera) and 'line_lengths' (the four line lengths at that hover),
+    and optionally 'tensions' (the four line tensions there, which add the tension anomaly term).
     These add multilateration constraints on the four pull points: the gantry position for a sample
     is its card's room position plus the measured offset, and the CHANGE in each line length between
     any two samples must equal the change in that pull point's distance to the gantry. Sampling each
@@ -130,6 +136,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
     cost_shape_match = 0.0
     cost_anchor_tilt = 0.0
     cost_gripper = 0.0
+    cost_tension_anomaly = 0.0
     cost_room_yaw = 0.0
 
     # room position of each calibration card at the current parameters, so the gripper-camera
@@ -375,6 +382,26 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
                             f'residual={(modeled-measured)*100:+.2f}cm'
                         )
 
+        # At every hover the assembly hangs free with no payload, so the vertical pull of the
+        # measured tensions along the modeled line directions must hold up exactly the nominal
+        # weight. The line angles depend on how high the pull points sit above the gantry, which
+        # the length deltas above constrain only weakly, so this gives the fit a second handle on
+        # height. Surveys recorded before tensions were kept carry none and add nothing here.
+        pull_array = np.array(pull_points)
+        for name, samples in gripper_obs.items():
+            if name not in card_centroids:
+                continue
+            for obs in samples:
+                if obs.get('tensions') is None:
+                    continue
+                gantry_room = card_centroids[name] + np.asarray(obs['gantry_minus_card'])
+                anomaly = vertical_force_anomaly_kg(pull_array, np.asarray(obs['tensions']), gantry_room)
+                res = anomaly * W_TENSION_ANOMALY
+                residuals.append(res)
+                cost_tension_anomaly += res ** 2
+                if debug:
+                    logger.info(f'  tension anomaly {name} at z={gantry_room[2]:.3f}: {anomaly:+.3f} kg')
+
     # ---------------------------------------------------------
     # Regularization (Anchor eyelets to initial guesses)
     # ---------------------------------------------------------
@@ -423,6 +450,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
         'diamond_planarity': cost_diamond_planar,
         'diamond_distances': cost_diamond_dist,
         'gripper_cards': cost_gripper,
+        'tension_anomaly': cost_tension_anomaly,
         'shape_match': cost_shape_match,
         'eyelet_reg': cost_eyelet_reg,
         'room_yaw': cost_room_yaw,
@@ -443,6 +471,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
             f"Diamond Planarity:  {cost_diamond_planar:.6f}",
             f"Diamond Distances:  {cost_diamond_dist:.6f}",
             f"Gripper Cards:      {cost_gripper:.6f}",
+            f"Tension Anomaly:    {cost_tension_anomaly:.6f}",
             f"Shape Match (A~E):  {cost_shape_match:.6f}",
             f"Eyelet Reg (drift): {cost_eyelet_reg:.6f}",
             f"Room Yaw Gauge:     {cost_room_yaw:.6f}",

@@ -114,6 +114,8 @@ class ArpeggioAnchorClient(ComponentClient):
                     detection['p'], # the pose obtained just now
                     self.ob.gantry_april_inv, # which marker the gantry has, per pole type
                 ]))
+                # from the tag to the gantry origin, the cross where the lines meet. Everything
+                # downstream of the datastore treats this as the cross, not the tag.
                 position = pose[1]
                 self.datastore.gantry_pos.insert(np.concatenate([[timestamp], [self.anchor_num], position]))
                 self.datastore.gantry_pos_event.set()

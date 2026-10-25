@@ -2705,15 +2705,15 @@ class AsyncObserver:
         four line lengths at that moment. This is a motion task.
 
         Returns a dict keyed by card name, each value a list of per-height samples; each sample is
-        a dict with 'gantry_minus_card' (room vector) and 'line_lengths' (length-4 array), for
-        passing to optimize_arp_anchors as gripper_obs. Each card is visited at several altitudes so
-        the samples span a vertical baseline. Cards (or individual heights) the gripper never sees
+        a dict with 'gantry_minus_card' (room vector), 'line_lengths' and 'tensions' (length-4
+        arrays, meters and newtons), for passing to optimize_arp_anchors as gripper_obs. Each card
+        is visited at several altitudes so the samples span a vertical baseline. Cards (or individual heights) the gripper never sees
         are skipped. Hover altitudes are taken relative to each card's own height, so cards may sit
         on the floor or raised.
 
         If progress_range=(start_pct, end_pct) is given, a Calibration operation_progress message
         is sent as each card is surveyed, spread across that percent range."""
-        HOVER_CAMERA_HEIGHTS_M = [1.1, 0.7, 0.45]  # camera heights over each card to sample. Visiting a
+        HOVER_CAMERA_HEIGHTS_M = [1.3, 0.7, 0.25]  # camera heights over each card to sample. Visiting a
                                                   # card from several altitudes gives the length-delta
                                                   # constraints a vertical baseline, which is what lets
                                                   # them begin to observe the far external eyelets (a
@@ -2721,6 +2721,8 @@ class AsyncObserver:
                                                   # direction free). The spread is deliberately wide -
                                                   # a wider baseline recovers more of a bad pass-2 - but
                                                   # each height is clamped under the work-area ceiling.
+                                                  # The lowest only works with the fingers fully open;
+                                                  # any less and they come into the camera's view.
         SETTLE_S = 4.0                # let swing cancellation settle the gripper before measuring
         # How many views of the card to average the measurement over. A count, not a duration:
         # the averaging wants frames, and waiting on a clock only buys frames indirectly, at
@@ -2742,6 +2744,9 @@ class AsyncObserver:
         # keep the gripper vertical and the lines taut throughout the survey. Put back as it
         # was when the survey finishes; a stop turns it off, as a stop always does.
         was_running = self.set_swing_cancellation(True)
+        # fully open is fully retracted, out of the camera's view at the lowest hover
+        fingers_before = self.finger_angle()
+        await self.settle_fingers(-90)
 
         # don't fly higher than just under the top of the work area
         upper_z = np.mean(self.pe.anchor_points[:, 2]) - TOP_MARGIN
@@ -2783,13 +2788,16 @@ class AsyncObserver:
                 self.gripper_client.measure_gantry_minus_card(pose, timestamp=ts)
                 for ts, pose in samples
             ]
-            line_samples = [
-                [self.datastore.anchor_line_record[i].getClosest(ts)[1] for i in range(N_LINES)]
+            # (time, length, speed, tension) of each line, closest to each frame
+            line_records = np.array([
+                [self.datastore.anchor_line_record[i].getClosest(ts) for i in range(N_LINES)]
                 for ts, _ in samples
-            ]
+            ])
             return {
                 'gantry_minus_card': np.mean(gantry_offsets, axis=0),
-                'line_lengths': np.mean(line_samples, axis=0),
+                'line_lengths': np.mean(line_records[:, :, 1], axis=0),
+                # the optimizer holds these to the nominal hanging weight at this position
+                'tensions': np.mean(line_records[:, :, 3], axis=0),
                 'n': len(gantry_offsets),
                 # measured, not requested: what the rangefinder read once the trim finished.
                 # Recorded for diagnostics; the optimizer reads only the two arrays above.
@@ -2885,6 +2893,7 @@ class AsyncObserver:
         finally:
             self.slow_stop_all_spools()
         self.set_swing_cancellation(was_running)
+        await self.set_finger_angle(fingers_before)
 
         total = sum(len(s) for s in gripper_obs.values())
         logger.info(f'Gripper card survey collected {total} hover samples across {len(gripper_obs)} cards: '
@@ -2937,12 +2946,16 @@ class AsyncObserver:
     # -- getters for maneuvers. Each returns a copy, so nothing a maneuver does to the
     # result reaches the estimator or a component client.
 
+    # Every gantry position below is the gantry origin: the cross where the lines meet, not
+    # the gantry's apriltag. The gripper hangs pole_offset() below it.
+
     def gantry_position(self):
         """Where the position estimate puts the gantry, as a room-frame (3,) array."""
         return np.array(self.pe.gant_pos, dtype=float)
 
     def visual_gantry_position(self):
-        """The anchor cameras' running average of where the gantry marker is."""
+        """The anchor cameras' running average of where the gantry is, moved from its marker
+        to the cross."""
         return np.array(self.pe.visual_pos, dtype=float)
 
     def anchor_points(self):
@@ -2954,6 +2967,20 @@ class AsyncObserver:
         if self.pe.tension is None:
             return None
         return np.array(self.pe.tension, dtype=float)
+
+    def hang_position(self):
+        """Where the line lengths alone put the gantry, as a room-frame (3,) array."""
+        return np.array(self.pe.hang_pos, dtype=float)
+
+    def line_records(self):
+        """The last report from each of the four lines, as a (4, 4) array of
+        (time, length m, speed m/s, tension N)."""
+        return np.array([alr.getLast() for alr in self.datastore.anchor_line_record], dtype=float)
+
+    def gantry_sightings(self, since):
+        """Every anchor camera sighting of the gantry captured after since, as an (n, 5) array
+        of (time, anchor_num, x, y, z)."""
+        return self.datastore.gantry_pos.deepCopy(cutoff=since)
 
     def gripper_connected(self):
         return self.gripper_client is not None
@@ -3591,6 +3618,7 @@ class AsyncObserver:
                 await self.tension_and_wait()
                 # wait for some new obs
                 await asyncio.sleep(0.5)
+                # visual_pos is already the cross where the lines meet, not the tag
                 lengths = np.linalg.norm(self.pe.anchor_points - self.pe.visual_pos, axis=1)
                 await self.sendReferenceLengths(lengths)
                 await asyncio.sleep(0.25)
