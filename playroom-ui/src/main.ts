@@ -1338,6 +1338,14 @@ function handlePosEstimate(data: nf.telemetry.IPositionEstimate) {
     // Draw velocity indicator
     gripper.setPose(data.gripperPose);
   }
+
+  // Weight the line tensions hold beyond the nominal hanging weight.
+  const anomaly = data.verticalForceAnomalyKg ?? null;
+  const anomalyValueEl = document.getElementById('force-anomaly-value');
+  if (anomalyValueEl) {
+    anomalyValueEl.textContent = anomaly === null ? '--'
+      : `${anomaly > 0 ? '+' : ''}${anomaly.toFixed(2)} kg`;
+  }
 }
 
 function handlePosFactorsDebug(data: nf.telemetry.IPositionFactors) {

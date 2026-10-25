@@ -21,6 +21,10 @@ message PositionEstimate {
   repeated bool slack = 5;
   // Exact tension force on each of the four lines in newtons.
   repeated float tension = 6;
+  // Weight the line tensions are holding up beyond the nominal gantry and gripper weight, in kg.
+  // Positive when tension shows more weight than the position predicts (a payload), negative
+  // when less (the gripper resting on something). Unset when no tension has been reported.
+  optional float vertical_force_anomaly_kg = 7;
 }
 
 // Diagnostic information about factors used in estimating the robot's positon

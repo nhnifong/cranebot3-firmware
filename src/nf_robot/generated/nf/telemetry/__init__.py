@@ -704,6 +704,15 @@ class PositionEstimate(betterproto2.Message):
     Exact tension force on each of the four lines in newtons.
     """
 
+    vertical_force_anomaly_kg: "float | None" = betterproto2.field(
+        7, betterproto2.TYPE_FLOAT, optional=True
+    )
+    """
+    Weight the line tensions are holding up beyond the nominal gantry and gripper weight, in kg.
+    Positive when tension shows more weight than the position predicts (a payload), negative
+    when less (the gripper resting on something). Unset when no tension has been reported.
+    """
+
 
 default_message_pool.register_message(
     "nf.telemetry", "PositionEstimate", PositionEstimate

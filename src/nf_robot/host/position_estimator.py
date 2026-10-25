@@ -15,7 +15,7 @@ from scipy.spatial.transform import Rotation
 
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.kalman_filter import KalmanFilter
-from nf_robot.host.tension_height import TensionResidualLogger, SLACK_TENSION_N
+from nf_robot.host.tension_height import TensionResidualLogger, SLACK_TENSION_N, vertical_force_anomaly_kg
 from nf_robot.generated.nf import telemetry, common
 from nf_robot.common.util import *
 from nf_robot.common.pose_functions import compose_poses, gripper_imu_inv
@@ -633,6 +633,10 @@ class Positioner2:
             self.finger_pressure_falling.set()
 
     def send_positions(self):
+        # no tension reported yet, or everything slack with the gantry resting on something
+        anomaly = None
+        if np.any(self.tension):
+            anomaly = vertical_force_anomaly_kg(self.anchor_points, self.tension, self.gant_pos)
         # send position factors to UI for visualization
         self.ob.send_ui(pos_estimate=telemetry.PositionEstimate(
             data_ts=float(self.data_ts),
@@ -641,6 +645,7 @@ class Positioner2:
             gripper_pose=common.Pose(rotation=fromnp(self.grip_pose[0]), position=fromnp(self.grip_pose[1])),
             slack=list(map(bool, self.slack_lines)),
             tension=list(self.tension),
+            vertical_force_anomaly_kg=anomaly,
         ))
         spin = 0
         if self.ob.gripper_client is not None:

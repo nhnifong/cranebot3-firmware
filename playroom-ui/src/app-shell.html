@@ -380,8 +380,13 @@
         <!-- Spacer -->
         <div class="footer-spacer"></div>
 
-        <!-- Maneuver status: the running motion task, or the last one and how it ended -->
+        <!-- Weight the line tensions hold beyond the nominal hanging weight, then the
+             maneuver status: the running motion task, or the last one and how it ended -->
         <div class="footer-stats-group">
+          <div class="stat-line">
+            <span class="label-muted">Weight</span>
+            <strong id="force-anomaly-value">--</strong>
+          </div>
           <div class="stat-line">
             <span class="label-muted">Maneuver</span>
             <strong id="maneuver-name">Idle</strong>

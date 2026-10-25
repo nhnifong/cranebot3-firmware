@@ -62,7 +62,7 @@ SLACK_TENSION_N = 0.0275
 
 GRAVITY = 9.80665
 
-HANGING_MASS_KG = 0.541
+HANGING_MASS_KG = 0.638
 HANGING_WEIGHT_N = HANGING_MASS_KG * GRAVITY
 
 
@@ -76,6 +76,17 @@ def force_balance(anchor_points, tensions, position):
     d = anchor_points - position
     lengths = np.linalg.norm(d, axis=1)
     return (tensions / lengths) @ d
+
+
+def vertical_force_anomaly_kg(anchor_points, tensions, position, weight_n=HANGING_WEIGHT_N):
+    """How much more weight the lines are holding up than the bare hanging assembly, in kg.
+
+    The upward pull of the measured tensions at `position`, minus `weight_n`, divided by g.
+    Positive when the tensions show more weight than expected at this position, such as when
+    carrying a payload. Negative when they show less, such as when the gripper is resting on
+    something.
+    """
+    return (float(force_balance(anchor_points, tensions, position)[2]) - weight_n) / GRAVITY
 
 
 def height_from_tension(anchor_points, tensions, xy, weight_n, z_floor=0.0, tol=1e-4):
