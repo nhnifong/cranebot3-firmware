@@ -17,7 +17,7 @@
             skip: concat the pre-attention map, 1x1 -> 256
             one logit per overhead cell
 
-The drop point is the centre of mass of the cell softmax in a window around the winning
+The drop point is the center of mass of the cell softmax in a window around the winning
 cell, as in VisualServoNet - the cells are 15.6cm of floor, and that is what puts the
 answer inside one.
 """
@@ -56,8 +56,8 @@ def uv_to_cell(uv, grid):
     return uv * uv.new_tensor([grid[1], grid[0]])
 
 
-def uv_to_metres(uv_error):
-    """A normalized overhead distance as metres of floor."""
+def uv_to_meters(uv_error):
+    """A normalized overhead distance as meters of floor."""
     return uv_error * ORTHO_EXTENT_M
 
 

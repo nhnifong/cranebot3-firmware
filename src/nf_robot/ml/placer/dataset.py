@@ -72,7 +72,7 @@ class DropPairDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.rows)
 
-    def labelled_uv(self):
+    def labeled_uv(self):
         """Every drop point, for the constant-prediction baseline."""
         return np.array([r["release_ortho_uv"] for r in self.rows], dtype=np.float32)
 

@@ -1,7 +1,7 @@
 # anchor_diffusion
 
 Synthetic ortho frames for the `ortho_target` model: an SDXL LoRA fine-tuned on grip_o's
-`overhead_camera` ortho view paints new floors, those frames are hand-labelled like real ones,
+`overhead_camera` ortho view paints new floors, those frames are hand-labeled like real ones,
 and the labels are added to the **train** split only.
 
 ## What was found (Oct 2026)
@@ -21,7 +21,7 @@ and the labels are added to the **train** split only.
   | real only       |   0.548 |   0.629 |     0.753 |            4.6 |
   | + 145 synthetic |   0.570 |   0.648 |     0.804 |            3.4 |
 
-  These were scored before the eval was relabelled. Synthetic frames slightly reduced invented
+  These were scored before the eval was relabeled. Synthetic frames slightly reduced invented
   targets, with recall unchanged. The eval is only 19 frames, so this suggests a gain but does
   not prove one.
 
@@ -85,7 +85,7 @@ LoRA, pass a different `--output_dir` and the same path as `--lora` below.
 python experiments/anchor_diffusion/generate_for_labeling.py --num 300
 ```
 
-New frames are numbered after the last one in the cache. Already-labelled frames are untouched.
+New frames are numbered after the last one in the cache. Already-labeled frames are untouched.
 
 ### 4. Label them
 
@@ -98,7 +98,7 @@ python -m nf_robot.ml.ortho_target.labeler --root synthetic_sdxl1024_ortho \
 - `--root` only names the source. It is never read, because the cache is already full.
 - `--output` is what keeps synthetic labels separate. Never point it at `ortho_target_user_labels/`.
 - `--no_carry`: every frame is an independent scene.
-- Turn on "Skip finished" to walk past frames labelled in earlier sittings.
+- Turn on "Skip finished" to walk past frames labeled in earlier sittings.
 
 ### 5. Rebuild the datasets
 

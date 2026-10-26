@@ -13,11 +13,11 @@ from nf_robot.host.maneuver import Maneuver, TiltWatch, prefer_swing_cancellatio
 logger = logging.getLogger(__name__)
 
 MAX_EPISODES = 50
-# (metres) how far each episode carries the gripper from the drop position. Lateral is in a
+# (meters) how far each episode carries the gripper from the drop position. Lateral is in a
 # random direction; vertical is up or down.
 LATERAL_MAX_M = 1.0
 VERTICAL_MAX_M = 0.5
-# (metres) a goal that would put the gripper lower than this over the floor is redrawn.
+# (meters) a goal that would put the gripper lower than this over the floor is redrawn.
 MIN_GRIPPER_Z_M = 0.15
 # Goals are redrawn this many times looking for one inside the work area before giving up.
 GOAL_DRAWS = 30
@@ -27,7 +27,7 @@ WRIST_OFFSET_MAX_DEG = 180.0
 WRIST_MIN_DEG = 20.0
 WRIST_MAX_DEG = 1060.0
 # (seconds) wait after the wrist turn before an episode starts, so the pole has stopped
-# swinging and the episode's first frame is a still, centred view of the basket.
+# swinging and the episode's first frame is a still, centered view of the basket.
 SETTLE_S = 1.5
 # A lean this steep held this long is a strike, not a swing. Free moves with swing
 # cancellation lean a few degrees.
@@ -60,13 +60,13 @@ class BasketEpisodes(Maneuver):
     @verb('basketdata', motion=True)
     @prefer_swing_cancellation
     async def record(self, count=MAX_EPISODES):
-        """Record episodes of the gripper leaving the drop position, for centring over baskets.
+        """Record episodes of the gripper leaving the drop position, for centering over baskets.
 
         Put the gripper at an ideal drop position over a basket, start a lerobot recording
         session, then type 'basketdata' (or 'basketdata N' for other than 50 episodes). Before
         each episode the wrist turns to a random angle and the pole is left to settle, so the
-        episode's first frame is a centred view of the basket. The episode itself is one
-        flight up to a metre aside and half a metre up or down. Between episodes it flies back
+        episode's first frame is a centered view of the basket. The episode itself is one
+        flight up to a meter aside and half a meter up or down. Between episodes it flies back
         to the drop position, unrecorded, and leaves the wrist where it is. Stopping it ends
         the recording session.
         """

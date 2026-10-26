@@ -160,7 +160,7 @@ class TestPositionEstimator(unittest.TestCase):
         After 60 s of idle, a 1 mm/s velocity residual (from noisy position measurements)
         produces ~1 cm of position error per update call. Combined with continuous position
         measurements that keep re-introducing small velocity residuals, this creates sustained
-        centimetre-scale position jitter that grows with idle time.
+        centimeter-scale position jitter that grows with idle time.
 
         Moving the robot quiets the jitter because record_commanded_vel resets
         commanded_vel_ts = time.time(), bringing delta_t back to ~0 and eliminating

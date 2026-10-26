@@ -243,7 +243,7 @@ function panel(x, y, title, head, fmt, state) {
   ctx.fillStyle = "#4A5563";
   ctx.fillText(`pre-activation ${head.pre.toFixed(2)}`, x + w - 20, y + 86);
 
-  // contributions, signed bars around a centre line
+  // contributions, signed bars around a center line
   const keys = Object.keys(head.parts);
   let max = 1;
   for (const k of keys) max = Math.max(max, Math.abs(head.parts[k]));
@@ -310,7 +310,7 @@ function render(data, image) {
   panel(m, H - 330 - m, "holding", h.holding, pct, st);
   panel(W - 520 - m, H - 330 - m, "pressure", h.pressure, v => v.toFixed(2), st);
 
-  // finger speed, -1 open .. +1 close, bottom centre
+  // finger speed, -1 open .. +1 close, bottom center
   const f = h.finger, bw = 700, bx = (W - bw) / 2, by = H - 110;
   ctx.fillStyle = "rgba(255,255,255,0.92)";
   ctx.fillRect(bx - 20, by - 50, bw + 40, 140);

@@ -96,7 +96,7 @@ def camera_mode_problems(features: dict, camera_mode: str, pad_clamp: bool = Fal
         if not pad_clamp and (target_w > src_w or target_h > src_h):
             problems.append(
                 f"its '{key}' is {src_w}x{src_h}, smaller than the {target_w}x{target_h} "
-                f"'{camera_mode}' wants (pad_clamp would centre and pad it instead of failing)"
+                f"'{camera_mode}' wants (pad_clamp would center and pad it instead of failing)"
             )
     return problems
 

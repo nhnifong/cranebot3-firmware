@@ -6,7 +6,7 @@ Two datasets from the same teleop recordings, both produced by
 - **Drop pairs** (`--mode pairs`, the default): a clean gripper snapshot of an item before
   it was grasped, paired with where the operator dropped it. For predicting a drop point
   from what the item looks like (organizer/readme.md).
-- **Carry frames** (`--mode carry`): every frame of the carry before a release, labelled
+- **Carry frames** (`--mode carry`): every frame of the carry before a release, labeled
   with when the operator opened and where the release was. For deciding when to let go.
 
 Both are parquet shards with the frames as JPEG bytes in the row - the same layout as the
@@ -51,22 +51,22 @@ episode's drop.
 | `image` | binary | the item snapshot: gripper camera JPEG, 448x252 |
 | `snapshot_overhead_image` | binary, nullable | overhead view at the snapshot, 448x448: the room as it looked when the decision would be made |
 | `release_overhead_image` | binary, nullable | overhead view at the release onset, 448x448. It shows the robot at the drop point, so it is the answer, not an input |
-| `drop_view_image` | binary | the gripper camera 0.3s after the opening ends: the empty gripper looking straight down on the drop point it is centred over |
+| `drop_view_image` | binary | the gripper camera 0.3s after the opening ends: the empty gripper looking straight down on the drop point it is centered over |
 | `source_repo_id`, `episode_index`, `frame_index` | | where the snapshot came from |
 | `release_frame_index` | int32 | frame of the release onset |
 | `task` | string | the episode's task string |
 | `seconds_before_grasp` | float32 | grasp time minus snapshot time |
-| `release_room_xy` | list<float32>[2] | the jaws at the release onset, room frame, metres |
+| `release_room_xy` | list<float32>[2] | the jaws at the release onset, room frame, meters |
 | `release_ortho_uv` | list<float32>[2] | the same point in the overhead frame, normalized |
 | `release_height_m` | float32 | jaws height at the release above jaws height at the grasp |
 | `pickup_room_xy`, `pickup_ortho_uv` | list<float32>[2] | where the item was picked up, same frames |
 | `state` | struct | `laser_rangefinder`, `finger_angle`, `wrist_angle`, `gripper_z` at the snapshot |
 
 `drop_view_image` is the "go and take a good look at each drop point" idea done from the
-recordings: after every release the gripper is empty, centred over the drop point and
+recordings: after every release the gripper is empty, centered over the drop point and
 looking down, and on `nick-sep14` those frames show the toy box, the hamper and the bed
-cleanly. They are the natural material for recognising a drop point again, or for a
-catalogue of the room's drop points that a snapshot is matched against, rather than
+cleanly. They are the natural material for recognizing a drop point again, or for a
+catalog of the room's drop points that a snapshot is matched against, rather than
 regressing a location in room coordinates that differ between robots and calibrations.
 
 ## Carry frames

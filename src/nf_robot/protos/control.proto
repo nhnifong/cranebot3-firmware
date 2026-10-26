@@ -269,7 +269,7 @@ message SetTargetModel {
   TargetModelAction action = 1;
 }
 
-// Acknowledgement of a popup message
+// Acknowledgment of a popup message
 message PopupAck {
   // Id of the message being acknowledged
   uint32 id = 1;

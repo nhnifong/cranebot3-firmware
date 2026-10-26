@@ -4,7 +4,7 @@
 
     python -m nf_robot.ml.visual_servoing.label_video \\
         --root datasets/chuck-aug28 \\
-        --output_dir datasets/labelling_test/label_video
+        --output_dir datasets/labeling_test/label_video
 """
 
 import argparse
@@ -30,10 +30,10 @@ from nf_robot.ml.visual_servoing.uv_methods import (
 TRAIL_FRAMES = 60
 GREEN = (80, 230, 120)
 AMBER = (60, 170, 235)
-GREY = (150, 150, 150)
+GRAY = (150, 150, 150)
 
 
-def draw_mark(bgr, u, v, colour, radius=9):
+def draw_mark(bgr, u, v, color, radius=9):
     """A crosshair at normalized (u, v), drawn on the border when off-frame."""
     h, w = bgr.shape[:2]
     x, y = u * w, v * h
@@ -41,12 +41,12 @@ def draw_mark(bgr, u, v, colour, radius=9):
     cx = int(np.clip(x, 2, w - 3))
     cy = int(np.clip(y, 2, h - 3))
     if inside:
-        cv2.circle(bgr, (cx, cy), radius, colour, 2, cv2.LINE_AA)
-        cv2.line(bgr, (cx - radius - 6, cy), (cx + radius + 6, cy), colour, 1, cv2.LINE_AA)
-        cv2.line(bgr, (cx, cy - radius - 6), (cx, cy + radius + 6), colour, 1, cv2.LINE_AA)
+        cv2.circle(bgr, (cx, cy), radius, color, 2, cv2.LINE_AA)
+        cv2.line(bgr, (cx - radius - 6, cy), (cx + radius + 6, cy), color, 1, cv2.LINE_AA)
+        cv2.line(bgr, (cx, cy - radius - 6), (cx, cy + radius + 6), color, 1, cv2.LINE_AA)
     else:
         # A hollow triangle on the edge, pointing the way the target lies.
-        cv2.drawMarker(bgr, (cx, cy), colour, cv2.MARKER_TRIANGLE_UP, 18, 2, cv2.LINE_AA)
+        cv2.drawMarker(bgr, (cx, cy), color, cv2.MARKER_TRIANGLE_UP, 18, 2, cv2.LINE_AA)
     return inside
 
 
@@ -60,14 +60,14 @@ def draw_trail(bgr, trail):
         cv2.circle(bgr, (x, y), 2, shade, -1, cv2.LINE_AA)
 
 
-def caption(bgr, lines, colour=(235, 235, 235)):
+def caption(bgr, lines, color=(235, 235, 235)):
     """Text on a solid banner so it stays readable over the video."""
     step, pad = 17, 6
     banner = pad * 2 + step * len(lines)
     cv2.rectangle(bgr, (0, 0), (bgr.shape[1], banner), (24, 24, 24), -1)
     for i, text in enumerate(lines):
         cv2.putText(bgr, text, (8, pad + step * i + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.44,
-                    colour, 1, cv2.LINE_AA)
+                    color, 1, cv2.LINE_AA)
 
 
 def episode_video(dataset, rows, episode, start, grasp, calibration, fps, path,
@@ -94,7 +94,7 @@ def episode_video(dataset, rows, episode, start, grasp, calibration, fps, path,
     stream.options = {"crf": str(crf), "preset": "8"} if vcodec == "libsvtav1" else {"crf": str(crf)}
 
     trail, on_object = [], 0
-    labelled = 0
+    labeled = 0
     for i, row in enumerate(rows):
         rgb = dataset[start + i][image_key].numpy().transpose(1, 2, 0)
         bgr = cv2.cvtColor((rgb * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
@@ -106,9 +106,9 @@ def episode_video(dataset, rows, episode, start, grasp, calibration, fps, path,
         if projected is not None:
             u, v, distance = projected
             draw_trail(bgr, trail[-TRAIL_FRAMES:])
-            inside = draw_mark(bgr, u, v, GREEN if in_window else GREY)
+            inside = draw_mark(bgr, u, v, GREEN if in_window else GRAY)
             trail.append((u, v))
-            labelled += 1
+            labeled += 1
             on_object += inside
             detail = f"uv {u:+.3f},{v:+.3f}  range {distance:.3f}m"
         else:
@@ -122,7 +122,7 @@ def episode_video(dataset, rows, episode, start, grasp, calibration, fps, path,
             detail,
             f"gripper {pos[0]:+.3f} {pos[1]:+.3f} {pos[2]:+.3f}  spin {math.degrees(row['spin']):+.1f}deg",
             f"laser {row['laser_rangefinder']:.3f}m  pressure {row['pressure']:.3f}",
-        ], GREEN if in_window else GREY)
+        ], GREEN if in_window else GRAY)
 
         packet = av.VideoFrame.from_ndarray(bgr, format="bgr24").reformat(format="yuv420p")
         for out in stream.encode(packet):
@@ -130,7 +130,7 @@ def episode_video(dataset, rows, episode, start, grasp, calibration, fps, path,
     for out in stream.encode():
         container.mux(out)
     container.close()
-    return len(rows), labelled, on_object
+    return len(rows), labeled, on_object
 
 
 def render(root: Path, output_dir: Path, repo_id=None, limit=None, episodes_wanted=None,
@@ -179,10 +179,10 @@ def render(root: Path, output_dir: Path, repo_id=None, limit=None, episodes_want
         # other.
         suffix = "" if uv_method == DEFAULT_UV_METHOD else f"_{uv_method}"
         path = output_dir / f"ep{episode:04d}{suffix}.mp4"
-        total, labelled, inside = episode_video(
+        total, labeled, inside = episode_video(
             dataset, rows, episode, starts[episode], grasp, calibration, fps, path,
             approach_seconds, carry_seconds, vcodec, crf, uv_method, jaw_uv)
-        logging.info(f"ep{episode:04d}: {total} frames, {labelled} projected, "
+        logging.info(f"ep{episode:04d}: {total} frames, {labeled} projected, "
                      f"{inside} with the mark inside the frame -> {path.name}")
         written += 1
     logging.info(f"{written} episode video(s) in {output_dir}")

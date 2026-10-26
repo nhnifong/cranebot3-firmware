@@ -96,7 +96,7 @@ default_gripper_conf = {
 stream_command = [
     "/usr/bin/rpicam-vid", "-t", "0", "-n",
     # the full-FOV 2304x1296 sensor mode scaled to 684x384 (16:9), which keeps the whole
-    # wide field of view instead of the centre crop a square output would force
+    # wide field of view instead of the center crop a square output would force
     "--mode", "2304:1296:10",
     "--width=684", "--height=384",
     "--framerate=60",
@@ -754,7 +754,7 @@ class GripperArpServer(RobotComponentServer):
             rel -= 20
 
             # These servos accept no negative position commands, though they report them,
-            # so closing far enough runs off the end of the range; re-centre to continue.
+            # so closing far enough runs off the end of the range; re-center to continue.
             if pos+rel < 0:
                 self.motors.set_speed(FINGER, 0)
                 self.motors.torque_enable(FINGER, False)
@@ -795,7 +795,7 @@ class GripperArpServer(RobotComponentServer):
             self.saved_finger_angle = 90 
             self.desired_finger_angle = 90
 
-            # the fingers need nearly the whole 4096 range, so centre the midpoint
+            # the fingers need nearly the whole 4096 range, so center the midpoint
             self.motors.set_position(FINGER, touch_pos + 1800)
             await asyncio.sleep(2)
             self.motors.reset_encoder_to_midpoint(FINGER)

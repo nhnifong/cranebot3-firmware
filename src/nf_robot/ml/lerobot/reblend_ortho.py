@@ -26,7 +26,7 @@ What has to be recovered, per source dataset:
                        configured cam_tilt, which is neither recorded nor constant
                        across robots (the configs on hand hold 25, 26 and 30 degrees,
                        and one robot's two anchors differ). A few degrees out moves the
-                       floor by tens of centimetres, which would misalign every ortho
+                       floor by tens of centimeters, which would misalign every ortho
                        target label, so a wrong guess is not survivable.
 
                        With no config to read it from, the tilt is recovered from the

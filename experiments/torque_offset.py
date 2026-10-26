@@ -74,7 +74,7 @@ class Motor:
             if self.start is None:
                 self.start = self.pos
             if abs(self.pos - self.start) > self.max_travel:
-                raise Abort(f'rotor travelled {self.pos - self.start:+.2f} rad, past {self.max_travel} rad')
+                raise Abort(f'rotor traveled {self.pos - self.start:+.2f} rad, past {self.max_travel} rad')
         return self.state
 
     def move_to(self, target, speed, accel, timeout_s=5.0):

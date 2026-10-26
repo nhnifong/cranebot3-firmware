@@ -28,7 +28,7 @@ pad_clamp: false
 # Where an anchor's camera tilt is unknown (the recorded anchor_poses say where the
 # anchor is, not how far its camera is tilted off it) it is recovered per source by
 # matching the re-render against the ortho video the recording already holds; a few
-# degrees out would move the floor by tens of centimetres and misalign every label.
+# degrees out would move the floor by tens of centimeters and misalign every label.
 reblend_ortho:
   enabled: true
 

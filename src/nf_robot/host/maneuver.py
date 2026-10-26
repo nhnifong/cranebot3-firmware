@@ -74,7 +74,7 @@ class ItemImage(NamedTuple):
     """A gripper camera frame of whatever was under it at grasping distance."""
     image_rgb: np.ndarray
     timestamp: float            # capture time
-    laser_range: float          # metres from the camera to the item
+    laser_range: float          # meters from the camera to the item
     gantry_position: np.ndarray
 
 

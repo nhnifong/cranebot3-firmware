@@ -177,7 +177,7 @@ def main():
     train_parser.add_argument("--pos_weight", type=float, default=0,
                               help="weight on the objectness positives; 0 uses the balanced "
                                    "value for --grid and --cell_sigma. Raising it finds more "
-                                   "of the objects nobody labelled, at more false positives. "
+                                   "of the objects nobody labeled, at more false positives. "
                                    "See objectness_loss")
     train_parser.add_argument("--select_metric", default=SELECTION_METRIC,
                               help="eval metric that picks the saved checkpoint")

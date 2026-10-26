@@ -3,7 +3,7 @@
 The head is a 1792-way softmax over 12px cells and the mined labels are good to rather
 less than that, so the target is spread over the cells a label plausibly covers. These
 check the spreading is a real distribution, sits where the label is, and still collapses
-to the old behaviour at sigma 0.
+to the old behavior at sigma 0.
 """
 
 import math
@@ -18,8 +18,8 @@ GRID = (32, 56)          # rows, cols - the model's canvas grid
 ROWS, COLS = GRID
 
 
-def centre_of(cell_x, cell_y):
-    """A label sitting exactly at the centre of one cell."""
+def center_of(cell_x, cell_y):
+    """A label sitting exactly at the center of one cell."""
     return torch.tensor([[cell_x + 0.5, cell_y + 0.5]])
 
 
@@ -33,24 +33,24 @@ class TestSoftCellTarget(unittest.TestCase):
         self.assertTrue((target >= 0).all())
 
     def test_the_peak_is_at_the_label(self):
-        target = soft_cell_target(centre_of(20, 12), GRID, CELL_SIGMA)
+        target = soft_cell_target(center_of(20, 12), GRID, CELL_SIGMA)
         peak = int(target[0].argmax())
         self.assertEqual((peak // COLS, peak % COLS), (12, 20))
 
     def test_the_peak_follows_the_label_between_cells(self):
-        """Centred on where the label is, not on the cell it lands in - two labels in the
+        """Centered on where the label is, not on the cell it lands in - two labels in the
         same cell but at opposite corners should not produce the same target."""
         left = soft_cell_target(torch.tensor([[20.05, 12.5]]), GRID, CELL_SIGMA)
         right = soft_cell_target(torch.tensor([[20.95, 12.5]]), GRID, CELL_SIGMA)
         self.assertFalse(torch.allclose(left, right))
-        # mass shifts toward the neighbouring cell the label leans into
+        # mass shifts toward the neighboring cell the label leans into
         def at(target, x, y):
             return float(target[0, y * COLS + x])
         self.assertGreater(at(left, 19, 12), at(right, 19, 12))
         self.assertGreater(at(right, 21, 12), at(left, 21, 12))
 
     def test_a_wider_sigma_spreads_more(self):
-        cell = centre_of(20, 12)
+        cell = center_of(20, 12)
         peak_at = lambda s: float(soft_cell_target(cell, GRID, s).max())
         self.assertGreater(peak_at(0.5), peak_at(1.5))
         self.assertGreater(peak_at(1.5), peak_at(4.0))

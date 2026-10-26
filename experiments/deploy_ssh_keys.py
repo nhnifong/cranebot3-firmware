@@ -36,7 +36,7 @@ import subprocess
 import sys
 
 # Authoritative sshd drop-in. Include directives sit at the top of the stock
-# sshd_config, and sshd honours the *first* value it sees for a keyword, so a
+# sshd_config, and sshd honors the *first* value it sees for a keyword, so a
 # drop-in that sorts first (00-) wins over both the main file and any later
 # drop-in (e.g. a 50-cloud-init.conf that re-enables password auth).
 DROPIN_PATH = "/etc/ssh/sshd_config.d/00-disable-password-auth.conf"

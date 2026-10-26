@@ -49,7 +49,7 @@ class LabelsOnly:
         self.uv = np.array([v for v in table.column("target_uv").to_pylist() if v is not None],
                            dtype=np.float32)
 
-    def labelled_uv(self):
+    def labeled_uv(self):
         return self.uv
 
 
@@ -58,12 +58,12 @@ def draw_legend(canvas):
     y = canvas.shape[0] - 9
     cv2.rectangle(canvas, (0, y - 15), (canvas.shape[1], canvas.shape[0]), (25, 25, 25), -1)
 
-    def entry(x, colour, marker, text):
+    def entry(x, color, marker, text):
         if marker is not None:
-            cv2.drawMarker(canvas, (x + 6, y - 4), colour, marker, 11, 2)
+            cv2.drawMarker(canvas, (x + 6, y - 4), color, marker, 11, 2)
         else:
-            cv2.line(canvas, (x, y - 4), (x + 12, y - 4), colour, 2)
-        cv2.putText(canvas, text, (x + 16, y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, colour, 1)
+            cv2.line(canvas, (x, y - 4), (x + 12, y - 4), color, 2)
+        cv2.putText(canvas, text, (x + 16, y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, color, 1)
 
     entry(6, (0, 255, 0), cv2.MARKER_CROSS, "label")
     entry(74, (0, 0, 255), cv2.MARKER_TILTED_CROSS, "prediction")

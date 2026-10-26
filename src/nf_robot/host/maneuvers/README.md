@@ -258,7 +258,7 @@ Whatever the policy, the observer always sheds an over-tension by briefly cyclin
 
 ### Observer: position and state
 
-Positions are room-frame numpy arrays in metres, with z up and the floor at z=0. Every getter returns a copy.
+Positions are room-frame numpy arrays in meters, with z up and the floor at z=0. Every getter returns a copy.
 
 | Method | |
 |---|---|
@@ -285,7 +285,7 @@ Positions are room-frame numpy arrays in metres, with z up and the floor at z=0.
 | Method | |
 |---|---|
 | `gripper_connected()` | |
-| `laser_range()` | The rangefinder's distance, in metres, to whatever is under the gripper, or `None` if stale. |
+| `laser_range()` | The rangefinder's distance, in meters, to whatever is under the gripper, or `None` if stale. |
 | `wrist_angle()` | Degrees, 0 to 1080. |
 | `gripper_spin(timestamp=None)` | Radians the gripper camera is turned from the room's axes; the spin the gripper camera models are trained in. |
 | `grip_target_force()` | The grip force the fingers were last told to hold, 0 to 1. |
@@ -300,7 +300,7 @@ Positions are room-frame numpy arrays in metres, with z up and the floor at z=0.
 | `await gripper_capture(after=None, timeout=3.0, expect_size=None)` | `(timestamp, RGB frame)`, optionally only at a given `(width, height)`. |
 | `anchor_cameras()` | The anchor numbers whose camera has delivered a frame. |
 | `await anchor_capture(anchor_num, after=None, timeout=3.0)` | `(timestamp, RGB frame)` from an anchor camera captured after `after` (now, by default), or `(None, None)`. `after=0` takes the newest frame. |
-| `last_clear_item_image()` | The newest `ItemImage` taken while the laser read 12 to 40 cm and, if the visual servo model is running, it saw the item in the inner third of the frame: an item under the gripper, centred, before the fingers close. |
+| `last_clear_item_image()` | The newest `ItemImage` taken while the laser read 12 to 40 cm and, if the visual servo model is running, it saw the item in the inner third of the frame: an item under the gripper, centered, before the fingers close. |
 | `latest_ortho()` | The newest orthographic floor view (RGB), or `None`. |
 | `ortho_enabled()` | Whether the floor view is being rendered. |
 | `anchor_pixel_to_floor(anchor_num, norm_xy)` | Where a normalized point in an anchor camera image lands on the floor. |
@@ -317,7 +317,7 @@ Coroutines marked *motion* move the robot and may be cancelled at any `await`.
 |---|---|
 | `await seek_goal(goal_pos, head_turn=False, auto_altitude=True, timeout=None)` | *Motion.* Fly the gantry to `goal_pos`. Returns `True` on arrival. A call while a flight is under way re-aims it. With `timeout`, it returns `False` after that many seconds and leaves the flight going. |
 | `await clear_goal()` | End the flight in progress. |
-| `await nudge_gantry(delta, speed=0.12, max_step=0.35)` | *Motion.* A small eased move by `delta` metres, then stop. |
+| `await nudge_gantry(delta, speed=0.12, max_step=0.35)` | *Motion.* A small eased move by `delta` meters, then stop. |
 | `await move_direction_speed(uvec, speed=None, starting_pos=None, downward_bias=-0.04, key=...)` | Command a velocity under a source key; pass `key=self.velocity_key()`. Velocities from all keys are summed, and a key expires 2 s after its last command. Zero your key when done. |
 | `slow_stop_all_spools()` | Bring every spool to rest. |
 | `await settle_wrist(target, tol=2.0, timeout=6.0)` | Move the wrist and wait for it to arrive. |
@@ -330,7 +330,7 @@ Coroutines marked *motion* move the robot and may be cancelled at any `await`.
 | `await tension_and_wait()` | Tighten all lines and wait until they read tight. |
 | `await grasp()` | *Motion.* Grasp whatever is under the gripper. Returns `True` if it is held. |
 | `await servo_center()` | *Motion.* Steer sideways over the object the visual servoing model sees and turn the wrist to it, never descending. Runs until cancelled. Its velocity is summed with your own keys, so you can set the height alongside it. |
-| `servo_center_offset(max_age=0.5)` | Metres between the jaws and the object `servo_center` is steering for, or `None` if no object is confidently seen or it is not running. |
+| `servo_center_offset(max_age=0.5)` | Meters between the jaws and the object `servo_center` is steering for, or `None` if no object is confidently seen or it is not running. |
 | `prefer_swing_cancellation()` | An async context manager: swing cancellation on for the block, if verified. |
 | `set_swing_cancellation(enabled)` | Returns whether it was on. |
 | `await half_auto_calibration()` | *Motion.* Re-tension and re-reference the lines from the cameras' view of the gantry. |

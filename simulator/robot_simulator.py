@@ -278,9 +278,9 @@ if __name__ == '__main__':
                              'takes a path; defaults to the model beside this script.')
     parser.add_argument('--realtime', type=float, default=1.0, metavar='X',
                         help='Physics speed multiplier for --mujoco. The servers are '
-                             'real-time, so values far from 1.0 desynchronise them.')
+                             'real-time, so values far from 1.0 desynchronize them.')
     parser.add_argument('--room-side', type=float, default=None, metavar='M',
-                        help='Side length of the square room in metres (default 4). The '
+                        help='Side length of the square room in meters (default 4). The '
                              'four corner posts move to match, and the fixed run each '
                              'indirect line carries is remeasured with them.')
     parser.add_argument('--cam-tilt', type=float, default=None, metavar='DEG',

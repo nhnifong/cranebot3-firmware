@@ -15,7 +15,7 @@ from scipy.spatial.transform import Rotation
 
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.kalman_filter import KalmanFilter
-from nf_robot.host.tension_height import TensionResidualLogger, SLACK_TENSION_N
+from nf_robot.host.tension_height import TensionResidualLogger, SLACK_TENSION_N, vertical_force_anomaly_kg
 from nf_robot.generated.nf import telemetry, common
 from nf_robot.common.util import *
 from nf_robot.common.pose_functions import compose_poses, gripper_imu_inv
@@ -269,6 +269,11 @@ class Positioner2:
         * task to periodically predict forwards the kalman filter model
         * task to wait for updates that affect hang point and recalculate it, then update filter
         * task to wait for updates that affect visual estimates and update filter.
+
+        Every position here (gant_pos, hang_pos, visual_pos) is the gantry origin: the cross
+        where the four lines meet, not the gantry's apriltag. The hang point is that cross by
+        construction. Camera sightings are moved from the tag to the cross by the anchor
+        clients, through the pole geometry's gantry_april offset, before they get here.
         """
         self.run = False # false until main is called
         self.datastore = datastore
@@ -392,7 +397,7 @@ class Positioner2:
 
     def point_inside_work_area_2d(self, point, margin=0.0):
         """True if the horizontal point (x, y) lies within the anchor polygon, and at least
-        margin metres in from its edge."""
+        margin meters in from its edge."""
         if self.work_area is None:
             return True
         # with measureDist, pointPolygonTest returns the signed distance to the nearest
@@ -633,6 +638,10 @@ class Positioner2:
             self.finger_pressure_falling.set()
 
     def send_positions(self):
+        # no tension reported yet, or everything slack with the gantry resting on something
+        anomaly = None
+        if np.any(self.tension):
+            anomaly = vertical_force_anomaly_kg(self.anchor_points, self.tension, self.gant_pos)
         # send position factors to UI for visualization
         self.ob.send_ui(pos_estimate=telemetry.PositionEstimate(
             data_ts=float(self.data_ts),
@@ -641,6 +650,7 @@ class Positioner2:
             gripper_pose=common.Pose(rotation=fromnp(self.grip_pose[0]), position=fromnp(self.grip_pose[1])),
             slack=list(map(bool, self.slack_lines)),
             tension=list(self.tension),
+            vertical_force_anomaly_kg=anomaly,
         ))
         spin = 0
         if self.ob.gripper_client is not None:

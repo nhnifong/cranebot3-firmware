@@ -1,7 +1,7 @@
 # Visual servoing: what is wrong and what to do about it
 
 Written after a first checkpoint (`models/visual_servo.pth`, epoch 21) was flown in
-observe mode. Its behaviour, as observed on a bedroom floor that is *in* the training
+observe mode. Its behavior, as observed on a bedroom floor that is *in* the training
 set: direction predictions usable but noisy with a +Y lean, wrist axis pinned at zero
 even on a sharpie, `holding` true too early, `present` pinned at 1.0 on obviously empty
 frames, and no measurable improvement on the held-out room across training. The one
@@ -13,10 +13,10 @@ current as work lands.
 ## Evidence
 
 Measured from `datasets/visual_servoing`, `plates/objects` and the loss code, not
-inferred from behaviour.
+inferred from behavior.
 
 **E1. The training set contained no synthetic data, and no negatives at all.**
-228,659 rows, `sources={'teleop': 228659}`. `target_present` is labelled on 54% of rows
+228,659 rows, `sources={'teleop': 228659}`. `target_present` is labeled on 54% of rows
 and 100.000% of those are 1 - not one negative example exists. The `present` head has
 never been shown an empty frame, so saturating at 1.0 is the only thing it can do. This
 is unlearnable, not mistuned.
@@ -47,7 +47,7 @@ construction:
 | 4-7 s | 32.0% |
 
 Only 32% of the 1,064 mined episodes contain any wrist turn over 5 degrees. Overall 85%
-of labelled rows sit within 5 degrees of zero. The operator sets the wrist early, so at
+of labeled rows sit within 5 degrees of zero. The operator sets the wrist early, so at
 exactly the moment orientation is most visible the label reads zero.
 
 **E4. The axis loss makes hedging free.**
@@ -82,7 +82,7 @@ error is motion-correlated, and is a candidate for the observed +Y lean.
   - the decoded floor plate pool held every frame of every run, 29GB across the eleven
     runs in `plates_all`. Now a reservoir sample under `--floor_cache_mb`, 2GB by default.
   - simulated heights were drawn straight from the mined rangefinder column, which
-    bottoms out at 0.001m - 1.5% of rows are under a centimetre, the sensor in contact
+    bottoms out at 0.001m - 1.5% of rows are under a centimeter, the sensor in contact
     rather than a view of a floor. At 0.001m the compositor asks for a floor plate
     magnified 283x: one 125GB allocation. Heights are now clamped into 0.05-1.5m, which
     moved 6% of draws, with a hard 6x magnification backstop underneath that never binds
@@ -117,7 +117,7 @@ error is motion-correlated, and is a candidate for the observed +Y lean.
   rescaled against the other heads) and capped at 10x (inverse frequency is unstable in
   the tail; five rows would otherwise outweigh the bulk). On the current split this moves
   the share of the axis gradient spent on near-zero rows from **69.1% to 9.4%**.
-  `--no_axis_balance` restores the old behaviour.
+  `--no_axis_balance` restores the old behavior.
 
   Worth being clear about which item does what: the balance is what redistributes the
   gradient away from "always upright". The von Mises change does not by itself stop a
@@ -163,7 +163,7 @@ error is motion-correlated, and is a candidate for the observed +Y lean.
   leave the finger head out of the trigger until it earns a place.
 - **2.3 Expect `PRESENT_THRESHOLD` to come alive.** It is dead code today - `present` is
   a constant 1.0, so the "nothing seen" abort can never fire. It will start firing as
-  soon as negatives exist; that is a behaviour change to anticipate, not to debug.
+  soon as negatives exist; that is a behavior change to anticipate, not to debug.
 - **2.4 Do not hand-tune the +Y lean** until 3.4 says whether it is the model or the
   labels.
 - **2.5 Wrist commands are an absolute setpoint.** DONE. The wrist wobble on a robot was

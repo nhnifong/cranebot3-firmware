@@ -47,7 +47,7 @@ def balanced_pos_weight(dataset, grid, cell_sigma=CELL_SIGMA):
                     for s in dataset.samples if is_complete(s))
     if positives <= 0 or negatives <= 0:
         raise ValueError(
-            f"cannot balance the objectness loss: {positives / max(bump, 1e-9):.0f} labelled "
+            f"cannot balance the objectness loss: {positives / max(bump, 1e-9):.0f} labeled "
             f"target(s) against {negatives:.0f} supervised background cell(s). Without "
             f"complete frames (is_complete) nothing in the dataset says where objects are "
             f"not, and the head has no negatives to learn from.")
@@ -72,7 +72,7 @@ def evaluate_model(model, loader, device, top_k=5, tta=False, radii_cm=(10, 20, 
     model.eval()
     match_px = match_radius_cm * model.image_size / (ORTHO_EXTENT_M * 100.0)
     nearest, covered, all_scores, total_bce, count = [], [], [], 0.0, 0
-    ranked, labelled = [], 0  # (score, hit) per candidate of a complete frame; its labels
+    ranked, labeled = [], 0  # (score, hit) per candidate of a complete frame; its labels
     complete_frames = 0
 
     for images, points, mask, complete in loader:
@@ -96,7 +96,7 @@ def evaluate_model(model, loader, device, top_k=5, tta=False, radii_cm=(10, 20, 
         for i in torch.nonzero(complete > 0).flatten().tolist():
             complete_frames += 1
             labels = points[i][mask[i] > 0].cpu().numpy()
-            labelled += len(labels)
+            labeled += len(labels)
             ranked.extend(match_frame(labels, uv[i].cpu().numpy(), scores[i].cpu().numpy(), match_px))
 
     nearest = pixels_to_cm(torch.cat(nearest), model.image_size)
@@ -110,18 +110,18 @@ def evaluate_model(model, loader, device, top_k=5, tta=False, radii_cm=(10, 20, 
         metrics[f"recall@{radius}cm"] = (nearest <= radius).float().mean().item()
     metrics[f"top{top_k}@20cm"] = (covered <= 20).float().mean().item()
 
-    best = best_f1(ranked, labelled, (threshold,) if threshold is not None else thresholds)
+    best = best_f1(ranked, labeled, (threshold,) if threshold is not None else thresholds)
     frames = max(complete_frames, 1)
     if details is not None:
-        details.update({"ranked": ranked, "labelled": labelled, "frames": frames})
+        details.update({"ranked": ranked, "labeled": labeled, "frames": frames})
     metrics.update({
-        f"ap@{match_radius_cm:.0f}cm": average_precision(ranked, labelled),
+        f"ap@{match_radius_cm:.0f}cm": average_precision(ranked, labeled),
         f"f1@{match_radius_cm:.0f}cm": best["f1"],
         f"precision@{match_radius_cm:.0f}cm": best["precision"],
         f"found@{match_radius_cm:.0f}cm": best["found"],
         # The two failures as counts per complete frame, at the best-F1 threshold.
         "invented_per_frame": best["fp"] / frames,
-        "missed_per_frame": (labelled - best["tp"]) / frames,
+        "missed_per_frame": (labeled - best["tp"]) / frames,
         "threshold": best["threshold"],
         "scored_targets": best["frames"],
     })
@@ -148,9 +148,9 @@ def match_frame(labels, uv, scores, radius_px):
     return out
 
 
-def best_f1(ranked, labelled, thresholds=THRESHOLD_SWEEP):
+def best_f1(ranked, labeled, thresholds=THRESHOLD_SWEEP):
     """The threshold with the best F1 on the complete frames, and what it scores."""
-    if not ranked or not labelled:
+    if not ranked or not labeled:
         return {"f1": 0.0, "precision": 0.0, "found": 0.0,
                 "threshold": TARGET_THRESHOLD, "frames": 0, "tp": 0, "fp": 0}
     scores = np.array([s for s, _ in ranked])
@@ -161,20 +161,20 @@ def best_f1(ranked, labelled, thresholds=THRESHOLD_SWEEP):
         tp = int((above & hits).sum())
         fp = int((above & ~hits).sum())
         precision = tp / max(tp + fp, 1)
-        found = tp / labelled
+        found = tp / labeled
         f1 = 2 * precision * found / max(precision + found, 1e-9)
         if f1 > best["f1"]:
             best = {"f1": f1, "precision": precision, "found": found, "threshold": float(t),
                     "tp": tp, "fp": fp}
-    best["frames"] = labelled
+    best["frames"] = labeled
     return best
 
 
-def average_precision(ranked, labelled):
+def average_precision(ranked, labeled):
     """Area under the precision/recall curve of every candidate on the complete frames,
     ranked by score across frames. A confident invented target pushes precision down for
     everything below it, and a missed target caps recall, so both cost AP."""
-    if not ranked or not labelled:
+    if not ranked or not labeled:
         return 0.0
     order = sorted(ranked, key=lambda r: -r[0])
     hits = np.array([h for _, h in order], dtype=np.float64)
@@ -182,10 +182,10 @@ def average_precision(ranked, labelled):
     precision = tp / np.arange(1, len(hits) + 1)
     # Interpolated: precision at a rank is the best precision at that recall or beyond.
     precision = np.maximum.accumulate(precision[::-1])[::-1]
-    return float((precision * hits).sum() / labelled)
+    return float((precision * hits).sum() / labeled)
 
 
-def threshold_table(ranked, labelled, frames, thresholds=THRESHOLD_SWEEP):
+def threshold_table(ranked, labeled, frames, thresholds=THRESHOLD_SWEEP):
     """What each operating point would cost and find, as rows of text.
 
     The sensitivity dial in one table: every row is a threshold the robot could run at,
@@ -198,8 +198,8 @@ def threshold_table(ranked, labelled, frames, thresholds=THRESHOLD_SWEEP):
         above = scores >= t
         tp = int((above & hits).sum())
         fp = int((above & ~hits).sum())
-        rows.append(f"{t:>9.3f}  {tp / max(labelled, 1):5.3f}  {tp / max(tp + fp, 1):9.3f}  "
-                    f"{fp / frames:14.2f}  {(labelled - tp) / frames:12.2f}")
+        rows.append(f"{t:>9.3f}  {tp / max(labeled, 1):5.3f}  {tp / max(tp + fp, 1):9.3f}  "
+                    f"{fp / frames:14.2f}  {(labeled - tp) / frames:12.2f}")
     return rows
 
 
@@ -242,7 +242,7 @@ def train(args):
         raise ValueError(
             f"{data_root}/eval holds no complete frames, so {args.select_metric} cannot be "
             f"computed: nothing there can tell a false detection from an object nobody "
-            f"labelled. Merge hand labels into the pool and deal the splits from it - "
+            f"labeled. Merge hand labels into the pool and deal the splits from it - "
             f"merge_labels then split - or pick a --select_metric from the distance family.")
     pos_weight = args.pos_weight or balanced_pos_weight(train_set, args.grid, args.cell_sigma)
     logging.info(f"objectness pos_weight {pos_weight:.0f}; complete frames: "
@@ -348,7 +348,7 @@ def evaluate(args):
                      f"operates at {model.threshold:.3f}")
 
     if details.get("ranked"):
-        for row in threshold_table(details["ranked"], details["labelled"], details["frames"]):
+        for row in threshold_table(details["ranked"], details["labeled"], details["frames"]):
             logging.info(row)
 
     if args.preview_dir:
@@ -362,7 +362,7 @@ def evaluate(args):
 def _write_previews(model, dataset, device, out_dir: Path, top_k: int, tta: bool,
                     threshold=None):
     """Ground truth in green, predictions at the operating point in red, the candidates
-    below it in grey - which is what a sensitivity change would turn on."""
+    below it in gray - which is what a sensitivity change would turn on."""
     out_dir.mkdir(parents=True, exist_ok=True)
     for i in range(len(dataset)):
         image, points, mask, _ = dataset[i]
@@ -372,10 +372,10 @@ def _write_previews(model, dataset, device, out_dir: Path, top_k: int, tta: bool
             cv2.drawMarker(canvas, (int(gx), int(gy)), (0, 255, 0), cv2.MARKER_CROSS, 24, 2)
         for rank, ((u, v), score) in enumerate(zip(uv[0].cpu().numpy(), scores[0].cpu().numpy())):
             called = threshold is None or score >= threshold
-            colour = (0, 0, 255) if called else (150, 150, 150)
-            cv2.circle(canvas, (int(u), int(v)), 10, colour, 2 if rank == 0 and called else 1)
+            color = (0, 0, 255) if called else (150, 150, 150)
+            cv2.circle(canvas, (int(u), int(v)), 10, color, 2 if rank == 0 and called else 1)
             cv2.putText(canvas, f"{score:.2f}", (int(u) + 12, int(v)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, colour, 1)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
         cv2.imwrite(str(out_dir / dataset.samples[i]["file_name"]), canvas)
 
 

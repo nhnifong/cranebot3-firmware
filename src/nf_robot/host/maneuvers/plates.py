@@ -28,7 +28,7 @@ FINGERPLATE_SETTLE_S = 0.3
 CAPTURE_STREAM_TIMEOUT_S = 30.0
 # Consecutive missing frames that mean the stream has gone rather than lagged.
 FINGERPLATE_MAX_MISSES = 5
-# (metres) rangefinder readings to capture floor and object plates at. Spans the heights
+# (meters) rangefinder readings to capture floor and object plates at. Spans the heights
 # a gripper actually approaches from, and is what calibrates a plate's apparent scale
 # against the range it was taken at, so the compositor can rescale it to any simulated
 # height. Trimmed to by measurement, not by commanded altitude.
@@ -66,7 +66,7 @@ class Plates(Maneuver):
         them; keying every frame and taking the median leaves anything that passed
         underneath outvoted.
 
-        Only the raw frames are written. Deciding what is finger is an offline judgement
+        Only the raw frames are written. Deciding what is finger is an offline judgment
         with thresholds nobody has tuned, and it should be revisable without asking the
         robot to do this again.
         """
@@ -184,8 +184,8 @@ class Plates(Maneuver):
                 )
                 samples += 1
 
-                travelled = (ob.wrist_angle() - start) * direction
-                if travelled >= abs(degrees):
+                traveled = (ob.wrist_angle() - start) * direction
+                if traveled >= abs(degrees):
                     break
                 await asyncio.sleep(TELEMETRY_SAMPLE_S)
         finally:
@@ -298,7 +298,7 @@ class Plates(Maneuver):
         """
         label = f'object-{time.strftime("%Y%m%d-%H%M%S")}-{uuid.uuid4().hex[:4]}'
         start_wrist = self.ob.wrist_angle()
-        logger.info(f'objectplates: labelling this object {label}')
+        logger.info(f'objectplates: labeling this object {label}')
         result = await self._height_wrist_sweep(
             'objectplates', ranges or PLATE_RANGES_M, output_dir, settle_s,
             notes=f'object on green board: {label}',

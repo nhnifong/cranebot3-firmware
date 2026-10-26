@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"""Train the visual servoing model, each head masked by its own label mask.
+"""Train the visual servoing model.
 
 Usage:
     python -m nf_robot.ml.visual_servoing.train \
@@ -24,7 +24,7 @@ import torch
 import torch.nn.functional as F
 
 from nf_robot.ml.grid_head import masked_mean, window_average
-from nf_robot.ml.gripper_grid import CELL_SIGMA, position_losses
+from nf_robot.ml.gripper_grid import position_losses
 from nf_robot.ml.train_common import (
     format_metrics as _format, param_groups, resolve_data_root, upload_model, warmup_cosine,
 )
@@ -96,23 +96,18 @@ def von_mises_axis_loss(predicted, angle, kappa_max=KAPPA_MAX):
     return log_i0 - (bounded * target).sum(dim=1)
 
 
-def servo_loss(outputs, batch, grid, weights=None, cell_sigma=CELL_SIGMA,
-               axis_loss="vonmises", axis_bin_weight=None):
+def servo_loss(outputs, batch, grid, weights=None, axis_bin_weight=None):
     """Total loss and its parts, each averaged only over rows that carry that label."""
     weights = {**DEFAULT_WEIGHTS, **(weights or {})}
     parts, window_weights, window = position_losses(
         outputs["logits"], outputs["log_distance"], batch["target_uv"],
-        batch["target_range_m"], batch["has_uv"], grid, cell_sigma)
+        batch["target_range_m"], batch["has_uv"], grid)
 
     angle = batch["grasp_axis_rad"]
     # Average the axis over decode's window with detached weights, so the axis loss can't
     # move probability mass.
     axis = window_average(outputs["axis"], window_weights.detach(), window)
-    if axis_loss == "mse":
-        axis_target = torch.stack([torch.sin(2 * angle), torch.cos(2 * angle)], dim=1)
-        axis_terms = F.mse_loss(axis, axis_target, reduction="none").mean(dim=1)
-    else:
-        axis_terms = von_mises_axis_loss(axis, angle)
+    axis_terms = von_mises_axis_loss(axis, angle)
     axis_mask = batch["has_axis"]
     if axis_bin_weight is not None:
         # Folded into the mask so masked_mean divides by the applied weight.
@@ -228,8 +223,8 @@ def evaluate(model, loader, device, image_size, radii_px=(10, 25, 50)):
 
 def constant_baseline(train_set, eval_set, image_size, radii_px=(10, 25, 50)):
     """Score of always predicting the mean training target position."""
-    train_uv = train_set.labelled_uv()
-    eval_uv = eval_set.labelled_uv()
+    train_uv = train_set.labeled_uv()
+    eval_uv = eval_set.labeled_uv()
     if not len(train_uv) or not len(eval_uv):
         return {}
     scale = np.array(image_size, dtype=np.float32)
@@ -255,11 +250,6 @@ def checkpoint_payload(model, args, metrics, epoch):
         "global_state_keys": list(model.global_state_keys),
         "metrics": metrics,
         "epoch": epoch,
-        # not needed to rebuild the model, kept so a checkpoint says how it was trained
-        "cell_sigma": args.cell_sigma,
-        # Record the axis loss, since MSE checkpoints answer zero far more often.
-        "axis_loss": args.axis_loss,
-        "axis_balance": args.axis_balance,
     }
 
 
@@ -277,15 +267,13 @@ def train(args):
     if args.select_best and eval_set is None:
         raise SystemExit(f"--select_best needs an eval split and {data_root}/eval is not built")
 
-    axis_bin_weight = None
-    if args.axis_balance:
-        labels = train_set.labelled_axis()
-        weights_np = axis_bin_weights(labels)
-        axis_bin_weight = torch.from_numpy(weights_np)
-        near_zero = float(np.mean(np.abs(np.degrees(labels)) < 5.0)) if len(labels) else 0.0
-        logging.info(f"axis balance over {AXIS_BINS} bins from {len(labels)} labels "
-                     f"({near_zero:.0%} within 5 deg of zero): weights "
-                     f"{weights_np.min():.2f}-{weights_np.max():.2f}")
+    labels = train_set.labeled_axis()
+    weights_np = axis_bin_weights(labels)
+    axis_bin_weight = torch.from_numpy(weights_np)
+    near_zero = float(np.mean(np.abs(np.degrees(labels)) < 5.0)) if len(labels) else 0.0
+    logging.info(f"axis balance over {AXIS_BINS} bins from {len(labels)} labels "
+                 f"({near_zero:.0%} within 5 deg of zero): weights "
+                 f"{weights_np.min():.2f}-{weights_np.max():.2f}")
 
     image_size = tuple(args.image_size)
     if eval_set:
@@ -326,8 +314,7 @@ def train(args):
             with autocast:
                 outputs = model(batch["image"], batch["state"])
             outputs = {k: v.float() for k, v in outputs.items()}
-            loss, parts = servo_loss(outputs, batch, model.grid, cell_sigma=args.cell_sigma,
-                                     axis_loss=args.axis_loss,
+            loss, parts = servo_loss(outputs, batch, model.grid,
                                      axis_bin_weight=axis_bin_weight)
             loss.backward()
             optimizer.step()
@@ -393,14 +380,6 @@ def main():
                              f"one held-out room measured on a position proxy, and the "
                              f"heads it cannot see are still learning after it stops "
                              f"improving.")
-    parser.add_argument("--axis_loss", default="vonmises", choices=["vonmises", "mse"],
-                        help="Objective for the grasp axis head. vonmises trains the "
-                             "output's length as a confidence and charges for hedging; "
-                             "mse is the previous behaviour, kept for the A/B")
-    parser.add_argument("--no_axis_balance", dest="axis_balance", action="store_false",
-                        help="Weight every axis row alike instead of by angle bin. The "
-                             "labels lean hard on zero, so this is the old behaviour")
-    parser.set_defaults(axis_balance=True)
     parser.add_argument("--model_id", default=DEFAULT_MODEL_ID,
                         help="Hub model repo to push the checkpoint to with --upload")
     parser.add_argument("--upload", action="store_true",
@@ -410,9 +389,6 @@ def main():
                         metavar=("WIDTH", "HEIGHT"))
     parser.add_argument("--fuse_layers", type=int, default=4)
     parser.add_argument("--attention_layers", type=int, default=3)
-    parser.add_argument("--cell_sigma", type=float, default=CELL_SIGMA,
-                        help="Width in cells of the Gaussian the cell head is trained "
-                             "against; 0 for the old one-hot target")
     parser.add_argument("--epochs", type=int, default=40)
     parser.add_argument("--batch_size", type=int, default=400)
     parser.add_argument("--lr", type=float, default=3e-4)

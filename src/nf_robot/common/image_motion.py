@@ -19,7 +19,7 @@ def image_shift(reference_gray, live_gray, crop=GRIPPER_COMPARE_CROP, min_matche
 
     Matched features rather than phase correlation, because the two frames are not one
     image shifted. What is a hand's width under the camera sits in the same view as a
-    room several metres off, so a sideways move slides the near and far halves by quite
+    room several meters off, so a sideways move slides the near and far halves by quite
     different amounts, and phase correlation - which can only answer with one shift for
     the whole frame - reported peaks of 0.01 on real pairs that were obviously the same
     corner of the room. RANSAC instead picks whichever depth the bulk of the matches
@@ -43,7 +43,7 @@ def image_shift(reference_gray, live_gray, crop=GRIPPER_COMPARE_CROP, min_matche
     ref_pts = np.float32([ref_kp[m.queryIdx].pt for m in matches])
     live_pts = np.float32([live_kp[m.trainIdx].pt for m in matches])
     # partial affine: a translation, plus the rotation and scale that a wrist a degree
-    # out or a few centimetres of height put on top of it, which are not the answer but
+    # out or a few centimeters of height put on top of it, which are not the answer but
     # do have to be absorbed before the translation is right
     transform, inliers = cv2.estimateAffinePartial2D(ref_pts, live_pts, method=cv2.RANSAC,
                                                      ransacReprojThreshold=3.0)

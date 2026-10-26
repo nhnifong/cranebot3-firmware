@@ -13,7 +13,7 @@ came out, and prints the numbers that say whether to believe it.
 
 Frames come from the distilled dataset ortho_target already publishes, so each one arrives
 with the operator's grasp point attached - which makes the maps scoreable without anyone
-labelling anything new. That point is not the whole answer, since every object on the
+labeling anything new. That point is not the whole answer, since every object on the
 floor was a valid grasp and the operator picked one, but a map that cannot rank it above
 the bare floor is not carrying object signal either.
 
@@ -53,7 +53,7 @@ Per frame a contact sheet PNG, and over the run a table plus summary.json:
 
 The panels: the frame with the grasp point circled, one per prompt showing that prompt's
 probability, a confidence panel holding the winning probability per location, and an
-argmax panel colouring each location by which prompt won it.
+argmax panel coloring each location by which prompt won it.
 
 Panels are drawn on probabilities in [0, 1], so unlike cosines they are comparable across
 tiles and across frames, and the per-tile maximum in each subtitle is directly meaningful.
@@ -302,8 +302,8 @@ def heat_panel(bgr, prob, title):
     size = bgr.shape[0]
     heat = cv2.applyColorMap((np.clip(prob, 0, 1) * 255).astype(np.uint8), cv2.COLORMAP_JET)
     heat = cv2.resize(heat, (size, size), interpolation=cv2.INTER_NEAREST)
-    grey = cv2.cvtColor(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
-    return label_panel(cv2.addWeighted(grey, 0.45, heat, 0.55, 0), title, f"max {prob.max():.2f}")
+    gray = cv2.cvtColor(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
+    return label_panel(cv2.addWeighted(gray, 0.45, heat, 0.55, 0), title, f"max {prob.max():.2f}")
 
 
 def label_panel(panel, title, subtitle=None):
@@ -317,10 +317,10 @@ def label_panel(panel, title, subtitle=None):
 def argmax_panel(probs, size, prompts):
     """Which prompt won each location, one hue per prompt in the order they were given."""
     # 255 // n rather than 255 // (n - 1): the hue wheel wraps, so spanning it inclusively
-    # would give the first and last prompt the same colour.
-    colours = cv2.applyColorMap((np.arange(len(prompts)) * (255 // len(prompts))).astype(np.uint8),
+    # would give the first and last prompt the same color.
+    colors = cv2.applyColorMap((np.arange(len(prompts)) * (255 // len(prompts))).astype(np.uint8),
                                 cv2.COLORMAP_HSV).reshape(-1, 3)
-    panel = colours[probs.argmax(0).astype(np.uint8)]
+    panel = colors[probs.argmax(0).astype(np.uint8)]
     panel = cv2.resize(panel, (size, size), interpolation=cv2.INTER_NEAREST)
     return label_panel(panel, "argmax prompt")
 

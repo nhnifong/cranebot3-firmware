@@ -32,9 +32,15 @@ MARKER_NAMES = [
     'toys',
     'toys_back',
     'park_target', # deprecated
-] # next tag id 14
+    'cal_assist_4',
+    'cal_assist_5',
+    'cal_assist_6',
+    'cal_assist_7',
+] # next tag id 18
 
-CAL_MARKERS = set(['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3'])
+# Calibration uses whichever of these the anchor cameras can see; only origin is required.
+CAL_ASSIST_MARKERS = [f'cal_assist_{i}' for i in range(1, 8)]
+CAL_MARKERS = set(['origin'] + CAL_ASSIST_MARKERS)
 OTHER_MARKERS = set(['gamepad', 'hamper', 'trash', 'toys', 'gamepad_back', 'hamper_back', 'trash_back', 'toys_back'])
 
 # AprilTag images are typically downloaded, not generated in code.
@@ -47,9 +53,7 @@ CAL_MARKER_SIZE = 0.1690
 # Define the physical size of any markers that are not the default size.
 SPECIAL_SIZES = {
     'origin': CAL_MARKER_SIZE,
-    'cal_assist_1': CAL_MARKER_SIZE,
-    'cal_assist_2': CAL_MARKER_SIZE,
-    'cal_assist_3': CAL_MARKER_SIZE,
+    **{name: CAL_MARKER_SIZE for name in CAL_ASSIST_MARKERS},
     'gantry':       0.0915,
 }
 

@@ -22,8 +22,8 @@ class BasketDataset(ShardDataset):
     SPLIT_COMMAND = ("python -m nf_robot.ml.basket.mine --output_root {root} ... "
                      "(mining deals the pool itself)")
 
-    def labelled_return(self):
-        """Every row's move back to centre, for the stay-put baseline."""
+    def labeled_return(self):
+        """Every row's move back to center, for the stay-put baseline."""
         return np.array([r["return_body"] for r in self.rows], dtype=np.float32)
 
     def __getitem__(self, idx):

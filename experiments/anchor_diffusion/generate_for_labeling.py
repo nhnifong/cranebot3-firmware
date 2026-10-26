@@ -41,7 +41,7 @@ ROOMS = [
     "studio apartment", "classroom", "daycare room",
 ]
 FLOORS = [
-    "beige carpet", "grey carpet", "blue shag rug", "light hardwood floor", "dark hardwood floor",
+    "beige carpet", "gray carpet", "blue shag rug", "light hardwood floor", "dark hardwood floor",
     "white tile floor", "checkered linoleum floor", "polished concrete floor", "terracotta tile floor",
     "patterned persian rug over wood floor", "foam play mats", "bamboo floor", "laminate wood floor",
     "green carpet", "black and white hexagon tile",

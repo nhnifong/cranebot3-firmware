@@ -253,7 +253,7 @@
               <span>Room props</span>
               <div class="toggle-track"><div id="toggle-props-indicator" class="toggle-knob status-offline"></div></div>
             </div>
-            <div id="action-theme" class="menu-item menu-section-header" title="Choose the colour scheme used by the panels and the 3D view.">Theme</div>
+            <div id="action-theme" class="menu-item menu-section-header" title="Choose the color scheme used by the panels and the 3D view.">Theme</div>
             <div id="action-parking" class="menu-item menu-section-header">Parking</div>
             <div id="action-maintenance" class="menu-item menu-section-header">Calibration and Maintenance</div>
             <div id="action-robot-auth" class="menu-item">Bind to account</div> <!-- Text updated by main.ts -->
@@ -295,7 +295,7 @@
             </div>
             <div id="action-shutdown-components" class="menu-item" title="Halt every connected component cleanly so its power can be cut without corrupting the SD card.">Shut Down Components</div>
             <div id="action-get-ticket" class="menu-item" title="Request a temporary auth ticket for accessing the robot's video streams directly.">Get Stream Ticket</div>
-            <div id="action-toggle-named-positions" class="menu-item menu-item-toggle" title="Show every other named position the robot reports (parking spot, drop position, basket fixes...) as a labelled ring in the 3D view.">
+            <div id="action-toggle-named-positions" class="menu-item menu-item-toggle" title="Show every other named position the robot reports (parking spot, drop position, basket fixes...) as a labeled ring in the 3D view.">
               <span>Other named positions</span>
               <div class="toggle-track"><div id="toggle-named-positions-indicator" class="toggle-knob status-offline"></div></div>
             </div>
@@ -380,8 +380,13 @@
         <!-- Spacer -->
         <div class="footer-spacer"></div>
 
-        <!-- Maneuver status: the running motion task, or the last one and how it ended -->
+        <!-- Weight the line tensions hold beyond the nominal hanging weight, then the
+             maneuver status: the running motion task, or the last one and how it ended -->
         <div class="footer-stats-group">
+          <div class="stat-line">
+            <span class="label-muted">Weight</span>
+            <strong id="force-anomaly-value">--</strong>
+          </div>
           <div class="stat-line">
             <span class="label-muted">Maneuver</span>
             <strong id="maneuver-name">Idle</strong>
@@ -493,7 +498,7 @@
           <!--
             Gamepad diagram. The controller artwork is the DualShock 4 layout SVG;
             the leader lines + labels below are drawn in code so they can be edited
-            here. Coordinates are in the artwork's 600x400 space. Each labelled
+            here. Coordinates are in the artwork's 600x400 space. Each labeled
             control is one <g class="gp-callout"> with a <line> (gutter -> button)
             and a <text> (bold key glyph + description). Left callouts anchor their
             text to the left gutter, right callouts to the right gutter.

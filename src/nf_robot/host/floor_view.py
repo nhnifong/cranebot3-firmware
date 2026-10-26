@@ -158,7 +158,7 @@ def _camera_floor_map(camera_pose, K, D, src_w, src_h, map_size_px, map_extent_m
 
     if x1 > x0 and y1 > y0:
         # Room coordinates of every ortho pixel in the box, matching the projection the
-        # old M matrix applied: room origin at image centre, +y up so v is flipped.
+        # old M matrix applied: room origin at image center, +y up so v is flipped.
         u = np.arange(x0, x1, dtype=np.float64)
         v = np.arange(y0, y1, dtype=np.float64)
         gx, gy = np.meshgrid((u - map_size_px / 2.0) / px_per_m,

@@ -25,7 +25,7 @@ GREEN_LOW = 10.0
 MIN_COMPONENT_FRACTION = 0.0008
 # Margin in pixels left around the object's bounding box when cropping.
 CROP_MARGIN = 8
-# Optical axis as a fraction of the frame, where the operator centred the grasp point.
+# Optical axis as a fraction of the frame, where the operator centered the grasp point.
 PRINCIPAL_NORM = (342.0 / 684.0, 192.0 / 384.0)
 
 # Floor diameter around the grasp point beyond which keyed pixels are board edge or floor,
@@ -38,7 +38,7 @@ MANIFEST_NAME = "objects.jsonl"
 
 
 def chroma_key(rgb, green_low=GREEN_LOW, green_high=GREEN_HIGH):
-    """Alpha from greenness (G - max(R, B)), plus the colour with green spill pulled out."""
+    """Alpha from greenness (G - max(R, B)), plus the color with green spill pulled out."""
     image = rgb.astype(np.float32)
     red, green, blue = image[:, :, 0], image[:, :, 1], image[:, :, 2]
     greenness = green - np.maximum(red, blue)
@@ -74,7 +74,7 @@ def vignette_axes(shape, range_m, diameter_m=VIGNETTE_DIAMETER_M):
 
 
 def apply_vignette(alpha, range_m, diameter_m=VIGNETTE_DIAMETER_M):
-    """Zero alpha outside the keep-region centred on the grasp point."""
+    """Zero alpha outside the keep-region centered on the grasp point."""
     height, width = alpha.shape
     ax, ay = vignette_axes(alpha.shape, range_m, diameter_m)
     cx, cy = PRINCIPAL_NORM[0] * width, PRINCIPAL_NORM[1] * height
@@ -86,7 +86,7 @@ def apply_vignette(alpha, range_m, diameter_m=VIGNETTE_DIAMETER_M):
 def extract_cutout(rgb, margin=CROP_MARGIN, range_m=None,
                    diameter_m=VIGNETTE_DIAMETER_M, **key_kwargs):
     """One frame as a tight RGBA cutout, returning (rgba, grasp_xy, coverage) or None."""
-    alpha, colour = chroma_key(rgb, **key_kwargs)
+    alpha, color = chroma_key(rgb, **key_kwargs)
     if range_m is not None:
         # Before the speckle pass, so leftover board edge is judged at its final size.
         alpha = apply_vignette(alpha, range_m, diameter_m)
@@ -101,7 +101,7 @@ def extract_cutout(rgb, margin=CROP_MARGIN, range_m=None,
     y0 = max(0, ys.min() - margin)
     y1 = min(height, ys.max() + 1 + margin)
 
-    rgba = np.dstack([colour[y0:y1, x0:x1],
+    rgba = np.dstack([color[y0:y1, x0:x1],
                       (alpha[y0:y1, x0:x1] * 255).astype(np.uint8)])
     grasp = (PRINCIPAL_NORM[0] * width - x0, PRINCIPAL_NORM[1] * height - y0)
     return rgba, grasp, float((alpha > 0.5).mean())
@@ -126,7 +126,7 @@ def extract_run(plate_dir, run_id, output_dir, label=None,
     grasp_axis = run.get("grasp_axis_wrist_angle", run.get("start_wrist_angle"))
     if grasp_axis is None:
         logging.warning(f"{run_id}: no grasp_axis_wrist_angle; every cutout's grasp axis "
-                        f"will be unlabelled and synthetic frames built from them will "
+                        f"will be unlabeled and synthetic frames built from them will "
                         f"train the axis head on nothing")
 
     entries, skipped = [], 0
@@ -180,7 +180,7 @@ def extract_run(plate_dir, run_id, output_dir, label=None,
     # answer it.
     offsets = [e["wrist_offset_deg"] for e in entries if e["wrist_offset_deg"] is not None]
     axis = (f"grasp axis {min(offsets):+.0f}..{max(offsets):+.0f} deg" if offsets
-            else "grasp axis UNLABELLED")
+            else "grasp axis UNLABELED")
     if offsets and max(offsets) - min(offsets) < 1.0:
         axis += "  <- the wrist barely moved; the axis head has nothing to learn here"
     logging.info(f"{run_id}: {len(entries)} cutouts, {skipped} frames keyed to nothing; "
@@ -272,7 +272,7 @@ def main():
     parser.add_argument("--green_low", type=float, default=GREEN_LOW)
     parser.add_argument("--green_high", type=float, default=GREEN_HIGH)
     parser.add_argument("--vignette_m", type=float, default=VIGNETTE_DIAMETER_M,
-                        help="Diameter on the floor, in metres, outside which nothing is object")
+                        help="Diameter on the floor, in meters, outside which nothing is object")
     parser.add_argument("--no_vignette", action="store_true",
                         help="Keep everything the chroma key kept, however far out it is")
     parser.add_argument("--fps", type=int, default=VIDEO_FPS,

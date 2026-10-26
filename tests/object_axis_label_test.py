@@ -42,7 +42,7 @@ class TestWristOffset(unittest.TestCase):
 
 
 def write_run(plate_dir, wrist_angles, **run_attrs):
-    """A small objectplates run: a grey blob on green, at a spread of wrist angles."""
+    """A small objectplates run: a gray blob on green, at a spread of wrist angles."""
     writer = PlateWriter(plate_dir, "objectplates", notes="test")
     for wrist in wrist_angles:
         rgb = np.zeros((*SHAPE, 3), np.uint8)
@@ -68,7 +68,7 @@ class TestAxisConvention(unittest.TestCase):
         self.assertAlmostEqual(math.degrees(axis_from_wrist_offset(30.0)), -30.0)
         self.assertAlmostEqual(math.degrees(axis_from_wrist_offset(-30.0)), 30.0)
 
-    def test_unlabelled_stays_unlabelled(self):
+    def test_unlabeled_stays_unlabeled(self):
         self.assertIsNone(axis_from_wrist_offset(None))
 
     def test_a_swept_capture_gives_axes_either_side_of_upright(self):
@@ -109,7 +109,7 @@ class TestExtractRunLabelsTheAxis(unittest.TestCase):
         self.assertEqual([round(e["wrist_offset_deg"]) for e in entries], [0, 30])
 
     def test_a_run_with_no_zero_recorded_labels_nothing(self):
-        """Unlabelled rather than quietly zero, so synth_frames is not handed a
+        """Unlabeled rather than quietly zero, so synth_frames is not handed a
         fabricated axis for every frame."""
         run_id = write_run(self.dir, [45.0, 75.0])
         entries = extract_run(self.dir, run_id, self.dir / "objects")

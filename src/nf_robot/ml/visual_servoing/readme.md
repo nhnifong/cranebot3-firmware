@@ -94,25 +94,25 @@ The grid spans **1.25x the frame extent in each axis** (image coordinates -0.125
 can answer "down there, off-screen" instead of being forced to pick a visible cell. This is
 the sock case, and it is the specific thing dit-grasp-4 cannot represent. The cells are the
 attention blocks' own 18x32 tokens, with no upsampling, so each is about 17.5px of frame.
-There is no offset head: the position is the centre of mass of the softmax in a 5x5 window
+There is no offset head: the position is the center of mass of the softmax in a 5x5 window
 around the winning cell (`CENTROID_RADIUS`), which gives sub-cell precision from the logits
 alone while a second object outside the window cannot drag the answer toward it.
 
 The spatial softmax gives two of the three dimensions. The third - distance along the
-ray - is a per-cell regression channel in log metres, gathered at the winning cell.
+ray - is a per-cell regression channel in log meters, gathered at the winning cell.
 (u, v, distance) is then a 3D point by the pinhole model, using the
 gripper camera's calibrated intrinsic_matrix; cv_common.py already reads that out of the
 camera calibration. Per-cell rather than a single global scalar because with two objects
 at different heights in frame, one global distance has no correct value.
 
-Loss: cross-entropy over cells against a Gaussian (`--cell_sigma`, 1 cell), Huber on the
-windowed centre of mass (centred on the true cell) in cells, Huber on log distance.
+Loss: cross-entropy over cells against a Gaussian (1 cell wide), Huber on the
+windowed center of mass (centered on the true cell) in cells, Huber on log distance.
 
 **2. Grasp axis, 2 channels, averaged over the winning window.**
 
 Predicted per-cell and averaged over the same 5x5 window with the same softmax weights
 (detached in training, so the axis loss cannot move the position). The raw vectors are
-averaged, so neighbours that disagree shorten the result and lower its concentration.
+averaged, so neighbors that disagree shorten the result and lower its concentration.
 Parametrised as
 (sin 2*theta, cos 2*theta) because a two-finger grasp axis is pi-periodic - regressing
 theta directly puts a wraparound discontinuity in the middle of the label space. Labels
@@ -151,7 +151,7 @@ More grip is positive, less grip is negative; scaled to the robot's finger speed
 downstream, which keeps it compatible with the existing gripper_vel action.
 
 Predicted from the cell grid, because closing is a test of whether there is something
-*between the fingers* - bottom centre of a rigidly mounted camera - square on, and near
+*between the fingers* - bottom center of a rigidly mounted camera - square on, and near
 enough. A vector pooled over the whole image can say the frame holds a graspable thing
 without saying this one is in the jaws, which is the distinction the head exists to make.
 On the robot this reads as a cleaner close signal than the [CLS] head gave.
@@ -168,7 +168,7 @@ object, not of where it sits in frame.
 Labels for synthetic frames are the open problem. Rather than hand-authoring a rule,
 author a *parametrised* one - close when the target is inside the jaw region and the
 range is below h_close - then fit its parameters against recorded teleop closes by
-maximising agreement. That gives a defensible label rule, and as a by-product a number
+maximizing agreement. That gives a defensible label rule, and as a by-product a number
 saying how predictable human close-timing actually is. If agreement tops out at 70%,
 this head's ceiling is 70% and we should not chase it further.
 
@@ -193,7 +193,7 @@ is close in frame" - it then reads near 1 through the whole approach, before any
 in the hand.
 
 What the head answers in deployment is whether it is safe to lift now, and the operator
-answered that by lifting. The grip labelled is the last one in the episode that rose
+answered that by lifting. The grip labeled is the last one in the episode that rose
 `--rise_m`; a grip runs from contact until the gripper is out of force mode and pressure
 is under 0.02, so a light grip on paper or a mid-carry force adjustment does not end it.
 The **lift** is the start of the operator's up command, not a height threshold, because
@@ -222,7 +222,7 @@ Without the flag the loss is masked there.
 choice. Copy-paste composites have tell-tale edge statistics, and a trainable backbone
 will find them and key on them. A frozen DINOv3 cannot adapt to the artifact, so the
 head is forced to use object-shaped features. Still worth alpha matting the board
-captures and feathering the edges, and randomising exposure, white balance, motion blur
+captures and feathering the edges, and randomizing exposure, white balance, motion blur
 and JPEG quality - motion blur especially, since live frames have it and board captures
 will not. (Cast shadows: skipped for now.)
 
@@ -230,11 +230,11 @@ will not. (Cast shadows: skipped for now.)
 meaningless. Hold out whole teleop episodes and score with distance error and hit-rate
 at radius, plus the constant-prediction baseline - ortho_target/training.py has both
 (evaluate_model and constant_baseline). For a centering task, "always predict the
-centre" is an embarrassingly strong baseline and we want to know when we actually beat
+center" is an embarrassingly strong baseline and we want to know when we actually beat
 it.
 
 **Keep a fixture set of hard frames as a regression test.** Twenty frames with
-hand-labelled directions, run against every checkpoint. Start with the frame that
+hand-labeled directions, run against every checkpoint. Start with the frame that
 prompted this: a dark sock just past the bottom edge, fingers visible, correct answer
 "below the frame, not graspable yet". dit-grasp-4 answers that one by closing its
 fingers in place, and a fixture set would have caught it before deployment.
@@ -265,7 +265,7 @@ uses; write_split and upload_dataset there can be reused as they are. One row pe
      "grasp_axis_rad": float | null,    # pi-periodic
      "finger": float | null,            # -1..1
      "target_present": 0 | 1,
-     "holding": 0 | 1 | null,           # null = unlabelled, loss masked
+     "holding": 0 | 1 | null,           # null = unlabeled, loss masked
      "state": {"laser_rangefinder": ..., "finger_angle": ..., "target_force": ...}}
 
 Every label is nullable and null means "mask this head's loss for this row" rather than
@@ -314,9 +314,9 @@ rotating one and dealing with resampling and empty corners.
 Repeat across rooms, times of day and floor types - carpet, hardwood, tile - since these
 plates are the entire background distribution the model sees in synthetic training.
 
-**objectplates.** An object on a **green board**, gripper centred over it, stepping
+**objectplates.** An object on a **green board**, gripper centered over it, stepping
 through several heights and a full wrist turn at each. Green for the usual reason a
-green screen is green: almost nothing we pick up off a floor is that colour, so a
+green screen is green: almost nothing we pick up off a floor is that color, so a
 distance threshold in a chroma space is a complete segmentation, including holes,
 concavities and the gaps inside a crumpled towel that a largest-connected-component rule
 on a white board would fill in wrongly. Spill suppression on the alpha edge is a
@@ -324,10 +324,10 @@ solved recipe.
 
 The setup instruction carries both labels, so the board needs no printed markings:
 
-- **The operator centres the intended grasp lump under the camera.** The grasp point is
+- **The operator centers the intended grasp lump under the camera.** The grasp point is
   then the principal point of the capture frame by construction. This is the part that
   matters for towels - the right answer is a chunky lump somewhere off to one side, not
-  the centroid of a flat expanse, and it is the operator's judgement that puts the lump
+  the centroid of a flat expanse, and it is the operator's judgment that puts the lump
   under the lens.
 - **The operator orients the wrist to the ideal grasping angle before triggering.** The
   grasp axis is then zero in the first frame, and every later frame's axis label is its
@@ -404,7 +404,7 @@ geometric label in the synthetic set.
 5. Composite the finger plate for a sampled finger_angle **on top**, so fingers occlude
    objects. Objects that end up behind a finger are realistic training signal, not a bug
    to avoid - that occlusion is a large part of why the live frames are hard.
-6. Photometric randomisation: sensor noise, and small (2px) random transformations of
+6. Photometric randomization: sensor noise, and small (2px) random transformations of
    the final image.
 
 Frames with no object in canvas at all are the negatives for the target-present head,
@@ -535,13 +535,13 @@ Objects, as one RGBA cutout per captured frame, same keyer and same backdrop:
 Anything more than `--vignette_m` (0.5m by default) across the floor from the grasp point
 is dropped, since the board stops filling the frame near the top of a height sweep and its
 edge keys as foreground. Lower it if board edge still survives, raise it for an object
-wider than half a metre, `--no_vignette` to keep whatever the key kept.
+wider than half a meter, `--no_vignette` to keep whatever the key kept.
 
 Check both before generating anything from them. Each writes a contact sheet
 (`plates/fingers/_mattes.png`, `plates/objects/_objects.png`) and an mp4 over a
 checkerboard (`--fps`, 60 by default): `_mattes.mp4` in finger angle order, `_objects.mp4`
 with each cutout back where it sat in its capture frame. The mp4 is what shows a matte
-flickering between neighbouring plates, or an object wandering when it should hold still
+flickering between neighboring plates, or an object wandering when it should hold still
 under the wrist turn.
 
 ## 3. Mine the teleop dataset into the pool
@@ -573,7 +573,7 @@ miner takes several sources in one run.
 Without `--approach_seconds`, each episode's approach reaches back from the grasp for as
 long as the target stays tracked and in view - with optical flow, until the flow loses it.
 That is what makes `m2-close-grasp-sep29-26` worth mining: its operator hovers over each
-object before taking it, and every second of that hover is a labelled frame just above a
+object before taking it, and every second of that hover is a labeled frame just above a
 target. Pass `--approach_seconds` to cap the window at a fixed length instead.
 
 ### Empty floor (`--negatives`)
@@ -612,7 +612,7 @@ that frame empty would teach the target head the opposite of what it shows - and
 the hardest negatives the close and holding heads get, being exactly the case where an
 object is in view and near the jaws without being in them.
 
-`finger` is masked too. A close commanded on nothing is the action being labelled wrong, so
+`finger` is masked too. A close commanded on nothing is the action being labeled wrong, so
 whatever the operator's hand did in these recordings is not what the finger head should
 copy. Pressure is not consulted at all: fingers closing on each other read the same as
 fingers closing on an object, and here it is always the former.
@@ -628,7 +628,7 @@ the fingers really were empty on every frame.
 point fixed in the room, differenced against the gripper position `Positioner2` reported.
 The two dead-reckoning methods integrate velocity outwards from the grasp instead and never
 consult that position at all; `optical-flow` tracks the target through the pixels and reads
-no telemetry but the rangefinder, at the cost of decoding the video and of never labelling
+no telemetry but the rangefinder, at the cost of decoding the video and of never labeling
 a target that has left the frame. The flag is shared with `label_video`, so a video can be
 rendered with the method a pool was mined with; the methods, what each is wrong about, and
 the vertical offset the comparison exposes are in [data_quality.md](data_quality.md).
@@ -724,9 +724,6 @@ Reading the metrics:
   normal state of affairs, when eval was mined separately and held teleop rows only. Now
   that the deal is downstream of every producer it means the pool itself has no synthetic
   rows in it, and `audit` says so before training does.
-
-`--axis_loss mse` and `--no_axis_balance` turn off the von Mises objective and the
-per-angle-bin row weighting for an A/B; both are on by default.
 
 ## 6c. Publishing the dataset
 
@@ -826,13 +823,13 @@ The loop is the downstream half the model was shaped for. Each pass:
 - one gripper frame plus laser range, finger angle and grip set point in, one target
   position out (`servo.predict_frame`)
 - the predicted camera-frame point becomes a room-frame offset from the *lens* through
-  `geometry.camera_to_room` - the inverse of the transform mine_teleop labelled with,
+  `geometry.camera_to_room` - the inverse of the transform mine_teleop labeled with,
   which is why both directions live in one file
 - the horizontal part of that offset is the centering error, closed with a gain and a
   speed cap, the same shape as `_center_card_in_view`. It is filtered first, over about
   one pendulum period: what is smoothed is the target's room position rather than the
   offset to it, so the filter removes swing without lagging the loop's own corrections,
-  and a jump of more than half a metre re-seeds it rather than sliding across the floor
+  and a jump of more than half a meter re-seeds it rather than sliding across the floor
   between two objects
 - descent is gated on being centered, with a tolerance that is a fraction of the range
   and therefore an angular one: 3cm of error at 60cm up is a correction the rest of the
@@ -864,8 +861,8 @@ is the informative case (readme head 5), and having it in the log is what makes 
 question answerable from a run rather than from a fixture set.
 
 Every prediction also goes out as `GripCamPredictions`, which the UI draws over the
-gripper feed: an arrow from the frame centre to the target, a bar for the grasp axis, and
-the two probability bars. `move_x`/`move_y` are a displacement from the frame centre, so
+gripper feed: an arrow from the frame center to the target, a bar for the grasp axis, and
+the two probability bars. `move_x`/`move_y` are a displacement from the frame center, so
 an arrow can leave the picture - that is the off-canvas case, not a bug. Watching it
 during a descent distinguishes a model mislocating the object from a mistuned loop.
 
@@ -894,7 +891,7 @@ and print the worst.
 
 The strong one: the object does not move before the grasp, so the mark's motion in frame is
 entirely explained by camera motion. Track the image patch under the grasp point backwards
-through the approach with plain normalised cross-correlation and compare it against the
+through the approach with plain normalized cross-correlation and compare it against the
 projected track. That turns the eyeball test into a per-episode number over a whole source.
 It needs pixels, so run it over the last second or two only, and it will fail on
 featureless carpet - which is a reason to report a confidence beside it, not a reason not
@@ -909,7 +906,7 @@ sides, and eval measures how the model does on *further frames of scenes it trai
 The doc says so and it is the right default for choosing between checkpoints of one run.
 The problem is that it is the only number there is. Deal a second eval split grouped by
 episode and by plate run, score both, and report them side by side; the gap between them is
-the generalisation estimate this project currently does not have. It is one pass over the
+the generalization estimate this project currently does not have. It is one pass over the
 pool, and if the gap turns out to be small then a lot of the worry here is unfounded and
 that is worth knowing too.
 
@@ -943,7 +940,7 @@ source, and both are proxies for a bad pose chain. Make them per-episode, add th
 amplitude of `gripper_pos` over the mined window, record in the row whether `spin` was
 recovered rather than recorded, and give the miner a threshold to reject on.
 
-**6. There is still no fixture set.** The training notes above asked for twenty hand-labelled
+**6. There is still no fixture set.** The training notes above asked for twenty hand-labeled
 hard frames run against every checkpoint, starting with the dark sock past the bottom edge.
 It does not exist, and it is the only check here that spans checkpoints - `audit` grades a
 dataset and `evaluate` grades a model against an eval split that moves every time the pool

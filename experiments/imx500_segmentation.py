@@ -10,7 +10,7 @@ from picamera2 import CompletedRequest, Picamera2
 from picamera2.devices import IMX500
 from picamera2.devices.imx500 import NetworkIntrinsics
 
-COLOURS = np.loadtxt("assets/colours.txt")
+COLORS = np.loadtxt("assets/colours.txt")
 
 
 def create_and_draw_masks(request: CompletedRequest):
@@ -33,11 +33,11 @@ def create_masks(request: CompletedRequest) -> Dict[int, (np.ndarray, np.ndarray
         if i == 0:
             continue
         output_shape = [input_h, input_w, 4]
-        colour = [(0, 0, 0, 0), COLOURS[int(i)]]
-        colour[1][3] = 150  # update the alpha value here, to save setting it later
+        color = [(0, 0, 0, 0), COLORS[int(i)]]
+        color[1][3] = 150  # update the alpha value here, to save setting it later
         overlay = np.array(mask == i, dtype=np.uint8)
         contours = create_contours(overlay)
-        overlay = np.array(colour)[overlay].reshape(output_shape).astype(np.uint8)
+        overlay = np.array(color)[overlay].reshape(output_shape).astype(np.uint8)
         # No need to resize the overlay, it will be stretched to the output window.
         res[i] = (overlay, contours)
     return res

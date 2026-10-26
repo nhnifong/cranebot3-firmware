@@ -53,7 +53,7 @@ def cell_to_uv(cell, grid):
 
 
 def camera_point(uv, distance):
-    """(u, v, distance along the ray) as a 3D point in the camera's optical frame, in metres."""
+    """(u, v, distance along the ray) as a 3D point in the camera's optical frame, in meters."""
     fx, fy = FOCAL_NORM
     cx, cy = PRINCIPAL_NORM
     x = (uv[..., 0] - cx) / fx
@@ -140,13 +140,13 @@ def position_losses(logits, log_distance, target_uv, target_range_m, has_uv, gri
     # Only the cell head is softened.
     parts["cell"], _ = masked_mean(cell_loss(logits, cell, grid, index, cell_sigma), has_uv)
 
-    # Train the windowed centre of mass directly, clamped to the outermost cell centres.
+    # Train the windowed center of mass directly, clamped to the outermost cell centers.
     centroid, window_weights, window = local_centroid(logits, index)
     reachable = cell.clamp(min=0.5).minimum(cell.new_tensor([cols - 0.5, rows - 0.5]))
     parts["centroid"], _ = masked_mean(
         F.smooth_l1_loss(centroid, reachable, reduction="none").mean(dim=1), has_uv)
 
-    # Log metres, since range error is relative.
+    # Log meters, since range error is relative.
     predicted_log = gather_cells(log_distance.unsqueeze(1), index).squeeze(-1)
     target_log = target_range_m.clamp(min=1e-3).log()
     parts["distance"], _ = masked_mean(

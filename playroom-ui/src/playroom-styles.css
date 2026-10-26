@@ -1067,7 +1067,7 @@ h2 {
 /* The whole row is the hit target; the track is only an indicator. */
 .menu-item-toggle .toggle-track { pointer-events: none; flex: none; }
 
-/* One-of-a-set row, e.g. the colour schemes. The tick keeps its space when
+/* One-of-a-set row, e.g. the color schemes. The tick keeps its space when
    hidden so the labels don't shift as the selection moves. */
 .menu-item.menu-item-choice {
   display: flex;

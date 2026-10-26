@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"""Composite exactly labelled synthetic visual servoing frames from floor, object and finger plates.
+"""Composite exactly labeled synthetic visual servoing frames from floor, object and finger plates.
 
 Usage:
     python -m nf_robot.ml.visual_servoing.synth_frames \
@@ -49,7 +49,7 @@ AXIS_FROM_WRIST_SIGN = -1.0
 FLOOR_CACHE_MB = 2048
 # (MB) image data a synthetic shard buffers before it is written.
 SHARD_MB = 256
-# (metres) the simulated heights this tool will composite, excluding sensor-in-contact
+# (meters) the simulated heights this tool will composite, excluding sensor-in-contact
 # readings.
 SIM_RANGE_M = (0.05, 1.5)
 # Hard cap on magnifying any plate or cutout, a backstop against bad ranges.
@@ -57,7 +57,7 @@ MAX_MAGNIFICATION = 6.0
 
 
 def neutralize_plates(entries, what):
-    """Remove one capture's colour cast from its plates in place, returning the illuminant
+    """Remove one capture's color cast from its plates in place, returning the illuminant
     removed."""
     if not entries:
         return np.ones(3)
@@ -176,7 +176,7 @@ def load_finger_plates(finger_dir, neutralize=True):
         by_run.setdefault(entry.get("run_id", ""), []).append(
             (float(entry["finger_angle"]), bgra[:, :, [2, 1, 0, 3]]))
     for run_id, plates in sorted(by_run.items()):
-        # White balance per run, since finger sets really are different colours.
+        # White balance per run, since finger sets really are different colors.
         if neutralize:
             illuminant = white_balance.estimate_illuminant(rgba for _, rgba in plates)
             gains = white_balance.neutralize_gains(illuminant)
@@ -272,7 +272,7 @@ def paste_rgba(canvas, rgba, top_left):
 
 
 def photometric(image, rng):
-    """Colour temperature, exposure, white balance, noise, motion blur and JPEG quality."""
+    """Color temperature, exposure, white balance, noise, motion blur and JPEG quality."""
     image = white_balance.apply_gains(image, white_balance.random_illuminant_gains(rng))
     out = image.astype(np.float32)
     out *= rng.uniform(0.75, 1.3)
@@ -452,7 +452,7 @@ def generate(plate_dir, output_root, split, count, seed, object_dir=None, finger
     ranges = sample_ranges(ranges_from, count, rng)
 
     # Count frames above the tallest plate, where the floor texture looks nearer than
-    # labelled.
+    # labeled.
     tallest = max(p["range_m"] for p in floor_plates)
     stretched = sum(1 for r in ranges if r > tallest)
     if stretched:

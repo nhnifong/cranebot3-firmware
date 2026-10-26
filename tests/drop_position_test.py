@@ -3,7 +3,7 @@
 Recorded by driving the gantry where you want drops to land and pressing the button, then used
 like any other named route destination. What makes it worth its own tests is the height: named
 positions are things on the floor and a route hovers the dropoff height above them, so what gets
-saved has to be that height below where the gantry stood, or the robot comes back a metre high.
+saved has to be that height below where the gantry stood, or the robot comes back a meter high.
 """
 import tempfile
 import unittest

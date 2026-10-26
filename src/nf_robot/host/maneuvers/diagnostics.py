@@ -1,7 +1,9 @@
 """Diagnostics: measurements of how well the robot flies, for tuning it."""
 
 import asyncio
+import json
 import logging
+import math
 import time
 
 import numpy as np
@@ -215,3 +217,181 @@ class Diagnostics(Maneuver):
             f'Goalseek diagnostic complete over {len(deviations)} trials. '
             f'RMS deviation {rms_cm:.2f}cm '
             f'(per-axis x={per_axis_rms_cm[0]:.2f}cm y={per_axis_rms_cm[1]:.2f}cm z={per_axis_rms_cm[2]:.2f}cm)')
+
+    @verb('stretchtest', motion=True)
+    async def stretch_test_task(self, step_cm='10', top_margin_cm='20'):
+        """
+        Step the gantry up and down at its current xy, and at each stop record what the line
+        lengths, the anchor cameras, the rangefinder and the line tensions say about where it is.
+        Triggered by the debug command "stretchtest [step_cm] [top_margin_cm]". This is a
+        motion task.
+
+        After a vertical move the hang position (from line lengths) settles further up or down
+        than the visual position. Each line's reported length minus its length modeled from the
+        visual position, plotted against that line's tension, tells apart line stretch (a
+        straight line in tension), a spool scale error (follows the change in length, not the
+        tension) and a camera bias (the rangefinder agrees with the hang position instead).
+
+        The sweep climbs from the start height in steps of step_cm until it is top_margin_cm
+        below the lowest pull point, or a line passes TENSION_STOP_FRACTION of the safe tension.
+        It then descends until the rangefinder would read less than MIN_LASER_RANGE_M, and
+        climbs back to the start height, so most heights are visited moving up and moving down.
+
+        Writes one JSON line per stop to stretch_test/<time>.jsonl under the output root: a
+        header line first, then one line per stop with the raw samples, then an end line.
+        """
+        MIN_LASER_RANGE_M = 0.3
+        # gantry height floor when the rangefinder has no reading, above the pole length
+        NO_LASER_FLOOR_CLEARANCE_M = 0.5
+        TENSION_STOP_FRACTION = 0.8
+        SETTLE_TIMEOUT_S = 10.0
+        # still means this many sightings from one anchor, all within this of their median
+        SETTLE_MIN_SIGHTINGS = 6
+        SETTLE_MAX_SPREAD_M = 0.04
+        SAMPLE_S = 3.0
+        SAMPLE_INTERVAL_S = 0.1
+        ob = self.ob
+
+        step_m = float(step_cm) / 100
+        top_margin_m = float(top_margin_cm) / 100
+        start = ob.gantry_position()
+        top_z = float(np.min(ob.anchor_points()[:, 2])) - top_margin_m
+        if start[2] > top_z:
+            self.notify(f'Stretch test: start height {start[2]:.2f}m is already above the top '
+                        f'of the sweep ({top_z:.2f}m). Move the gantry lower and try again.')
+            return
+        if ob.is_holding():
+            logger.warning('Stretch test started while holding something; the tensions will include it.')
+
+        # Only for the progress bar. The real bottom is decided by the rangefinder at each stop.
+        laser0 = ob.laser_range()
+        if laser0 is not None:
+            bottom_estimate = start[2] - (laser0 - MIN_LASER_RANGE_M)
+        else:
+            bottom_estimate = ob.pole_offset()[2] + NO_LASER_FLOOR_CLEARANCE_M
+        n_up = math.floor((top_z - start[2]) / step_m)
+        n_down = max(0, math.floor((start[2] + n_up * step_m - bottom_estimate) / step_m))
+        planned_stops = 1 + n_up + n_down + max(0, n_down - n_up)
+
+        path = self.output_dir('stretch_test') / f'{time.strftime("%Y%m%d-%H%M%S")}.jsonl'
+        logger.info(f'Stretch test writing to {path}, about {planned_stops} stops')
+        stops = 0
+        end_reason = 'cancelled'
+
+        def write(f, record):
+            f.write(json.dumps(record) + '\n')
+            f.flush()
+
+        async def settle():
+            """Wait for a window of camera sightings in which the gantry held still. Returns the
+            time the window started, or None if none turned up within SETTLE_TIMEOUT_S.
+
+            ob.await_still_gantry_window reads sightings that are only kept during calibration,
+            so this judges the same thing from the sighting buffer that is always filled."""
+            deadline = time.time() + SETTLE_TIMEOUT_S
+            window_start = time.time()
+            while time.time() < deadline:
+                await asyncio.sleep(0.2)
+                sightings = ob.gantry_sightings(window_start)
+                full = [sightings[sightings[:, 1] == a, 2:] for a in np.unique(sightings[:, 1])]
+                full = [p for p in full if len(p) >= SETTLE_MIN_SIGHTINGS]
+                if not full:
+                    continue
+                spread = max(np.max(np.linalg.norm(p - np.median(p, axis=0), axis=1)) for p in full)
+                if spread <= SETTLE_MAX_SPREAD_M:
+                    return window_start
+                window_start = time.time()
+            logger.warning(f'Stretch test: gantry not still within {SETTLE_TIMEOUT_S:.0f}s, recording anyway')
+            return None
+
+        async def visit(f, z, leg):
+            """Fly to height z, wait for it to settle, record, and return the stop's record."""
+            nonlocal stops
+            self.progress(100.0 * stops / planned_stops, f'{leg} to {z:.2f}m')
+            await ob.seek_goal(np.array([start[0], start[1], z]), auto_altitude=False)
+            ob.slow_stop_all_spools()
+            settled_since = await settle()
+
+            sample_start = time.time()
+            samples = []
+            while time.time() - sample_start < SAMPLE_S:
+                await asyncio.sleep(SAMPLE_INTERVAL_S)
+                samples.append({
+                    't': time.time(),
+                    # (time, length m, speed m/s, tension N) per line
+                    'lines': ob.line_records().tolist(),
+                    'hang': ob.hang_position().tolist(),
+                    'fused': ob.gantry_position().tolist(),
+                    'laser': ob.laser_range(),
+                })
+            sightings = ob.gantry_sightings(settled_since if settled_since is not None else sample_start)
+            record = {
+                'stop': stops,
+                'leg': leg,
+                'goal_z': z,
+                'settled': settled_since is not None,
+                'samples': samples,
+                # (time, anchor_num, x, y, z) for every camera sighting since it settled
+                'sightings': sightings.tolist(),
+            }
+            write(f, record)
+            stops += 1
+            tensions = np.array([s['lines'] for s in samples])[:, :, 3]
+            lasers = [s['laser'] for s in samples if s['laser'] is not None]
+            logger.info(f'Stretch test stop {stops} ({leg}) goal z={z:.2f}m: '
+                        f'hang z={samples[-1]["hang"][2]:.3f} '
+                        f'visual z={np.mean(sightings[:, 4]) if len(sightings) else float("nan"):.3f} '
+                        f'laser={np.mean(lasers) if lasers else float("nan"):.3f} '
+                        f'max tension={tensions.max():.1f}N')
+            return tensions.max(), (min(lasers) if lasers else None)
+
+        with open(path, 'w') as f:
+            write(f, {
+                'header': True,
+                'start_time': time.time(),
+                'start': start.tolist(),
+                'step_m': step_m,
+                'top_z': top_z,
+                'anchor_points': ob.anchor_points().tolist(),
+                'pole_offset': ob.pole_offset().tolist(),
+                'laser_offset': model_constants.laser_offset,
+                'max_safe_tension': ob.max_safe_tension,
+                'holding': ob.is_holding(),
+                'line_columns': ['t', 'length_m', 'speed_mps', 'tension_n'],
+                'sighting_columns': ['t', 'anchor_num', 'x', 'y', 'z'],
+            })
+            try:
+                z = float(start[2])
+                max_tension, min_laser = await visit(f, z, 'start')
+
+                # climb to the top, or until a line nears the safe tension
+                while z + step_m <= top_z + 1e-6:
+                    if max_tension > TENSION_STOP_FRACTION * ob.max_safe_tension:
+                        logger.info(f'Stretch test: {max_tension:.1f}N is near the safe tension, '
+                                    f'not climbing further')
+                        break
+                    z += step_m
+                    max_tension, min_laser = await visit(f, z, 'up')
+
+                # descend until the next step would bring the gripper too near the floor
+                while True:
+                    if min_laser is not None:
+                        if min_laser - step_m < MIN_LASER_RANGE_M:
+                            break
+                    elif z - step_m < ob.pole_offset()[2] + NO_LASER_FLOOR_CLEARANCE_M:
+                        break
+                    z -= step_m
+                    _, min_laser = await visit(f, z, 'down')
+
+                # climb back to the start height, so the low stops are seen from both directions
+                while z + step_m <= start[2] + 1e-6:
+                    z += step_m
+                    await visit(f, z, 'return')
+                end_reason = 'finished'
+            finally:
+                write(f, {'end': True, 'reason': end_reason, 'stops': stops, 'end_time': time.time()})
+                ob.slow_stop_all_spools()
+                logger.info(f'Stretch test {end_reason} after {stops} stops, wrote {path}')
+
+        self.finish(f'{stops} stops written')
+        self.notify(f'Stretch test finished: {stops} stops written to {path}')

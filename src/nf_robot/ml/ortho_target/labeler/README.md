@@ -33,7 +33,7 @@ To go round again for frames you have not seen:
 python -m nf_robot.ml.ortho_target.labeler --root ~/data/combined_targets_reblend --add 300
 ```
 
-`--add N` extracts N frames that are neither already cached nor already labelled, keeps
+`--add N` extracts N frames that are neither already cached nor already labeled, keeps
 the ones already there, and serves the lot — so N means N to work on, not N drawn. The
 frames you have done stay in the list as saved; turn on "Skip finished" to walk past them.
 
@@ -53,12 +53,12 @@ The line under the image says where the dots you are looking at came from: the m
 frame before, or a label you saved earlier.
 
 "Skip finished" walks past anything already dealt with — saved, or skipped this run — in
-both directions and after every save, so a second pass over a part-labelled set goes
+both directions and after every save, so a second pass over a part-labeled set goes
 straight down the frames still waiting. It is remembered between runs, since it is a way
 of working for a whole sitting rather than a per-frame choice. The page already opens on
-the first unlabelled frame either way.
+the first unlabeled frame either way.
 
-Amber dots are the model's guesses, labelled with their probability, seeded at a threshold
+Amber dots are the model's guesses, labeled with their probability, seeded at a threshold
 well below the one the robot acts on — deleting a wrong dot is faster than placing a right
 one. Green dots are yours. Moving a seed makes it green, since its probability described
 where the model put it rather than where you did.
@@ -85,7 +85,7 @@ is the cue to drag it back onto its object.
 
 Labels land in `ortho_target_user_labels/`, one parquet per frame named for the source
 dataset and the frame (`user-naavox_combined_targets_reblend-000012-000340.parquet`), so
-re-labelling one overwrites it and the same episode and offset of another dataset does
+re-labeling one overwrites it and the same episode and offset of another dataset does
 not. Labels from before the source was in the name are still shown as saved, but only on a
 frame whose picture they match; saving over one replaces it with the new name. Feed them to training the ordinary way:
 

@@ -57,3 +57,4 @@ derail_event_*.jsonl
 audit_previews
 cluster_sort/
 clutter_record/
+stretch_test/

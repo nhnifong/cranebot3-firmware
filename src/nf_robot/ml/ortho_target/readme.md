@@ -4,12 +4,12 @@ Predict everywhere the robot could reach next, in the ortho floor view's pixel s
 
 The map is one independent objectness per cell, so a frame holding four graspable things
 can report four of them and the scores mean the same in every frame; see OrthoTargetNet
-and objectness_loss in [model.py](model.py), which carries the consequence of labelling
+and objectness_loss in [model.py](model.py), which carries the consequence of labeling
 only one of those four.
 
 The labels come from teleop recordings: wherever an operator actually grasped something
 is by construction a place worth reaching for, so every episode donates one label for
-free, with no hand labelling.
+free, with no hand labeling.
 
 | file | what it holds |
 | --- | --- |
@@ -17,7 +17,7 @@ free, with no hand labelling.
 | [dataset.py](dataset.py) | distilling, hand-label merging, splitting, uploading, and the training loader |
 | [training.py](training.py) | training, scoring and previews |
 | [\_\_main\_\_.py](__main__.py) | the command line: `python -m nf_robot.ml.ortho_target <step>` |
-| [labeler/](labeler/README.md) | the browser page for hand-labelling complete frames: `python -m nf_robot.ml.ortho_target.labeler` |
+| [labeler/](labeler/README.md) | the browser page for hand-labeling complete frames: `python -m nf_robot.ml.ortho_target.labeler` |
 
 ## Pipeline
 
@@ -98,7 +98,7 @@ free, with no hand labelling.
    and a robot rarely wants them weighted equally: a missed object is left on the floor
    until the next pass, an invented one sends the gantry across the room for nothing.
    --threshold rescores at another point, and the previews then draw what it calls in red
-   and what it leaves behind in grey:
+   and what it leaves behind in gray:
 
    ```
    python -m nf_robot.ml.ortho_target evaluate --threshold 0.30 --preview_dir previews
@@ -108,7 +108,7 @@ free, with no hand labelling.
    out, the targets below it are not being ranked low, they are not being found at all,
    and no threshold recovers them. Training saves the swept threshold into the
    checkpoint, so shipping a different one means training again with
-   --select_metric chosen to favour the side you want.
+   --select_metric chosen to favor the side you want.
 
 6. Try it on a robot before publishing. --local_models makes the observer load
    models/ortho_target.pth - where training just wrote it - instead of the hub copy. This
@@ -165,7 +165,7 @@ from scratch, so a re-distill drops them and the merge has to run again after it
 does the split, which is downstream of both.
 
 How much they matter is out of proportion to how many there are. They are where every
-negative in the dataset comes from: objectness_loss trains a teleop frame's unlabelled
+negative in the dataset comes from: objectness_loss trains a teleop frame's unlabeled
 cells on nothing at all, because the objects the operator did not reach for are in them,
 so only a frame somebody marked exhaustively can say where the floor is empty. A dataset
 with none of them cannot be trained on, and one with none of them in eval cannot be
@@ -214,9 +214,9 @@ every cell of every frame is now supervised and the negatives outnumber the posi
 far more; leave it computed rather than carried over from the other dataset.
 
 Two things make the comparison less than a clean A/B, and both flatter this dataset.
-Its eval split is drawn from the same hand-labelled pool, so a model trained on complete
+Its eval split is drawn from the same hand-labeled pool, so a model trained on complete
 frames is scored on the distribution it was fitted to, while the ordinary model is scored
-on a stranger; and the labelling runs put near-duplicate frames on both sides of the
+on a stranger; and the labeling runs put near-duplicate frames on both sides of the
 split, which the split log counts. Compare the two checkpoints on one eval set - the
 ordinary one - if the question is which model to ship, rather than each on its own.
 
@@ -236,13 +236,13 @@ costs what it used to.
 ## Geometry
 
 The ortho view is an orthographic projection of the floor plane (host/floor_view.py), so
-room metres map to its pixels analytically - no camera pose is involved.
+room meters map to its pixels analytically - no camera pose is involved.
 
 ## What eval measures
 
 The eval split is a random sample of rows, taken after everything has been merged (see
 split_pool). Worth knowing what that measures: an episode donates eight frames of one
-floor carrying one label and a labelling run donates three, so most eval rows have a near
+floor carrying one label and a labeling run donates three, so most eval rows have a near
 duplicate sitting in train, and the score says how well the model does on further frames
 of rooms it has trained on rather than on a room it has not. That is the right comparison
 for choosing between checkpoints of one run and an optimistic one for predicting a new
@@ -255,14 +255,14 @@ Worth knowing before trusting the labels:
 
 - The projection assumes contact happens on the floor plane. An object grasped at height
   z appears displaced in the ortho view by the anchor cameras' parallax, so the label
-  drifts outward from the room centre as z grows. contacts_m carries the full 3D
+  drifts outward from the room center as z grows. contacts_m carries the full 3D
   position, so samples can be filtered on z later.
 - Contact position is recomputed here from observation.state rather than read from the
-  labelled contact_vec_* action components. Both use the same definition (see
+  labeled contact_vec_* action components. Both use the same definition (see
   contact_blend_alphas), but an episode that never reaches the pressure threshold gets a
   zeroed contact_vec, which is indistinguishable from "contact at the starting position".
   Reading the pressure directly is what makes those episodes skippable instead of
-  silently mislabelled.
+  silently mislabeled.
 
 ## Footnote: DINOv3
 

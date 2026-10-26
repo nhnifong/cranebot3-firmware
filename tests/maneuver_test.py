@@ -289,6 +289,7 @@ class TestBuiltins(ManeuverTestCase):
         self.assertEqual(verbs, {
             'droppoint': 'drop_point', 'fingerplates': 'plates', 'floorplates': 'plates',
             'objectplates': 'plates', 'linear': 'diagnostics', 'goalseek': 'diagnostics',
+            'stretchtest': 'diagnostics',
             'ferry': 'ferry',
             'cluster': 'cluster_sort',
             'basketdata': 'basket_episodes', 'findbasket': 'find_basket',

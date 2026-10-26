@@ -25,7 +25,7 @@ from nf_robot.ml.grid_head import cell_loss, local_centroid
 from nf_robot.ml.gripper_grid import DEFAULT_BACKBONE
 from nf_robot.ml.placer.dataset import EVAL_FRACTION, DropPairDataset
 from nf_robot.ml.placer.model import (
-    CENTROID_RADIUS, MERGE_MODES, DropPointNet, decode, uv_to_cell, uv_to_metres)
+    CENTROID_RADIUS, MERGE_MODES, DropPointNet, decode, uv_to_cell, uv_to_meters)
 from nf_robot.ml.train_common import param_groups, warmup_cosine
 
 DEFAULT_MODEL_PATH = "models/drop_point.pth"
@@ -38,7 +38,7 @@ RADII_CM = (15, 30, 60)
 
 
 def drop_loss(outputs, batch, grid, cell_sigma=CELL_SIGMA, centroid_weight=CENTROID_WEIGHT):
-    """Cross-entropy over cells against a softened target, plus the windowed centre of mass."""
+    """Cross-entropy over cells against a softened target, plus the windowed center of mass."""
     logits = outputs["logits"]
     rows, cols = grid
     cell = uv_to_cell(batch["target_uv"], grid)
@@ -56,7 +56,7 @@ def drop_loss(outputs, batch, grid, cell_sigma=CELL_SIGMA, centroid_weight=CENTR
 
 @torch.no_grad()
 def evaluate(model, loader, device, radii_cm=RADII_CM, top_k=3, shuffle_items=False):
-    """Distance from the predicted drop point to the one the operator used, in centimetres.
+    """Distance from the predicted drop point to the one the operator used, in centimeters.
 
     `shuffle_items` pairs each room with another row's item: how much worse that is, is how
     much the model reads the item rather than the room's usual drop point.
@@ -75,8 +75,8 @@ def evaluate(model, loader, device, radii_cm=RADII_CM, top_k=3, shuffle_items=Fa
         covered.append(distance.min(dim=1).values.cpu())
         tasks += list(batch["task"])
 
-    errors = uv_to_metres(torch.cat(errors)) * 100
-    covered = uv_to_metres(torch.cat(covered)) * 100
+    errors = uv_to_meters(torch.cat(errors)) * 100
+    covered = uv_to_meters(torch.cat(covered)) * 100
     metrics = {"median_cm": errors.median().item(), "mean_cm": errors.mean().item()}
     for radius in radii_cm:
         metrics[f"recall@{radius}cm"] = (errors <= radius).float().mean().item()
@@ -95,8 +95,8 @@ def per_task(errors, tasks):
 
 def constant_baseline(train_set, eval_set, radii_cm=RADII_CM):
     """Score of always dropping at the mean training drop point."""
-    guess = train_set.labelled_uv().mean(axis=0)
-    errors = uv_to_metres(np.linalg.norm(eval_set.labelled_uv() - guess, axis=1)) * 100
+    guess = train_set.labeled_uv().mean(axis=0)
+    errors = uv_to_meters(np.linalg.norm(eval_set.labeled_uv() - guess, axis=1)) * 100
     out = {"median_cm": float(np.median(errors)), "mean_cm": float(errors.mean())}
     for radius in radii_cm:
         out[f"recall@{radius}cm"] = float((errors <= radius).mean())

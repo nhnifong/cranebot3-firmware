@@ -138,7 +138,7 @@ def integrate_centering(raw_vel, offset, dt):
 # seconds; spread wide enough to bracket the ideal even under heavy loop contention
 COARSE_CANDS = (0.3, 0.0, 0.6)
 # a coarse trial damped this well is near enough the ideal to refine around immediately. Well
-# above VERIFIED_RESIDUAL_RAD: this only says the neighbourhood is right, and the fine pass is
+# above VERIFIED_RESIDUAL_RAD: this only says the neighborhood is right, and the fine pass is
 # what finds the latency that actually damps.
 COARSE_GOOD_ENOUGH_RAD = 0.10
 # fine pass spans +/- this around the coarse best (covers the gap between coarse samples)
@@ -236,7 +236,7 @@ MAX_REFINEMENT_SHIFT = 0.10
 
 
 def length_for_frequency(freq_hz):
-    """Pendulum length in metres that swings at freq_hz."""
+    """Pendulum length in meters that swings at freq_hz."""
     return GRAVITY / (2 * np.pi * freq_hz) ** 2
 
 
@@ -297,7 +297,7 @@ def _refine_frequency(grid, filtered, freq):
     """Frequency from the timing of the zero crossings, or None if there are too few.
 
     The spectrum can only place the peak to within a bin, and a bin over a recording this
-    short is worth several millimetres of length. Crossing times carry the period far more
+    short is worth several millimeters of length. Crossing times carry the period far more
     precisely, and unlike the spectrum they do not care that the swing is decaying - so
     the peak picks the band and the crossings measure inside it.
     """
@@ -350,11 +350,10 @@ def measure_swing_frequency(samples):
 
 
 def measure_pendulum(samples):
-    """(frequency in Hz, effective length in metres) from raw gyro samples.
+    """(frequency in Hz, effective length in meters) from raw gyro samples.
 
-    The effective length is what the swing behaves as, not the pole's own length: the
-    gripper is a body with its own moment of inertia hanging on the end of it, so this is
-    measured rather than reached for with a tape. It is the number POLE_GEOMETRY wants.
+    This measures the effective length of the pendulum, which differs from the
+    modelled length because COGs are not at model origins.
 
     Returns (None, None) when the recording holds no usable swing.
     """
@@ -371,14 +370,14 @@ POLE_MATCH_TOLERANCE_M = 0.06
 
 
 def nearest_pole_type(length):
-    """(pole type, how far its swing length sits from `length` in metres), or (None, gap)
+    """(pole type, how far its swing length sits from `length` in meters), or (None, gap)
     when nothing is close enough to be the pole on this robot.
 
     Only the CARBON270 has to come out right: it swings 130 mm shorter than either of the
     others, which a free swing separates easily. The ABS500 and CARBON400 sit 14 mm apart,
     far inside what a different payload moves the effective length by, so this will not
     reliably tell those two apart - and it need not, since they hang the gripper within a
-    couple of centimetres of each other.
+    couple of centimeters of each other.
 
     UNSPECIFIED is left out. It is not a pole, only what a config predating the field
     reports, and it carries the ABS500 geometry that config_loader backfills it to.

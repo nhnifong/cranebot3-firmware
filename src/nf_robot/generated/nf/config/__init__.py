@@ -200,7 +200,7 @@ class ParkData(betterproto2.Message):
 
     parked_range: "float" = betterproto2.field(10, betterproto2.TYPE_DOUBLE)
     """
-    Downward rangefinder readings in metres, taken with the gantry resting on the hook
+    Downward rangefinder readings in meters, taken with the gantry resting on the hook
     and again from the mouth of the fork. The camera cannot see height and the position
     estimate drifts in z between sessions, so these are the only absolute measure of it:
     park sets its altitude by the mouth reading before closing in, and checks the parked

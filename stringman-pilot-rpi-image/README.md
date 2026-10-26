@@ -23,7 +23,7 @@ file (`config/stringman-pi3aplus.yaml`) -- the same `-S` source root, custom lay
       -c ../cranebot3-firmware/stringman-pilot-rpi-image/config/stringman-pi3aplus.yaml \
       -- IGconf_device_user1pass='Fo0bar!!'
 
-That writes its artefacts to `~/rpi-image-gen/work/image-stringman-pi3aplus/stringman-pi3aplus.img`.
+That writes its artifacts to `~/rpi-image-gen/work/image-stringman-pi3aplus/stringman-pi3aplus.img`.
 Note that the 3A+ has no ethernet port, so the fallback debugging path below is wifi or serial only.
 
 ### Writing and debugging

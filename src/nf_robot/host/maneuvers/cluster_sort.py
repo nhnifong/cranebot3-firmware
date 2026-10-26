@@ -33,7 +33,7 @@ BIN_NAMES = ('gamepad', 'trash', 'toys', 'hamper')
 # Targets this close to any card, horizontally, are left alone, or the robot would pick
 # back up what it just sorted.
 CARD_EXCLUSION_M = 0.4
-# (metres) height of the gripper, at the end of the pole, over a card when it lets go
+# (meters) height of the gripper, at the end of the pole, over a card when it lets go
 DROP_HEIGHT_OVER_CARD_M = 0.30
 # A target this close to one already flown over in the collect phase is the same object.
 VISITED_RADIUS_M = 0.15
@@ -44,7 +44,7 @@ FRAME_RANGE_TOL_M = 0.02
 FRAME_CENTER_TOL_M = 0.02
 FRAME_SETTLE_S = 0.5
 FRAME_TIMEOUT_S = 12.0
-# vertical speed per metre of range error, and its limit
+# vertical speed per meter of range error, and its limit
 FRAME_RANGE_GAIN = 1.0
 FRAME_MAX_VERTICAL_SPEED = 0.08
 FRAME_POLL_S = 0.1

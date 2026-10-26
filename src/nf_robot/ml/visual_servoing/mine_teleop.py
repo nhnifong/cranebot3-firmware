@@ -62,13 +62,13 @@ POOL_SPLIT = "all"
 # Keep one frame in this many when a whole recording carries one label.
 SWEEP_STRIDE = 5
 
-# What a source recording is, and so what its frames can be labelled with.
+# What a source recording is, and so what its frames can be labeled with.
 MODE_GRASPS = "grasps"
 MODE_NEGATIVES = "negatives"
 MODE_FALSE_GRABS = "false_grabs"
 # (frames) the longest pause in the closing command that still counts as the same close.
 CLOSE_GAP_FRAMES = 10
-# (metres, seconds) what counts as the lift having started: this much climb, still
+# (meters, seconds) what counts as the lift having started: this much climb, still
 # climbing this long later.
 LIFT_ONSET_M = 0.03
 LIFT_CONFIRM_SECONDS = 0.5
@@ -112,7 +112,7 @@ VECTORS_OPTIONAL = {"vel_cmd": ("action", ("vel_x", "vel_y", "vel_z")),
 
 
 def row_schema():
-    """Parquet schema for one labelled frame, where a null label masks that head's loss."""
+    """Parquet schema for one labeled frame, where a null label masks that head's loss."""
     import pyarrow as pa
 
     return pa.schema([
@@ -479,7 +479,7 @@ def approach_start(track, grasp, margin=OFF_SCREEN_MARGIN):
 def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m,
                  margin=OFF_SCREEN_MARGIN, uv_method=DEFAULT_UV_METHOD, jaw_uv=None,
                  frames=None):
-    """Labelled rows for one grasp episode as (rows, dropped, blind), or (None, reason, 0)
+    """Labeled rows for one grasp episode as (rows, dropped, blind), or (None, reason, 0)
     if unusable. approach_seconds None reaches back as far as the target stays in view."""
     found = final_grasp(rows, fps, rise_m)
     if isinstance(found, str):
@@ -854,7 +854,7 @@ def mine_sources(writer, sources, limit: int | None, progress=None, workers: int
                 progress.set_postfix(frames=writer.total, refresh=False)
 
     for repo_id, s in stats.items():
-        # Report the holding label balance, since it is a judgement call.
+        # Report the holding label balance, since it is a judgment call.
         summary = (f"{repo_id}: mined {s['mined']} frames from "
                    f"{s['considered'] - sum(s['skipped'].values())}/{s['considered']} episodes "
                    f"(skipped {s['skipped']}), {s['dropped']} frames dropped as off-canvas "
@@ -957,9 +957,9 @@ def write_dataset_card(output_root: Path):
     (output_root / "README.md").write_text("\n".join(lines) + "\n")
 
 
-def sample_labelled_rows(split_dir: Path, count: int, seed: int, prefix=None,
-                         keep_unlabelled=False):
-    """`count` random labelled rows with images, reading only the row groups they land in."""
+def sample_labeled_rows(split_dir: Path, count: int, seed: int, prefix=None,
+                         keep_unlabeled=False):
+    """`count` random labeled rows with images, reading only the row groups they land in."""
     import pyarrow.parquet as pq
 
     label_columns = ["episode_index", "frame_index", "seconds_to_grasp", "target_uv",
@@ -972,7 +972,7 @@ def sample_labelled_rows(split_dir: Path, count: int, seed: int, prefix=None,
         uv = table.column("target_uv").to_pylist()
         # Negative and false-grab rows have no position label, so don't require one.
         candidates += [(path, i) for i, value in enumerate(uv)
-                       if value is not None or keep_unlabelled]
+                       if value is not None or keep_unlabeled]
 
     chosen = random.Random(seed).sample(candidates, min(count, len(candidates)))
 
@@ -1000,13 +1000,13 @@ def sample_labelled_rows(split_dir: Path, count: int, seed: int, prefix=None,
 
 
 def write_preview(split_dir: Path, preview_dir: Path, count: int, seed: int,
-                  group: int = 20, columns: int = 4, prefix=None, keep_unlabelled=False):
-    render_preview(sample_labelled_rows(split_dir, count, seed, prefix, keep_unlabelled),
+                  group: int = 20, columns: int = 4, prefix=None, keep_unlabeled=False):
+    render_preview(sample_labeled_rows(split_dir, count, seed, prefix, keep_unlabeled),
                    preview_dir, group, columns)
 
 
 def render_preview(chosen, preview_dir: Path, group: int = 20, columns: int = 4):
-    """Draw labelled rows as annotated frames plus contact sheets, at twice their stored size."""
+    """Draw labeled rows as annotated frames plus contact sheets, at twice their stored size."""
     preview_dir.mkdir(parents=True, exist_ok=True)
     for old in list(preview_dir.glob("*.jpg")) + list(preview_dir.glob("*.png")):
         old.unlink()
@@ -1105,7 +1105,7 @@ def main():
     parser.add_argument("--preview_only", action="store_true",
                         help="Label the sources as usual but write only the preview: no "
                              "frame is decoded except the ones it draws, and no shard is "
-                             "written or replaced. The loop to iterate on labelling in - "
+                             "written or replaced. The loop to iterate on labeling in - "
                              "pair it with --limit to cut it further. Needs --preview_dir "
                              "and ignores --output_root.")
     parser.add_argument("--preview_count", type=int, default=100)
@@ -1192,7 +1192,7 @@ def main():
     if args.preview_dir and total:
         write_preview(split_dir, Path(args.preview_dir),
                       args.preview_count, args.preview_seed, args.preview_group,
-                      prefix=shard_prefix(mode), keep_unlabelled=mode != MODE_GRASPS)
+                      prefix=shard_prefix(mode), keep_unlabeled=mode != MODE_GRASPS)
 
 
 if __name__ == "__main__":

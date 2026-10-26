@@ -50,7 +50,7 @@ def is_james(row):
 
 
 def corrected_rows():
-    """Relabelled frames, keyed by the file_name of the row they replace."""
+    """Relabeled frames, keyed by the file_name of the row they replace."""
     fixed = {}
     for path in sorted(CORRECTED.glob(f"{CORRECTED_PREFIX}*.parquet")):
         row = pq.read_table(path).to_pylist()[0]

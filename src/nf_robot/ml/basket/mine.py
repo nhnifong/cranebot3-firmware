@@ -2,10 +2,10 @@
 
 """Mine basket centering labels from recordings made by the basketdata maneuver.
 
-Every episode starts with the gripper centred over a basket at the height it should drop
+Every episode starts with the gripper centered over a basket at the height it should drop
 from, and then flies away from it. The point under the jaws in that first frame is
 followed forward by optical flow until it is lost, and every frame it was followed through
-gets labelled with where that point is (u, v, distance along the ray) and the gripper move,
+gets labeled with where that point is (u, v, distance along the ray) and the gripper move,
 in the body frame, that would put it back under the jaws at the starting height.
 
 The sideways part of the move comes from the flow, scaled by the point's depth: the first
@@ -43,13 +43,13 @@ from nf_robot.ml.visual_servoing.uv_methods import (
 
 SHARD_PREFIX = "basket"
 SPLIT_SOURCE = "basket"
-# Keep one frame in this many of what was tracked. Neighbouring frames at 30fps are near
+# Keep one frame in this many of what was tracked. Neighboring frames at 30fps are near
 # duplicates, but the flow has to step through every one of them regardless.
 DEFAULT_STRIDE = 2
 # An episode whose track is lost sooner than this is not kept: the flight barely began.
 MIN_TRACKED_FRAMES = 10
 # (seconds) how many first frames to look at for the steadiest rangefinder reading, since
-# the centred frame is what every label in the episode hangs off.
+# the centered frame is what every label in the episode hangs off.
 CENTER_WINDOW_S = 0.3
 DEFAULT_EVAL_FRACTION = 0.15
 # Frames kept aside for the preview, sampled across every episode.
@@ -57,7 +57,7 @@ PREVIEW_POOL = 400
 
 
 def row_schema():
-    """Parquet schema for one labelled basket frame."""
+    """Parquet schema for one labeled basket frame."""
     import pyarrow as pa
 
     return pa.schema([
@@ -70,9 +70,9 @@ def row_schema():
         # where the basket's drop point is in the frame, and how far along that ray
         ("target_uv", pa.list_(pa.float32())),
         ("target_range_m", pa.float32()),
-        # the rangefinder reading when centred: how high over the basket to drop from
+        # the rangefinder reading when centered: how high over the basket to drop from
         ("drop_range_m", pa.float32()),
-        # the gripper move back to centred, metres in the body frame: x, y from the flow,
+        # the gripper move back to centered, meters in the body frame: x, y from the flow,
         # z from the gantry's height change
         ("return_body", pa.list_(pa.float32())),
         # the same move from the recorded gantry positions, kept to check the flow against
@@ -86,7 +86,7 @@ def row_schema():
 
 
 def center_range(rows, fps, window_s=CENTER_WINDOW_S):
-    """The rangefinder reading in the centred frames, the median over the first window_s, or
+    """The rangefinder reading in the centered frames, the median over the first window_s, or
     None if it read nothing."""
     first = rows[:max(1, int(round(window_s * fps)))]
     readings = [float(r["laser_rangefinder"]) for r in first if r["laser_rangefinder"] > 0]
@@ -112,7 +112,7 @@ def label_frame(uv, row, center, drop_range, calibration):
 
 
 def mine_episode(rows, fps, calibration, frames, stride=DEFAULT_STRIDE, image_size=IMAGE_SIZE):
-    """Labelled rows for one episode as (rows, reason), with rows None and a reason when the
+    """Labeled rows for one episode as (rows, reason), with rows None and a reason when the
     episode is unusable. frames(i) is row i's BGR frame, and each kept one is stored as a
     JPEG at image_size."""
     center = rows[0]
@@ -150,10 +150,10 @@ def mine_episode(rows, fps, calibration, frames, stride=DEFAULT_STRIDE, image_si
         if i % stride:
             continue
         r = rows[i]
-        labelled = label_frame(track[i], r, center, drop_range, calibration)
-        if labelled is None:
+        labeled = label_frame(track[i], r, center, drop_range, calibration)
+        if labeled is None:
             break
-        uv, distance, move = labelled
+        uv, distance, move = labeled
         # The move the gantry positions say, in the same body frame, for comparison.
         telemetry = rotate_about_vertical(
             np.asarray(center["gantry_pos"]) - np.asarray(r["gantry_pos"]), float(r["spin"]))
@@ -239,8 +239,8 @@ def mine(sources, output_root: Path, stride=DEFAULT_STRIDE, limit=None,
 
 
 def render_preview(samples, preview_dir: Path, count=60, seed=0, columns=4, group=20):
-    """Annotated frames: the tracked point, and the move back to centre as the flow says and
-    as the gantry positions say, which should agree to a few centimetres sideways."""
+    """Annotated frames: the tracked point, and the move back to center as the flow says and
+    as the gantry positions say, which should agree to a few centimeters sideways."""
     preview_dir.mkdir(parents=True, exist_ok=True)
     for old in list(preview_dir.glob("*.jpg")) + list(preview_dir.glob("*.png")):
         old.unlink()

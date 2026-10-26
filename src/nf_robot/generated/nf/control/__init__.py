@@ -742,7 +742,7 @@ default_message_pool.register_message("nf.control", "MoveGripperTo", MoveGripper
 @dataclass(eq=False, repr=False)
 class PopupAck(betterproto2.Message):
     """
-    Acknowledgement of a popup message
+    Acknowledgment of a popup message
     """
 
     id: "int" = betterproto2.field(1, betterproto2.TYPE_UINT32)

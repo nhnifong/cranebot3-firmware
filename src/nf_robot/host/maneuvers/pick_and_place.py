@@ -33,11 +33,11 @@ PREDICTED_DROP_HEIGHT_M = 0.0
 FIND_TARGETS_INTERVAL_S = 0.5
 # targets this close to the route destination, horizontally, are left where they are
 DROPOFF_EXCLUSION_M = 0.10
-# (metres) targets closer than this to the edge of the anchor polygon are refused, whoever
+# (meters) targets closer than this to the edge of the anchor polygon are refused, whoever
 # placed them. Slack line prevention keeps the gripper from reaching all the way to the
 # walls, so a target out there could never be picked up.
 TARGET_BORDER_MARGIN_M = 0.20
-# (metres) side of the room grid squares predicted drop points are pooled into, so that a
+# (meters) side of the room grid squares predicted drop points are pooled into, so that a
 # fix found for one prediction serves every later one that lands in the same square.
 DROP_FIX_CELL_M = 0.3
 # Destinations never visited for a fix: the recorded drop position was put there by hand
@@ -57,7 +57,7 @@ AFTER_DROP_IMAGE_TIMEOUT_S = 2.0
 
 
 def drop_fix_cell(point):
-    """(key, centre) of the DROP_FIX_CELL_M room grid square a floor point falls in."""
+    """(key, center) of the DROP_FIX_CELL_M room grid square a floor point falls in."""
     i, j = (int(np.floor(c / DROP_FIX_CELL_M)) for c in np.asarray(point)[:2])
     return f'cell_{i}_{j}', np.array([(i + 0.5) * DROP_FIX_CELL_M, (j + 0.5) * DROP_FIX_CELL_M, 0.0])
 
@@ -587,9 +587,9 @@ class PickAndPlace(Maneuver):
                     detoured = True
                     asyncio.create_task(ob.set_finger_angle(RELAXED_OPEN))
                     resume_at = ob.gantry_position()
-                    key, centre = drop_fix_cell(interrupt.result())
+                    key, center = drop_fix_cell(interrupt.result())
                     logger.info(f'Setting the grasp aside to get a fix on predicted drop {key}')
-                    await self._ensure_fix(key, centre)
+                    await self._ensure_fix(key, center)
                     logger.info(f'Back to the grasp at {np.round(resume_at, 3)}')
                     await ob.seek_goal(resume_at)
                 if success is None:
@@ -717,7 +717,7 @@ class PickAndPlace(Maneuver):
             'time': stamp.isoformat(),
             'unix_time': round(now, 3),
             'image_time': round(float(seen.timestamp), 3),
-            # gripper positions in the room frame, metres
+            # gripper positions in the room frame, meters
             'picked_from': [round(float(c), 4) for c in picked_from],
             'dropped_at': [round(float(c), 4) for c in dropped_at],
             'destination': destination,

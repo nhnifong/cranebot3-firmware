@@ -14,7 +14,7 @@ pictures and where it went.
 Each drop is scored against the query by two images, taking the better:
 
     item     the middle of the grasp frame, between the jaws, where the item is
-    scene    the whole grasp frame, for an item that fills it or sits off centre
+    scene    the whole grasp frame, for an item that fills it or sits off center
 
 The frame of where it landed is shown but not searched: drops go to the same few bins, so
 those frames are much the same crowded scene for every item, and they won category queries

@@ -8,6 +8,7 @@ from nf_robot.common.pose_functions import *
 logger = logging.getLogger(__name__)
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.cv_common import *
+from nf_robot.host.tension_height import vertical_force_anomaly_kg
 
 # Each weight scales one residual: the gap between two measurements of the same thing, which
 # the fit drives to zero. The comment names what should equal what.
@@ -26,6 +27,10 @@ W_GRIPPER_DIST = 0.6 # change in pull-point-to-gantry distance between two gripp
                      # change that line's measured length reports (as W_DIAMOND_DIST, close range).
                      # Scaled down at use, so this is the weight of one independent delta, not one pair.
 W_ROOM_YAW = 5.0 # yaw of the anchor layout == yaw of the reference layout (see room_yaw_offset)
+W_TENSION_ANOMALY = 0.0 # weight the measured line tensions hold up at each gripper hover, in kg ==
+                        # the nominal hanging weight. Per kg, so at 0.2 a 0.05 kg anomaly costs about
+                        # what a 1 cm length residual does. Temporarily 0 (off) while the anchor
+                        # geometry fix is evaluated on its own; 0.2 is the value to restore.
 
 # Terms that say the room is physically possible rather than that it matches a measurement:
 # the anchors stand plumb, the four pull points share a height, the anchor pair and the eyelet
@@ -103,7 +108,8 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
     gripper_obs, when provided, is a dict keyed by calibration card name (as returned by
     Observer.collect_gripper_card_observations). Each value is a list of per-height samples; each
     sample has 'gantry_minus_card' (the room vector from the card to the gantry, measured
-    close-range by the gripper camera) and 'line_lengths' (the four line lengths at that hover).
+    close-range by the gripper camera) and 'line_lengths' (the four line lengths at that hover),
+    and optionally 'tensions' (the four line tensions there, which add the tension anomaly term).
     These add multilateration constraints on the four pull points: the gantry position for a sample
     is its card's room position plus the measured offset, and the CHANGE in each line length between
     any two samples must equal the change in that pull point's distance to the gantry. Sampling each
@@ -130,6 +136,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
     cost_shape_match = 0.0
     cost_anchor_tilt = 0.0
     cost_gripper = 0.0
+    cost_tension_anomaly = 0.0
     cost_room_yaw = 0.0
 
     # room position of each calibration card at the current parameters, so the gripper-camera
@@ -355,25 +362,45 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
         n_pairs = n_samples * (n_samples - 1) // 2
         w_gripper = W_GRIPPER_DIST * np.sqrt((n_samples - 1) / n_pairs) if n_pairs else W_GRIPPER_DIST
 
-        # For every pair of hovers and every line, the modelled change in distance from the pull
+        # For every pair of hovers and every line, the modeled change in distance from the pull
         # point to the gantry must match the measured change in line length.
         for a in range(len(gantry_samples)):
             for b in range(a + 1, len(gantry_samples)):
                 name_a, g_a, L_a = gantry_samples[a]
                 name_b, g_b, L_b = gantry_samples[b]
                 for k in range(4):
-                    modelled = np.linalg.norm(g_b - pull_points[k]) - np.linalg.norm(g_a - pull_points[k])
+                    modeled = np.linalg.norm(g_b - pull_points[k]) - np.linalg.norm(g_a - pull_points[k])
                     measured = L_b[k] - L_a[k]
-                    res = (modelled - measured) * w_gripper
+                    res = (modeled - measured) * w_gripper
                     residuals.append(res)
                     cost_gripper += res ** 2
                     if debug:
                         # per-pair-per-line breakdown pinpoints an inconsistent card or line
                         logger.info(
                             f'  gripper resid {name_a}->{name_b} line{k}: '
-                            f'modelled_delta={modelled*100:+.2f}cm measured_delta={measured*100:+.2f}cm '
-                            f'residual={(modelled-measured)*100:+.2f}cm'
+                            f'modeled_delta={modeled*100:+.2f}cm measured_delta={measured*100:+.2f}cm '
+                            f'residual={(modeled-measured)*100:+.2f}cm'
                         )
+
+        # At every hover the assembly hangs free with no payload, so the vertical pull of the
+        # measured tensions along the modeled line directions must hold up exactly the nominal
+        # weight. The line angles depend on how high the pull points sit above the gantry, which
+        # the length deltas above constrain only weakly, so this gives the fit a second handle on
+        # height. Surveys recorded before tensions were kept carry none and add nothing here.
+        pull_array = np.array(pull_points)
+        for name, samples in gripper_obs.items():
+            if name not in card_centroids:
+                continue
+            for obs in samples:
+                if obs.get('tensions') is None:
+                    continue
+                gantry_room = card_centroids[name] + np.asarray(obs['gantry_minus_card'])
+                anomaly = vertical_force_anomaly_kg(pull_array, np.asarray(obs['tensions']), gantry_room)
+                res = anomaly * W_TENSION_ANOMALY
+                residuals.append(res)
+                cost_tension_anomaly += res ** 2
+                if debug:
+                    logger.info(f'  tension anomaly {name} at z={gantry_room[2]:.3f}: {anomaly:+.3f} kg')
 
     # ---------------------------------------------------------
     # Regularization (Anchor eyelets to initial guesses)
@@ -423,6 +450,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
         'diamond_planarity': cost_diamond_planar,
         'diamond_distances': cost_diamond_dist,
         'gripper_cards': cost_gripper,
+        'tension_anomaly': cost_tension_anomaly,
         'shape_match': cost_shape_match,
         'eyelet_reg': cost_eyelet_reg,
         'room_yaw': cost_room_yaw,
@@ -443,6 +471,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
             f"Diamond Planarity:  {cost_diamond_planar:.6f}",
             f"Diamond Distances:  {cost_diamond_dist:.6f}",
             f"Gripper Cards:      {cost_gripper:.6f}",
+            f"Tension Anomaly:    {cost_tension_anomaly:.6f}",
             f"Shape Match (A~E):  {cost_shape_match:.6f}",
             f"Eyelet Reg (drift): {cost_eyelet_reg:.6f}",
             f"Room Yaw Gauge:     {cost_room_yaw:.6f}",
@@ -493,7 +522,7 @@ def floor_align_origin(anchor_poses, eyelet_positions, raw_obs, cam_tilts=(22, 2
         tilt_nodes.append((np.array([extratilt / 180.0 * np.pi, 0, 0], dtype=float), np.zeros(3, dtype=float)))
 
     # For every calibration card, gather the z of every sighting projected into
-    # the room, then average per card. CAL_MARKERS = origin + cal_assist_1..3.
+    # the room, then average per card, over whichever CAL_MARKERS were seen.
     per_card_avg_z = {}
     for marker_name in CAL_MARKERS:
         sightings = raw_obs.get(marker_name)
@@ -546,15 +575,20 @@ class _OptTimeout(Exception):
 def refinement_is_plausible(fit_info):
     """Whether a warm-started pass improved its fit without deforming the room to do it.
 
-    Returns (ok, reason). A pass whose data term is fed a constraint the state vector has no
-    parameter for - a pull point in the wrong place, say - cannot correct the cause, so it
-    pays with the structural terms instead: it leans the anchors, spreads the pull points in
-    z, and drags the eyelets off their guess. That lowers the total cost while leaving a room
-    whose camera projections are all wrong, so the caller has to weigh the structural terms
-    on their own rather than trust the total.
+    Sometimes the measurements contain an error the optimizer has no parameter for, such as
+    a pull point in the wrong place. The optimizer then fits the measurements anyway by
+    tilting the anchors, moving the pull points to different heights, and moving the eyelets
+    away from their starting guess. The total cost goes down, but the resulting room
+    geometry is wrong, so a lower total cost doesn't mean the pass helped.
 
-    Only meaningful for a warm start, where the input point is a real geometry rather than the
-    crude cold-start guess.
+    This function compares the sum of the structural cost terms (STRUCTURAL_COST_TERMS)
+    before and after the pass. The pass is accepted if that sum is below
+    STRUCTURAL_COST_FLOOR, or grew by no more than STRUCTURAL_COST_GROWTH_LIMIT times.
+    Returns (ok, reason), where reason lists each term's cost before and after.
+
+    Only use this after a warm start, where the starting geometry came from a previous
+    calibration. After a cold start the starting geometry is a rough guess, so its
+    structural costs mean nothing as a baseline.
     """
     before = fit_info.get('input_costs')
     if not before:
@@ -589,7 +623,7 @@ CAM_TILT_RANGE_DEG = (10.0, 60.0)
 def estimate_cam_tilts(raw_obs, fallback):
     """Each anchor camera's downward pitch in degrees, measured from the cards it can see.
 
-    Every calibration card lies flat, so its own normal is the room vertical. The modelled
+    Every calibration card lies flat, so its own normal is the room vertical. The modeled
     mount carries that normal from the camera frame into the anchor frame, where a plumb
     anchor has to see it along z. The only unknown left in the chain is the tilt, and it turns
     about the camera's x axis, so the y and z components of one sighting's normal fix it
@@ -597,7 +631,7 @@ def estimate_cam_tilts(raw_obs, fallback):
     observation snapshot before the first pass, which is the pass that needs the tilts.
 
     A camera without enough usable sightings keeps its configured value, so a room where one
-    anchor sees almost nothing degrades to today's behaviour rather than to a guess.
+    anchor sees almost nothing degrades to today's behavior rather than to a guess.
 
     Reading tag orientation rather than tag position, this is the one place branch flips
     matter, so outliers are dropped against the median before it is taken again.
@@ -670,7 +704,7 @@ def rectangular_room_eyelet_guess(anchor_poses):
 
     Each eyelet takes its own anchor's height rather than an offset through the anchor's
     local frame: an anchor fitted a few degrees off plumb tips a 3 m local offset by most of
-    a metre in z, and this guess doubles as the eyelet_reg target that holds the answer near.
+    a meter in z, and this guess doubles as the eyelet_reg target that holds the answer near.
     """
     positions = np.asarray(anchor_poses, dtype=float)[:, 1, :]
     center = (positions[0] + positions[1]) / 2.0

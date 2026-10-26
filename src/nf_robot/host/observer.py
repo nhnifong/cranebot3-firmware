@@ -185,9 +185,9 @@ CLEAR_ITEM_RANGE_M = (0.12, 0.4)
 CLEAR_ITEM_INTERVAL_S = 0.25
 # While the visual servo model is predicting, a clear item frame is only kept with the item
 # it sees inside this band of the frame in both u and v - the inner third - so the item is
-# centred under the gripper rather than half out of view. Predictions older than
+# centered under the gripper rather than half out of view. Predictions older than
 # CLEAR_ITEM_SERVO_MAX_AGE_S mean the model is not running, and the condition is not applied.
-CLEAR_ITEM_CENTRED_UV = (1.0 / 3.0, 2.0 / 3.0)
+CLEAR_ITEM_CENTERED_UV = (1.0 / 3.0, 2.0 / 3.0)
 CLEAR_ITEM_SERVO_MAX_AGE_S = 0.5
 
 # feature key -> minimum nf_robot version every connected component must run to use it
@@ -2487,7 +2487,7 @@ class AsyncObserver:
         The consistency residual reads a marker's batch as repeated looks at one static point, so
         restrict it to a window in which the gantry was standing still.
         """
-        markers = ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3', 'gantry']
+        markers = ['origin'] + CAL_ASSIST_MARKERS + ['gantry']
         raw_obs = defaultdict(lambda: [[]]*N_ANCHORS)
         for client in self.anchors.values():
             # copy each list of detections, but leave them in the camera's reference frame.
@@ -2507,19 +2507,7 @@ class AsyncObserver:
         """Wait until the anchor cameras have delivered a batch of gantry sightings, all captured
         after this call, in which the gantry was standing still. Returns the capture time the
         batch starts at, or None if no settled batch turned up within timeout_s.
-
-        This is what waiting for the machine to settle should cost: no longer than it takes the
-        evidence to arrive. A fixed sleep has to be as long as the worst case swing and is still
-        only a guess, whereas the sightings say directly both that the frames are new enough
-        (captured after the cutoff, so they show the machine after whatever it was just asked to
-        do) and that the gantry was holding still while they were taken.
-
-        A settled batch reads about 1 cm by _robust_spread, so the default max_spread_m leaves 4x
-        headroom and still rejects drift above roughly 0.3 m/s over the ~0.4s a six-frame window
-        spans. A failed window is discarded and a new one opened, starting that much later.
-
-        min_dets is required from one anchor rather than all: the gantry tag faces one way, so a
-        camera seeing none of it is a normal geometry, not a reason to wait."""
+        """
         deadline = time.time() + timeout_s
         # Capture times come from the bot's clock, so start the window slightly in the future to
         # keep skew from letting a frame taken before this call through.
@@ -2879,15 +2867,15 @@ class AsyncObserver:
         four line lengths at that moment. This is a motion task.
 
         Returns a dict keyed by card name, each value a list of per-height samples; each sample is
-        a dict with 'gantry_minus_card' (room vector) and 'line_lengths' (length-4 array), for
-        passing to optimize_arp_anchors as gripper_obs. Each card is visited at several altitudes so
-        the samples span a vertical baseline. Cards (or individual heights) the gripper never sees
+        a dict with 'gantry_minus_card' (room vector), 'line_lengths' and 'tensions' (length-4
+        arrays, meters and newtons), for passing to optimize_arp_anchors as gripper_obs. Each card
+        is visited at several altitudes so the samples span a vertical baseline. Cards (or individual heights) the gripper never sees
         are skipped. Hover altitudes are taken relative to each card's own height, so cards may sit
         on the floor or raised.
 
         If progress_range=(start_pct, end_pct) is given, a Calibration operation_progress message
         is sent as each card is surveyed, spread across that percent range."""
-        HOVER_CAMERA_HEIGHTS_M = [1.1, 0.7, 0.45]  # camera heights over each card to sample. Visiting a
+        HOVER_CAMERA_HEIGHTS_M = [1.3, 0.7, 0.25]  # camera heights over each card to sample. Visiting a
                                                   # card from several altitudes gives the length-delta
                                                   # constraints a vertical baseline, which is what lets
                                                   # them begin to observe the far external eyelets (a
@@ -2895,6 +2883,8 @@ class AsyncObserver:
                                                   # direction free). The spread is deliberately wide -
                                                   # a wider baseline recovers more of a bad pass-2 - but
                                                   # each height is clamped under the work-area ceiling.
+                                                  # The lowest only works with the fingers fully open;
+                                                  # any less and they come into the camera's view.
         SETTLE_S = 4.0                # let swing cancellation settle the gripper before measuring
         # How many views of the card to average the measurement over. A count, not a duration:
         # the averaging wants frames, and waiting on a clock only buys frames indirectly, at
@@ -2916,11 +2906,15 @@ class AsyncObserver:
         # keep the gripper vertical and the lines taut throughout the survey. Put back as it
         # was when the survey finishes; a stop turns it off, as a stop always does.
         was_running = self.set_swing_cancellation(True)
+        # fully open is fully retracted, out of the camera's view at the lowest hover
+        fingers_before = self.finger_angle()
+        await self.settle_fingers(-90)
 
         # don't fly higher than just under the top of the work area
         upper_z = np.mean(self.pe.anchor_points[:, 2]) - TOP_MARGIN
 
-        survey_names = [n for n in ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3'] if n in card_positions]
+        # every card the anchor cameras located, however many were put out
+        survey_names = [n for n in ['origin'] + CAL_ASSIST_MARKERS if n in card_positions]
 
         async def measure_hover(name, target_range_m):
             """Center on the card, settle onto the requested height, and average the card-to-gantry
@@ -2957,13 +2951,16 @@ class AsyncObserver:
                 self.gripper_client.measure_gantry_minus_card(pose, timestamp=ts)
                 for ts, pose in samples
             ]
-            line_samples = [
-                [self.datastore.anchor_line_record[i].getClosest(ts)[1] for i in range(N_LINES)]
+            # (time, length, speed, tension) of each line, closest to each frame
+            line_records = np.array([
+                [self.datastore.anchor_line_record[i].getClosest(ts) for i in range(N_LINES)]
                 for ts, _ in samples
-            ]
+            ])
             return {
                 'gantry_minus_card': np.mean(gantry_offsets, axis=0),
-                'line_lengths': np.mean(line_samples, axis=0),
+                'line_lengths': np.mean(line_records[:, :, 1], axis=0),
+                # the optimizer holds these to the nominal hanging weight at this position
+                'tensions': np.mean(line_records[:, :, 3], axis=0),
                 'n': len(gantry_offsets),
                 # measured, not requested: what the rangefinder read once the trim finished.
                 # Recorded for diagnostics; the optimizer reads only the two arrays above.
@@ -3059,6 +3056,7 @@ class AsyncObserver:
         finally:
             self.slow_stop_all_spools()
         self.set_swing_cancellation(was_running)
+        await self.set_finger_angle(fingers_before)
 
         total = sum(len(s) for s in gripper_obs.values())
         logger.info(f'Gripper card survey collected {total} hover samples across {len(gripper_obs)} cards: '
@@ -3101,7 +3099,7 @@ class AsyncObserver:
         return time.time()
 
     def laser_range(self):
-        """The gripper's rangefinder reading in metres - the distance to whatever is under it -
+        """The gripper's rangefinder reading in meters - the distance to whatever is under it -
         or None if it is stale or absent."""
         ts, distance = self.datastore.range_record.getLast()
         if time.time() - ts > RANGE_MAX_AGE_S or distance <= 0:
@@ -3111,12 +3109,16 @@ class AsyncObserver:
     # -- getters for maneuvers. Each returns a copy, so nothing a maneuver does to the
     # result reaches the estimator or a component client.
 
+    # Every gantry position below is the gantry origin: the cross where the lines meet, not
+    # the gantry's apriltag. The gripper hangs pole_offset() below it.
+
     def gantry_position(self):
         """Where the position estimate puts the gantry, as a room-frame (3,) array."""
         return np.array(self.pe.gant_pos, dtype=float)
 
     def visual_gantry_position(self):
-        """The anchor cameras' running average of where the gantry marker is."""
+        """The anchor cameras' running average of where the gantry is, moved from its marker
+        to the cross."""
         return np.array(self.pe.visual_pos, dtype=float)
 
     def anchor_points(self):
@@ -3128,6 +3130,20 @@ class AsyncObserver:
         if self.pe.tension is None:
             return None
         return np.array(self.pe.tension, dtype=float)
+
+    def hang_position(self):
+        """Where the line lengths alone put the gantry, as a room-frame (3,) array."""
+        return np.array(self.pe.hang_pos, dtype=float)
+
+    def line_records(self):
+        """The last report from each of the four lines, as a (4, 4) array of
+        (time, length m, speed m/s, tension N)."""
+        return np.array([alr.getLast() for alr in self.datastore.anchor_line_record], dtype=float)
+
+    def gantry_sightings(self, since):
+        """Every anchor camera sighting of the gantry captured after since, as an (n, 5) array
+        of (time, anchor_num, x, y, z)."""
+        return self.datastore.gantry_pos.deepCopy(cutoff=since)
 
     def gripper_connected(self):
         return self.gripper_client is not None
@@ -3517,23 +3533,23 @@ class AsyncObserver:
     def last_clear_item_image(self):
         """The newest ItemImage: a gripper frame taken while the rangefinder read the distance
         at which an item under the gripper fills the view before the fingers close over it,
-        and, while the visual servo model is running, with the item centred in it. None
+        and, while the visual servo model is running, with the item centered in it. None
         until there has been one."""
         return self._clear_item_image
 
-    def _servo_sees_item_centred(self):
+    def _servo_sees_item_centered(self):
         """False only while the visual servo model is predicting and puts the item outside
-        the inner third of the frame; True when it is centred or the model is not running."""
+        the inner third of the frame; True when it is centered or the model is not running."""
         latest = self.servo.last_prediction
         if latest is None or time.time() - latest[0] > CLEAR_ITEM_SERVO_MAX_AGE_S:
             return True
-        low, high = CLEAR_ITEM_CENTRED_UV
+        low, high = CLEAR_ITEM_CENTERED_UV
         u, v = latest[1]['uv']
         return low <= u <= high and low <= v <= high
 
     async def _watch_for_clear_item(self, interval_s=CLEAR_ITEM_INTERVAL_S):
         """Keep the newest gripper frame taken with the laser in CLEAR_ITEM_RANGE_M and,
-        while the visual servo model is running, with the item centred in it."""
+        while the visual servo model is running, with the item centered in it."""
         low, high = CLEAR_ITEM_RANGE_M
         while self.run_command_loop:
             await asyncio.sleep(interval_s)
@@ -3547,7 +3563,7 @@ class AsyncObserver:
             last = self._clear_item_image
             if last is not None and taken is not None and taken <= last.timestamp:
                 continue
-            if not self._servo_sees_item_centred():
+            if not self._servo_sees_item_centered():
                 continue
             # decoded frames are already rgb24
             self._clear_item_image = ItemImage(
@@ -3575,7 +3591,7 @@ class AsyncObserver:
         knows roughly how wrong the altitude can be and would rather stop than keep hunting
         on a beam that has found something other than what it was aimed at."""
         laser_range = None
-        travelled = 0.0
+        traveled = 0.0
         for step in range(max_steps):
             ts, laser_range = self.datastore.range_record.getLast()
             age = time.time() - ts
@@ -3591,13 +3607,13 @@ class AsyncObserver:
             if ceiling_z is not None:
                 delta_z = min(delta_z, ceiling_z - self.pe.gant_pos[2])
             if max_travel_m is not None:
-                budget = max_travel_m - travelled
+                budget = max_travel_m - traveled
                 if budget <= 0:
                     logger.info(f'Altitude trim: used the whole {max_travel_m:.2f}m of travel '
                                 f'at range {laser_range:.3f}m (target {target_range_m:.3f}m)')
                     return laser_range
                 delta_z = clamp(delta_z, -budget, budget)
-            travelled += abs(delta_z)
+            traveled += abs(delta_z)
             logger.info(f'Altitude trim: step {step} range {laser_range:.3f}m vs target '
                         f'{target_range_m:.3f}m, moving z by {delta_z:+.3f}m')
             await self.nudge_gantry(np.array([0.0, 0.0, delta_z]), speed=TRIM_SPEED_MPS)
@@ -3817,6 +3833,7 @@ class AsyncObserver:
                 await self.tension_and_wait()
                 # wait for some new obs
                 await asyncio.sleep(0.5)
+                # visual_pos is already the cross where the lines meet, not the tag
                 lengths = np.linalg.norm(self.pe.anchor_points - self.pe.visual_pos, axis=1)
                 await self.sendReferenceLengths(lengths)
                 await asyncio.sleep(0.25)
@@ -4264,9 +4281,10 @@ class AsyncObserver:
                 sc_was_running = self.set_swing_cancellation(False)
                 self.slow_stop_all_spools()
 
-                # Require a reading from all four cards (origin + 3 cal_assist). With fewer hovers the
-                # gripper term has too few length-delta pairs to pin the two far eyelets, and the
-                # under-constrained refinement distorts a good rectangular layout into a diamond.
+                # Require a reading from at least four cards; every card surveyed beyond that is used.
+                # With fewer hovers the gripper term has too few length-delta pairs to pin the two
+                # far eyelets, and the under-constrained refinement distorts a good rectangular
+                # layout into a diamond.
                 REQUIRED_GRIPPER_CARDS = 4
                 if len(gripper_obs) >= REQUIRED_GRIPPER_CARDS:
                     # Anchors are free here so the gripper's close-range views can refine them
@@ -4329,7 +4347,7 @@ class AsyncObserver:
                     await self._verify_swing_cancellation('with refined geometry',
                                                           'after calibration refinement')
                 else:
-                    logger.warning(f'Only {len(gripper_obs)} of {REQUIRED_GRIPPER_CARDS} gripper card observations; need all four to refine. Skipping 3rd pass.')
+                    logger.warning(f'Only {len(gripper_obs)} of {REQUIRED_GRIPPER_CARDS} gripper card observations; need at least four to refine. Skipping 3rd pass.')
                     # geometry is unchanged, so no damping re-test is needed to restore it, and
                     # nothing was measured, so the stored verdict stays whatever it already was
                     self.set_swing_cancellation(sc_was_running)
@@ -4456,7 +4474,7 @@ class AsyncObserver:
 
         The gantry flies a slow circle rather than straight legs, since a corner kicks the
         pole into a swing and a steady turn does not, and a circle takes every heading so
-        nothing that favours one direction survives the average. It goes round once each
+        nothing that favors one direction survives the average. It goes round once each
         way: a lag between frames and positions reads as a heading error of opposite sign
         on the two loops and cancels, where a spin error reads the same on both.
 
@@ -4587,7 +4605,7 @@ class AsyncObserver:
         start_angle = np.arctan2(start[1] - center[1], start[0] - center[0])
         total, ramp = eased_move_time(2 * np.pi * radius, speed, ramp)
         sampler = asyncio.create_task(pair_frames())
-        travelled = 0.0
+        traveled = 0.0
         began = last = time.monotonic()
         try:
             while True:
@@ -4596,9 +4614,9 @@ class AsyncObserver:
                 if elapsed >= total:
                     break
                 current = speed * eased_speed(elapsed, total, ramp)
-                travelled += current * (now - last)
+                traveled += current * (now - last)
                 last = now
-                angle = start_angle + turn * travelled / radius
+                angle = start_angle + turn * traveled / radius
                 on_circle = center + radius * np.array([np.cos(angle), np.sin(angle)])
                 along = turn * np.array([-np.sin(angle), np.cos(angle)])
                 here = self.gantry_position()
@@ -4652,7 +4670,7 @@ class AsyncObserver:
         Those are positions of things on the floor, and a route hovers the dropoff height above
         them, so what is stored is the point the gantry is currently that height above. Saving
         while hovering where you want things to land therefore brings the gantry back to exactly
-        where it was, which is the only behaviour that makes the button mean what it says. On a
+        where it was, which is the only behavior that makes the button mean what it says. On a
         robot saved lower than the dropoff height that point is under the floor; nothing minds,
         since it is only ever used as something to hover over and to keep targets away from.
 
@@ -5527,9 +5545,9 @@ class AsyncObserver:
 
                 # Ramp down as the goal approaches: v = sqrt(2 * a * d). The d that matters
                 # is the distance to where this loop lets go, not to the goal itself: a ramp
-                # planned to reach zero at the centre is still asking for 0.15m/s at the
+                # planned to reach zero at the center is still asking for 0.15m/s at the
                 # proximity radius, and the gantry carries that straight into an overshoot.
-                # It bottoms out at a crawl rather than at zero so the last few centimetres
+                # It bottoms out at a crawl rather than at zero so the last few centimeters
                 # are actually covered.
                 ramp_dist_to_goal = np.linalg.norm(vector[:2]) if auto_altitude else dist_to_goal
                 braking_dist = max(0.0, ramp_dist_to_goal - GOAL_PROXIMITY_M)
@@ -5812,7 +5830,7 @@ class AsyncObserver:
         return await self.servo.run(mode=SERVO_MODE_CENTER)
 
     def servo_center_offset(self, max_age=0.5):
-        """How far, horizontally in metres, the jaws are from the object servo_center is
+        """How far, horizontally in meters, the jaws are from the object servo_center is
         steering for, as of its newest pass. None while no object is confidently seen, or
         if servo_center has not reported within max_age seconds."""
         latest = self.servo.center_offset

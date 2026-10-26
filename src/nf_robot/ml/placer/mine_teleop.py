@@ -482,7 +482,7 @@ def mine(sources, output_root=None, split=POOL_SPLIT, mode=MODE_PAIRS,
 # Previews
 # ---------------------------------------------------------------------------
 
-GREEN, BLUE, GREY, WHITE = (60, 220, 60), (255, 160, 40), (140, 140, 140), (255, 255, 255)
+GREEN, BLUE, GRAY, WHITE = (60, 220, 60), (255, 160, 40), (140, 140, 140), (255, 255, 255)
 
 
 def _text(img, lines, origin=(8, 20), scale=0.5):
@@ -514,7 +514,7 @@ def _overhead_panel(bgr, sample, size):
     img = cv2.resize(bgr, (size, size), interpolation=cv2.INTER_AREA)
     now = [int(c * size) for c in sample["gripper_ortho_uv"]]
     target = [int(c * size) for c in sample["release_ortho_uv"]]
-    cv2.line(img, tuple(now), tuple(target), GREY, 1)
+    cv2.line(img, tuple(now), tuple(target), GRAY, 1)
     cv2.circle(img, tuple(now), 7, BLUE, 2)
     cv2.drawMarker(img, tuple(target), GREEN, cv2.MARKER_CROSS, 18, 2)
     return img
@@ -570,13 +570,13 @@ def _fit(bgr, height):
                       interpolation=cv2.INTER_AREA)
 
 
-def _mark(img, uv, colour, marker):
+def _mark(img, uv, color, marker):
     x, y = int(uv[0] * img.shape[1]), int(uv[1] * img.shape[0])
     if marker == "cross":
-        cv2.drawMarker(img, (x, y), colour, cv2.MARKER_CROSS, 22, 2)
-        cv2.circle(img, (x, y), 12, colour, 2)
+        cv2.drawMarker(img, (x, y), color, cv2.MARKER_CROSS, 22, 2)
+        cv2.circle(img, (x, y), 12, color, 2)
     else:
-        cv2.circle(img, (x, y), 8, colour, 2)
+        cv2.circle(img, (x, y), 8, color, 2)
 
 
 def _pair_row(sample, snapshot, snapshot_overhead, release_overhead, drop_view):
