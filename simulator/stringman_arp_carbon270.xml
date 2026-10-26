@@ -151,14 +151,17 @@
       ANCHOR 0 at (2, 2, 2), yaw -pi/4 (facing the room center).
       Eyelet sites are configuration.anchors[].pose composed with
       definitions.arp_anchor_right_eyelet / arp_anchor_left_eyelet, evaluated to world.
+      These and the camera position are the CAD values: the line exits sit 94 mm above
+      the camera lens. (Both were once copied in with z negated, from an equally wrong
+      definitions.py.)
     -->
     <body name="anchor0" pos="2 2 2" euler="0 0 -0.7853981634">
       <geom class="structure" size="0.05 0.045 0.055" pos="0 -0.02 0"/>
       <geom class="structure" type="cylinder" size="0.03 1.0" pos="0 0 -1.0" rgba="0.25 0.25 0.28 1"/>
       <!-- right eyelet: the direct line -->
-      <site name="a0_direct" pos="0.031 -0.068 -0.022" size="0.008" rgba="1 0.4 0.2 1"/>
+      <site name="a0_direct" pos="0.0313 -0.061 0.0205" size="0.008" rgba="1 0.4 0.2 1"/>
       <!-- left eyelet: the indirect line, routed to the far post -->
-      <site name="a0_indirect" pos="-0.031 -0.068 -0.022" size="0.008" rgba="0.3 0.7 1 1"/>
+      <site name="a0_indirect" pos="-0.0313 -0.061 0.0205" size="0.008" rgba="0.3 0.7 1 1"/>
       <!-- definitions.arp_anchor_camera. Its rotation is R(y,pi) @ R(x,68deg), whose
            optical axis comes out (90 - a) deg below horizontal along -y, where a is the
            adapter angle. OpenCV puts +y down the image and MuJoCo puts it up, so
@@ -177,7 +180,7 @@
            67.97 deg horizontally, matching the same matrix's fovx. Note that
            definitions.rpi_cam_3_wide_fov (102 x 67) is the module's datasheet field of
            view, not the streamed crop's, and nothing in the codebase reads it. -->
-      <camera name="anchor0_cam" pos="0.007 -0.033 0.071" fovy="41.535"
+      <camera name="anchor0_cam" pos="0.0075 -0.039868 -0.07382" fovy="41.535"
               xyaxes="-1 0 0  0 -0.5 0.8660254"/>
     </body>
 
@@ -185,8 +188,8 @@
     <body name="anchor1" pos="-2 -2 2" euler="0 0 2.3561944902">
       <geom class="structure" size="0.05 0.045 0.055" pos="0 -0.02 0"/>
       <geom class="structure" type="cylinder" size="0.03 1.0" pos="0 0 -1.0" rgba="0.25 0.25 0.28 1"/>
-      <site name="a1_direct" pos="0.031 -0.068 -0.022" size="0.008" rgba="1 0.4 0.2 1"/>
-      <site name="a1_indirect" pos="-0.031 -0.068 -0.022" size="0.008" rgba="0.3 0.7 1 1"/>
+      <site name="a1_direct" pos="0.0313 -0.061 0.0205" size="0.008" rgba="1 0.4 0.2 1"/>
+      <site name="a1_indirect" pos="-0.0313 -0.061 0.0205" size="0.008" rgba="0.3 0.7 1 1"/>
       <!-- definitions.arp_anchor_camera. Its rotation is R(y,pi) @ R(x,68deg), whose
            optical axis comes out (90 - a) deg below horizontal along -y, where a is the
            adapter angle. OpenCV puts +y down the image and MuJoCo puts it up, so
@@ -205,7 +208,7 @@
            67.97 deg horizontally, matching the same matrix's fovx. Note that
            definitions.rpi_cam_3_wide_fov (102 x 67) is the module's datasheet field of
            view, not the streamed crop's, and nothing in the codebase reads it. -->
-      <camera name="anchor1_cam" pos="0.007 -0.033 0.071" fovy="41.535"
+      <camera name="anchor1_cam" pos="0.0075 -0.039868 -0.07382" fovy="41.535"
               xyaxes="-1 0 0  0 -0.5 0.8660254"/>
     </body>
 
@@ -245,8 +248,12 @@
            turn into this z-up frame. Only the body primitive is used; that file's own
            pole is 0.41 m, which is not the carbon270 pole, so the pole is drawn below
            from the definitions.py constant instead. -->
+      <!-- Lowered 48.19 mm so the tag the mesh carries sits 85.19 mm under the gantry
+           origin, as on the real gantry and in definitions.gantry_flat_april (see the
+           marker card note). The drawn cross ends up that much below where the lines
+           meet; only the tag position matters to anything that reads the cameras. -->
       <geom class="viz" type="mesh" mesh="gantry_body" material="gantry_mat"
-            euler="1.5707963268 0 0"/>
+            pos="0 0 -0.04819" euler="1.5707963268 0 0"/>
       <geom name="gantry_collide" class="col" type="box" size="0.0442 0.0445 0.0652" pos="0 0 -0.0369"/>
 
       <!--
@@ -256,7 +263,7 @@
         the tag square of gantry_tex.png:
 
           91.5 x 91.5 mm, 14.0 mm thick, dead flat (0.00 mm out of plane)
-          center 37.0 mm below the gantry origin, on the vertical axis
+          center 37.0 mm below the mesh's origin, on the vertical axis
           faces normal to +/-(0.707, 0, 0.707) in the GLB frame, i.e. horizontal and at
             45 deg to that file's axes - so the card looks out along a diagonal
 
@@ -267,17 +274,14 @@
         The site below just marks the card's center and plane for inspection; the tag you
         see is the mesh.
 
-        DISAGREEMENT WITH definitions.py, worth knowing about: gantry_flat_april puts this
-        card at tvec (0, -0.007, -0.0652), which is 65.2 mm from the gantry origin, while
-        the GLB puts it at 37.0 mm - 28 mm apart. The rotation does agree: rvec
-        (pi/2, 0, 0) turns the tag normal (+z, per cv_common.BASE_MARKER_POINTS) onto -y,
-        which is horizontal exactly as the GLB has it, and which also settles that the
-        definitions gantry frame is z-up while the gripper frame is y-up. Only the offset
-        is in dispute. This model follows the GLB. If definitions.py is the number the
-        vision stack actually calibrates against, that 28 mm is a real bias worth
-        chasing down rather than a modeling detail.
+        The real gantry has the tag center 85.19 mm below the cross where the lines meet
+        (CAD, and 3 3/8 in by tape), which is what definitions.gantry_flat_april now says.
+        The GLB has it at 37.0 mm, so the mesh is lowered 48.19 mm above to put the tag
+        where the cameras should see it. The rotation agrees: rvec (pi/2, 0, 0) turns the
+        tag normal (+z, per cv_common.BASE_MARKER_POINTS) onto -y, horizontal as the GLB
+        has it. definitions.py also offsets the tag 7 mm sideways, which this model does not.
       -->
-      <site name="gantry_marker" pos="0 0 -0.037" euler="0 0 -0.7853981634"
+      <site name="gantry_marker" pos="0 0 -0.08519" euler="0 0 -0.7853981634"
             size="0.007 0.04575 0.04575" type="box" rgba="1 0.9 0.2 0.25"/>
 
       <!-- gantry origin: the nominal point where all four lines meet -->
