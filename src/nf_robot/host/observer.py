@@ -144,7 +144,7 @@ VIDEO_LATENCY_S = 0.25
 # monitor_gantry_visibility's cadence, and how long every camera may go without a new sighting
 # of the gantry marker before that is called a fault rather than a gap.
 VISIBILITY_POLL_S = 1.0
-UNSEEN_LIMIT_S = 40.0
+UNSEEN_LIMIT_S = 120.0
 # Motion tasks (by coroutine name) and startup steps (by step name) allowed to run while the
 # gantry is recorded as parked. Anything else could drag the lines across the hook. Record
 # park starts from the hook by design, and the startup sequence checks each of its steps.
