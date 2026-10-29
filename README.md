@@ -90,6 +90,11 @@ Mini PC's or laptops based on the Ryzen 7 7840HS are probably about the cheapest
 
 Otherwise, any gaming desktop is usually more than enough.
 
+It was found that restricting opencv's threads can drastically cut CPU use.
+precede `stringman-headless` command with 
+
+    OPENCV_FOR_THREADS_NUM=2 OPENBLAS_NUM_THREADS=1
+
 ### Telemetry stream
 
 stringman-headless listens on port 4245 locally for telemetry connections. This is a websocket sending and receiving protobufs defined in `src/nf_robot/protos`
