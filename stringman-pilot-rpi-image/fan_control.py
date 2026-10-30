@@ -8,8 +8,16 @@ on the hat:
     anchor hat -> GPIO 12
     otherwise  -> GPIO 18
 
-Both hats switch a 2-wire fan with a MOSFET. That won't spin the fan above about
-1 kHz, and 200 Hz is the quietest.
+Both hats drive the PWM input of a 4-wire fan, which expects a 25 kHz carrier
+(the Intel 4-wire fan spec). Lower frequencies are audible as a whine or ticking.
+
+Speed control is currently off: HOLD_PIN_LOW keeps the fan pin low at all times.
+The hats pull the fan's PWM wire to ground through a MOSFET (pin high = wire low)
+and leave it to the fan's own pull-up to bring it back. The Pi 5 style fans now
+fitted have so weak a pull-up that any pulse on the pin stops them, and they only
+run at full speed with the pin held low. These fans also have their tach and GND
+wires swapped by hand to match the hats' connector. Set HOLD_PIN_LOW to False to
+use the temperature control below with fans that tolerate the hats' drive.
 
 The anchor hat is recognized by its MCP2515 CAN controller: can0 only exists when
 that chip answers on SPI. Both pins can carry PWM0, so this daemon always drives
@@ -20,10 +28,14 @@ needed to enable the PWM block, but the pin it picks is only a boot default.
 can0 appears some seconds into boot, possibly after this service starts, so the
 pin is re-checked every sample and moved if the answer changes.
 
-Duty cycle follows SoC temperature linearly between MIN_DUTY at or below
-TEMP_LOW_C and MAX_DUTY at or above TEMP_HIGH_C. If the temperature can't be
-read, or the daemon is stopped, the fan is left at MAX_DUTY: a fan stuck on full
-is loud, a fan stuck off cooks the unit.
+With HOLD_PIN_LOW off, duty cycle follows SoC temperature linearly between a
+minimum duty at or below TEMP_LOW_C and a maximum duty at or above TEMP_HIGH_C.
+The range defaults to MIN_DUTY-MAX_DUTY and can be overridden from the host with
+the 'fan MIN MAX' debug command, which has the component server write
+DUTY_RANGE_PATH. That file is re-read every sample, so a change applies without
+restarting this service. If the temperature can't be read, or the daemon is
+stopped, the fan is left at full speed: a fan stuck on full is loud, a fan stuck
+off cooks the unit.
 
 There is one PWM channel and this daemon assumes it owns it. To run it by hand,
 stop the service first, or the two processes fight over duty_cycle:
@@ -33,23 +45,30 @@ stop the service first, or the two processes fight over duty_cycle:
 """
 
 import argparse
+import json
 import os
 import signal
 import subprocess
 import time
 
+HOLD_PIN_LOW = True  # full speed for the current fans; see the module docstring
+
 MIN_DUTY = 0.3
 MAX_DUTY = 1.0
+FULL_DUTY = 1.0  # when the temperature is unreadable or the daemon stops
 TEMP_LOW_C = 35.0   # at or below: MIN_DUTY
 TEMP_HIGH_C = 50.0  # at or above: MAX_DUTY
 
-PWM_FREQUENCY_HZ = 200  # quietest for the 2-wire fan behind the hat's MOSFET
+PWM_FREQUENCY_HZ = 25000  # the 4-wire fan spec's PWM input frequency
 DEFAULT_INTERVAL = 2.0  # seconds between temperature samples
 
 PWM_CHIP = "/sys/class/pwm/pwmchip0"
 PWM_CHANNEL = 0
 THERMAL_ZONE = "/sys/class/thermal/thermal_zone0/temp"
 CAN_DEVICE = "/sys/class/net/can0"
+# {"min_duty": ..., "max_duty": ...}, written by cranebot.service (user pi), which can't
+# touch anything owned by root. Keep in sync with fan_duty_path in component_server.py.
+DUTY_RANGE_PATH = "/opt/robot/fan_duty.json"
 
 # GPIO -> pinctrl alt function that carries PWM0 on it.
 PWM0_ALT = {12: "a0", 18: "a5"}
@@ -81,13 +100,28 @@ def read_soc_temp_c():
         return None
 
 
-def duty_for_temp(temp_c):
-    if temp_c is None or temp_c >= TEMP_HIGH_C:
-        return MAX_DUTY
+def read_duty_range():
+    """(min_duty, max_duty) from DUTY_RANGE_PATH, or the defaults if it is missing or invalid."""
+    try:
+        with open(DUTY_RANGE_PATH) as f:
+            saved = json.load(f)
+        lo, hi = float(saved["min_duty"]), float(saved["max_duty"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return MIN_DUTY, MAX_DUTY
+    if not 0.0 <= lo <= hi <= 1.0:
+        return MIN_DUTY, MAX_DUTY
+    return lo, hi
+
+
+def duty_for_temp(temp_c, min_duty, max_duty):
+    if temp_c is None:
+        return FULL_DUTY
+    if temp_c >= TEMP_HIGH_C:
+        return max_duty
     if temp_c <= TEMP_LOW_C:
-        return MIN_DUTY
+        return min_duty
     frac = (temp_c - TEMP_LOW_C) / (TEMP_HIGH_C - TEMP_LOW_C)
-    return MIN_DUTY + frac * (MAX_DUTY - MIN_DUTY)
+    return min_duty + frac * (max_duty - min_duty)
 
 
 class SysfsPwm:
@@ -144,14 +178,17 @@ def main():
     args = ap.parse_args()
 
     pwm = SysfsPwm(PWM_CHIP, PWM_CHANNEL, args.frequency)
-    log(f"fan_control: {args.frequency:g} Hz, "
-        f"duty {MIN_DUTY:g}-{MAX_DUTY:g} over {TEMP_LOW_C:g}-{TEMP_HIGH_C:g}C")
+    if HOLD_PIN_LOW:
+        log("fan_control: holding the fan pin low (full speed), speed control off")
+    else:
+        log(f"fan_control: {args.frequency:g} Hz, over {TEMP_LOW_C:g}-{TEMP_HIGH_C:g}C")
 
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
 
     last_logged = None
     routed_pin = None
+    duty_range = None
     try:
         while _running:
             pin = fan_pin()
@@ -159,8 +196,16 @@ def main():
                 route_pwm0_to(pin)
                 log(f"fan_control: fan PWM on GPIO {pin}")
                 routed_pin = pin
+            if HOLD_PIN_LOW:
+                pwm.set_duty(0.0)
+                time.sleep(args.interval)
+                continue
+            new_range = read_duty_range()
+            if new_range != duty_range:
+                log(f"fan_control: duty {new_range[0]:g}-{new_range[1]:g}")
+                duty_range = new_range
             temp = read_soc_temp_c()
-            duty = duty_for_temp(temp)
+            duty = duty_for_temp(temp, *duty_range)
             pwm.set_duty(duty)
             if args.verbose or last_logged is None or abs(duty - last_logged) >= 0.05:
                 temp_s = f"{temp:.1f}C" if temp is not None else "unreadable"
@@ -168,7 +213,7 @@ def main():
                 last_logged = duty
             time.sleep(args.interval)
     finally:
-        pwm.set_duty(MAX_DUTY)
+        pwm.set_duty(0.0 if HOLD_PIN_LOW else FULL_DUTY)
         log("fan_control: stopping, fan left at full speed")
 
 

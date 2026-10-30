@@ -126,7 +126,7 @@ BUILTIN_CONTROL_FIELDS = frozenset({
 })
 BUILTIN_VERBS = frozenset({
     'spincal', 'spin-recover', 'fingercal', 'eyelets', 'gripcards', 'stow', 'upright', 'swinglatency',
-    'swinglatencycal', 'polecal', 'reset_wrist', 'spind', 'sync_timezone', 'pull_logs',
+    'swinglatencycal', 'polecal', 'reset_wrist', 'spind', 'sync_timezone', 'pull_logs', 'fan',
     'untwist', 'setvar', 'savevar', 'spoollog', 'holdtension', 'tensionreg', 'findorigin', 'centerorigin',
     'servograsp', 'servowatch', 'servocenter', 'servoloop',
 })
@@ -1521,6 +1521,23 @@ class AsyncObserver:
             await self.sync_timezone_to_bots()
         if item.action == 'pull_logs':
             asyncio.create_task(self.pull_logs_to_zip())
+        if item.action.startswith('fan '):
+            # 'fan MIN MAX' sets the duty range every component's fan follows between its low
+            # and high temperatures. Kept on each Pi across reboots.
+            parts = item.action.split()
+            try:
+                lo, hi = float(parts[1]), float(parts[2])
+                valid = len(parts) == 3 and 0.0 <= lo <= hi <= 1.0
+            except (IndexError, ValueError):
+                valid = False
+            if valid:
+                logger.info(f'Setting fan duty range {lo:g}-{hi:g} on all components')
+                await asyncio.gather(*[
+                    client.send_commands({'set_fan_duty': {'min_duty': lo, 'max_duty': hi}})
+                    for client in self.bot_clients.values()
+                ])
+            else:
+                logger.warning(f'invalid fan command, expected "fan MIN MAX" with 0 <= MIN <= MAX <= 1: {item.action}')
         if item.action.startswith('untwist'):
             parts = item.action.split()
             if len(parts)==2 and parts[0]=='untwist':

@@ -133,6 +133,9 @@ ERROR_STATE_WS_DELAY = 1.0
 
 log_path = '/opt/robot/cranebot.log'
 thermal_log_path = '/opt/robot/wifi_thermal_watchdog.log'
+# fan duty range override read by fan_control.py (fan-control.service, root) every sample.
+# Keep in sync with DUTY_RANGE_PATH there.
+fan_duty_path = '/opt/robot/fan_duty.json'
 log_tail_lines = 2000
 
 class RobotComponentServer:
@@ -528,6 +531,31 @@ class RobotComponentServer:
         # is deliberately no os._exit() so the unit gets to stop cleanly like any other.
         logging.info('Poweroff underway.')
 
+    def set_fan_duty(self, duty):
+        """Save the fan's duty range for fan_control.py, in response to a 'set_fan_duty' command.
+
+        duty is {'min_duty': float, 'max_duty': float}. fan_control.py picks the file up on
+        its next sample and keeps using it across reboots.
+        """
+        try:
+            lo, hi = float(duty['min_duty']), float(duty['max_duty'])
+        except (KeyError, TypeError, ValueError):
+            logging.warning(f'invalid set_fan_duty {duty!r}')
+            return
+        if not 0.0 <= lo <= hi <= 1.0:
+            logging.warning(f'set_fan_duty needs 0 <= min <= max <= 1, got {lo}-{hi}')
+            return
+        # write then rename, so fan_control.py never reads a half written file
+        tmp_path = fan_duty_path + '.tmp'
+        try:
+            with open(tmp_path, 'w') as f:
+                json.dump({'min_duty': lo, 'max_duty': hi}, f)
+            os.replace(tmp_path, fan_duty_path)
+        except OSError as e:
+            logging.error(f'could not write {fan_duty_path}: {e}')
+            return
+        logging.info(f'Fan duty range set to {lo:g}-{hi:g}')
+
     def read_recent_logs(self, path=None):
         """Return the last log_tail_lines lines of a log file, for the
         'pull_logs' debug command."""
@@ -579,6 +607,9 @@ class RobotComponentServer:
                 tz = update['set_timezone']
                 subprocess.run(['sudo', 'timedatectl', 'set-timezone', tz], check=True)
                 logging.info(f'Timezone set to {tz}')
+
+            if 'set_fan_duty' in update:
+                self.set_fan_duty(update['set_fan_duty'])
 
             if 'get_logs' in update:
                 self.update['logs'] = self.read_recent_logs()
