@@ -102,6 +102,15 @@ You cannot react to video in real time from here, because each of your turns tak
 
 A small visual servoing model is used when running `run_command('GRASP')` which is reliable for grasping a prominent object in the gripper's frame. It can steer some distance toward whatever it finds most prominent; from code, `await ob.grasp(max_wander_m=0.15)` keeps it within that distance of where it started and gives up on a target beyond it.
 
+- **What it goes for depends on where it starts.** It picks the most prominent, high-contrast thing in the palm camera's view. Put the object you want in the middle of the frame at about 0.5 m before calling it. One distracting object nearby (a wide flat disc, a bright tray, a book with an eye on the cover) can pull every attempt toward it; ask the user to move it if it keeps happening.
+- **A tight `max_wander_m` makes it give up rather than try.** If the model's chosen target is outside the limit, the grasp ends at once. Use 0.25 to 0.5 unless something nearby must not be touched.
+- **Grasping and checking repeatedly beats aiming carefully.** The fastest loop is: call `grasp()` until it says it holds something, then look at the gripper image to see what it got, and decide where it goes. Hand-built dives (open, descend, `close_grip`) did worse than auto grasp on every class of object tried, including flat cards and cushions, which auto grasp can pick up.
+- **Its held/not-held answer is unreliable in both directions:**
+  - Hard objects (plastic trucks, discs) often do not press the finger pads hard enough to register. The grasp then reports failure and opens the fingers, dropping an object it had.
+  - It sometimes reports held with the fingers fully closed on nothing (finger angle about 89-90).
+  - Thin things (paintbrush, marker, dowel) also close to about 89, but the pad reading tells them apart: `ob.finger_pad_voltage()` is about 0.08 or more on a thin object and 0.05 or less when empty. Use the angle and the pad voltage together, and look at the image when in doubt.
+- **Small balls and flat, thin sticks are the hardest.** They tend to roll or slip out as the fingers close; expect several attempts.
+
 ## Gripping
 
 **Close the fingers at a constant rate; never command a closed finger angle.** The gripper has a low-level controller for this. While the fingers close at the commanded finger speed, the pads sense pressure; on contact the gripper switches itself to force mode. From then on a finger speed is the rate the holding force changes (normalized 0 to 1, held by a PID loop): positive tightens, 0 holds the force where it is, and negative loosens until, below zero, it lets go. Finger speed commands expire after 0.2 s, so they have to be repeated.
@@ -123,6 +132,31 @@ if not grip['held']:
 ...                                                  # carry it; the gripper keeps the force
 await self.ob.set_finger_angle(-60)                  # let go
 ```
+
+## Clearing a floor
+
+Lessons from tidying a cluttered playroom into bins.
+
+- **Plan the layout before picking anything up.** Every drop is a round trip, and the trip to the container usually costs more than the grasp. Light, empty bins can be carried: pick one up by its rim and set it down beside the pile before you start, and put each container close to the kind of thing it will collect. Containers that cannot move (a ball pit in a corner) are worth a separate batch at the end.
+- **Run a half calibration before every drop.** The height estimate drifts during repeated dives, by up to 0.35 m in one session, and lateral position drifts too. `await ob.half_auto_calibration()` takes about 2 s near the middle of the room and keeps drops and grasp heights honest. If `gripper_position()` reports the gripper below the floor, it is overdue.
+- **Things fall from the fingertips, not from under the image center.** In the palm camera, the closed fingertips sit near the bottom middle of the frame (about pixel 256, 215 of a 512 x 288 view at 0.6 m), roughly 10-15 cm from the image center, and that offset turns with the wrist. To find a drop position, move until the container's center is under the fingertip point, then record `gripper_position()`. A position recorded by centering the container in the image will miss by the offset, by a different amount at each wrist angle.
+- **Use the right depth when turning a pixel into a move.** One pixel is about depth / 302 m in the 684 px frame, where depth is the distance from the camera to the thing in that pixel. The rangefinder reads whatever is under the center, often clutter or a bin's contents, so it is the wrong depth for a pixel off-center. Use the estimated gripper height minus the target's height; bin rims are about 0.25 m above the floor, which halves the depth.
+- **Drop from low, aligned with the container.** About 0.3 m above the rim is enough. Higher drops bounce things out. Turn the wrist so a long object lies along the container's long axis before letting go; one that lies across it bounces out and can roll into a dead zone by a wall.
+- **Lower floppy things in while spinning the wrist.** A long plush toy dropped from above drapes over the rim. Lowering it to just above the bottom while turning the wrist one or two full turns coils it inside.
+- **Lines can hit tall furniture.** Away from the middle of the room, the lines pass low enough to touch things like a playhouse roof. Over-tension trips near tall furniture usually mean this; work elsewhere, or ask the user to move things into the open.
+- **Ask the user about placement.** Whose things they are and where they belong (papers by the computer, for example) is the user's call. Ask before treating anything as trash.
+- **Keep a short list of what is left and why.** Out of reach, too flat, distracting the grasp: when the user offers to help, that list tells them exactly what to move.
+
+### Throughput
+
+A profiled two-hour playroom session cleared about 70 items, roughly 1.4 minutes per item once a working loop was running. Of each roughly 60 s cycle, about 45 s went to grasping (most of it retries) and 13-15 s to carrying and dropping. The first quarter of the session produced almost nothing. In order of payoff:
+
+- **Get to the working loop first.** Build "grasp until held, look, drop, grasp the next one" as a single maneuver verb before trying anything clever. One call should drop the held item and start the next grasp, so the robot is never waiting on you between items. In that session, blind picks at absolute coordinates, hand-built dives and careful bin measuring took the first 24 minutes and delivered a handful of items.
+- **Cut grasp retries.** Retries cost far more than travel. Start each grasp with something graspable in the middle of the frame. Reject an empty hand by finger angle and pad voltage together (see "Using automatic grasping"), or thin objects get thrown away as misses.
+- **Cut travel.** Move light containers beside the pile at the start. Grasp near the last drop point instead of always returning to one spot. For a far, fixed container (a ball pit in a corner), clear what goes into the near containers first, so that late trips to the far one are not mixed in with everything else.
+- **Measure container drop points once, correctly.** Use a half calibration, then center the container under the fingertip point (not the image center) and save the position. Re-measuring after missed drops and fetching things that bounced out wasted most of an hour in that session.
+- **Keep your own turns cheap.** One snapshot per cycle, taken by the `wait` that ends the motion, is enough to identify the item and choose its container. Batch maneuver edits, since each reload and test costs a minute or more. Time between motion tasks was about 16% of wall time once the loop was running.
+- **Avoid long side trips mid-task.** `spin-recover` (about 2 minutes) and other calibrations belong at the start, or after a clear sign that something is wrong.
 
 ## The experimental loop
 
@@ -206,6 +240,8 @@ Scripts are good for one-off measurements. For anything you will run more than o
 - **A command did nothing:** look at `get_events` for a `log` warning, and at `last_motion_result` in `get_state`.
 - **Hang position desync:** if positions look wrong (an image shows the gripper somewhere other than where `gripper_position` says), or movement is unreliable or causing unwanted slack lines or swinging, the first thing to do is to try getting the gantry to a position where it can be seen and running `run_command('HALF_CAL')` re-references the lines from the cameras.
 - **If swing cancellation is pumping instead of damping:** Turn it off and notify the user.
+- **`spin-recover` can switch swing cancellation off.** It ends with a damping check, and if that check trips the tension limit it marks swing cancellation unverified. `prefer_swing_cancellation()` then leaves it off for every maneuver. Tell the user; they decide whether to turn it back on with `ob.set_swing_cancellation(True)`.
+- **A "line looks derailed" stop can be a false positive**, for example while the gripper is pressed against something. Stop and ask the user to check the spool before moving again.
 
 ## Setup (for the person running the robot)
 

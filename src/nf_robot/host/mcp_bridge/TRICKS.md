@@ -11,12 +11,12 @@ assume 90% true, there is a chance any of these could have become obsolete or wr
 - **Open fingertips reach ~0.10 m below the rangefinder.** With the fingers open the laser never reads less than ~0.10 over bare floor; open them at ~0.15 m, then lower in small steps and stop when the pole starts to lean (fingertips on the floor) and close there.
 - **People and children may come into the work area.** Watch the frames for hands and feet, and stop when someone is reaching in. They are used to the robot though and it's fairly harmless and slow.
 - **A held object blinds the rangefinder** and fills the middle of the palm camera. Use the estimated height while carrying, and ignore blobs in the middle of the frame when looking for things on the floor.
-- **The palm camera's principal point is the grasp point.** Center the target on the image center, not on the gripper position: the projection of the image center onto the floor sits 15-20 cm from `gripper_position()` and that offset is estimate error, not geometry.
+- **Before an auto grasp, put the target at the image center.** The servo model steers from there. Releasing is different: things fall from the fingertips, which sit 10-15 cm from the image center (see "Clearing a floor" in GUIDE.md).
 - **Recenter at ~0.3 m range before the final drop.** The gantry drifts several centimetres during a descent.
-- **Image right in the room frame** is `ob.gripper_camera_to_room([1, 0, 0])`; use it to turn a pixel offset into a nudge. At range r, one pixel of the 684 px frame is about r / 302 m.
+- **Image right in the room frame** is `ob.gripper_camera_to_room([1, 0, 0])`; use it to turn a pixel offset into a nudge. One pixel of the 684 px frame is about depth / 302 m, where depth is the camera's distance to the thing in that pixel, not necessarily the laser range.
 - **Fingers close along image horizontal.** Rotate the wrist so the object's long axis is image vertical.
 - **Auto grasp may fail near walls** and other motion may too. due to a tangle prevention mechanism, spools refuse to let out line if they are compeltely slack, which has the side effect of phantom forces within about 20cm of walls that can prevent you from getting close to them. the longest lines are the loose ones and the spool won't let them out any further because it's reading approximately zero tension. worse in tall rooms
-- **Automatic GRASP can wander** to whatever the servo model finds most prominent, up to ~0.7 m away. Near things that must not be touched, call `ob.grasp(max_wander_m=...)` from a script.
+- **Automatic GRASP can wander** to whatever the servo model finds most prominent, up to ~0.7 m away. Near things that must not be touched, call `ob.grasp(max_wander_m=...)` from a script, but below about 0.25 it mostly gives up instead of grasping.
 - **A tilt over ~7 deg near the floor means the gripper is resting on something.** Lines go slack and lateral nudges barely move it. Lift a few cm before moving sideways.
 
 ## Moving things
@@ -26,7 +26,7 @@ assume 90% true, there is a chance any of these could have become obsolete or wr
 
 ## Seeing
 
-- **The position estimate drifts 5-20 cm** between visits, worst after a marker dropout. Absolute coordinates are not good enough for tight layouts; place relative to what the palm camera sees, and check the result in the ortho view.
+- **The position estimate drifts 5-20 cm** between visits, worst after a marker dropout, and height can drift by 0.3 m or more over many dives; a half calibration resets both. Absolute coordinates are not good enough for tight layouts; place relative to what the palm camera sees, and check the result in the ortho view.
 - **The gantry marker drops out in predictable places** such as very low, where it is viewed with a steep angle, or obscured by the "cross" on the top of the gantry. it can also be in one of the blind spots of either camera. encoder based positioning (aka hang point prediction) keeps working and feeding the kalman filter in the position estimator.
 - **Ortho pixels to room:** on the 1000 px ortho, x = (u - 500) / 200, y = (500 - v) / 200 (`ml/ortho_target/model.py`).
 - **The robot itself shows up in the ortho** as a smeared shape with a line: the gripper and pole projected from the air. It is not an obstacle on the floor. It can be white, copper, or pink.
