@@ -20,11 +20,14 @@ async def ensure_connection():
     As long as there is no connection, looks for connection data in QR codes
     Choose "share connection" from your phones wifi settings and hold it in view of the camera.
 
-    Returns False if an existing wifi connnection was used
-    Returns True if a new one was configured
+    Returns True only if the connection was made by decoding a QR code.
+    Returns False if an existing wifi connnection was used, even if it took longer than
+    the initial check to come up and the scanner was started in the meantime.
     if no connection is achieved, doesn't return.
     """
     connected_event = asyncio.Event()
+    # set by the scanner only when nmcli successfully connects using a decoded QR code
+    qr_connected_event = asyncio.Event()
 
     # Task 1: Monitor for connection
     monitor_task = asyncio.create_task(monitor_wifi_status(connected_event))
@@ -40,7 +43,7 @@ async def ensure_connection():
         logging.info("No connection found after 10 seconds. Starting QR Scanner...")
     
     # Task 2: Scan for QR codes
-    scanner_task = asyncio.create_task(scan_and_configure_wifi(connected_event))
+    scanner_task = asyncio.create_task(scan_and_configure_wifi(connected_event, qr_connected_event))
 
     logging.info("Starting WiFi connection tasks...")
 
@@ -55,8 +58,11 @@ async def ensure_connection():
     except asyncio.CancelledError:
         logging.info("Scanner task stopped.")
 
-    logging.info("WiFi connection established.")
-    return True
+    if qr_connected_event.is_set():
+        logging.info("WiFi connection established from QR code.")
+        return True
+    logging.info("WiFi connection established using a saved network.")
+    return False
 
 async def monitor_wifi_status(connected_event):
     """
@@ -81,7 +87,7 @@ async def monitor_wifi_status(connected_event):
         
         await asyncio.sleep(5)
 
-async def scan_and_configure_wifi(connected_event):
+async def scan_and_configure_wifi(connected_event, qr_connected_event):
     """
     Task 2: Continuously takes raw video frames to look for a WiFi QR code.
     """
@@ -122,6 +128,7 @@ async def scan_and_configure_wifi(connected_event):
                         success = await connect_via_nmcli(qr_data)
                         
                         if success:
+                            qr_connected_event.set()
                             logging.info("Network configuration applied. Waiting for connection...")
                             # Pause to allow the monitor task to verify the connection
                             await asyncio.sleep(10)

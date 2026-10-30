@@ -836,7 +836,7 @@ class GripperArpServer(RobotComponentServer):
         if 'query_angle_from_vertical' in update and self.imu is not None:
             self.update['angle_from_vertical'] = self.getAngleFromVertical()
         if 'identify' in update:
-            self.identify()
+            asyncio.create_task(self.identify())
         if 'reset_wrist' in update and not self.wrist_busy and self.motors_ok:
             asyncio.create_task(self.resetWrist())
         if 'untwist' in update and not self.wrist_busy and self.motors_ok:
@@ -849,15 +849,17 @@ class GripperArpServer(RobotComponentServer):
                 self.raw_gyro.clear()
             logging.info(f'raw gyro recording {"on" if self.record_gyro else "off"}')
 
-    def identify(self):
+    async def identify(self):
         """Twitch the fingers, so an operator can tell which gripper this is."""
         if not self.motors_ok:
             return
         self.motor_loop_pause = True
         pos = self.motors.get_position(FINGER)
-        self.motors.set_position(FINGER, pos + 60)
-        time.sleep(0.2)
-        self.motors.set_position(FINGER, pos)
+        for _ in range(3):
+            self.motors.set_position(FINGER, pos + 60)
+            await asyncio.sleep(0.2)
+            self.motors.set_position(FINGER, pos)
+            await asyncio.sleep(0.2)
         self.motor_loop_pause = False
 
     def countFingerPresses(self, pressure):

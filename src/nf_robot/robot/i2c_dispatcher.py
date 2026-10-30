@@ -47,7 +47,7 @@ async def asyncmain():
         from nf_robot.robot.gripper_arp_server import GripperArpServer
         gs = GripperArpServer(addrs)
         if new_connection_configured:
-            gs.identify()
+            await gs.identify()
         r = await gs.main()
 
     elif len(addrs) == 0:
