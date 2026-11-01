@@ -110,6 +110,11 @@ NEAR_PLANE_M = 0.004
 # Reproduced here so that unwrapping code is actually exercised.
 POS_WRAP_RAD = 25.0
 
+# With torque off a DaMiao is not free: it drags like a wheel with a disk brake, and a
+# line can be pulled off it at about 0.2 m/s under about 1 kg of pull. Modeled as
+# viscous, payout speed = tension / this, in N per m/s. From feel, not a measurement.
+DISABLED_LINE_DAMPING = 9.81 / 0.2
+
 logger = logging.getLogger(__name__)
 
 
@@ -430,7 +435,8 @@ class MujocoSpoolMotor:
         """Called by the physics thread before each step, already holding its lock."""
         with self.lock:
             if not self.enabled:
-                self.vel = 0.0
+                self._drag(dt)
+                self._push_length()
                 return
             target = self.cmd_vel
             accel = self.accel
@@ -447,6 +453,23 @@ class MujocoSpoolMotor:
                 self.vel += float(np.clip(target - self.vel, -step, step))
             self.raw_rad += self.vel * dt
         self._push_length()
+
+    def _drag(self, dt):
+        """Torque off: let tension pull line off the spool against the motor's drag.
+        Line only ever pays out this way; nothing winds it back in."""
+        tension = max(0.0, self.world.get_line_tension(self.line_index))
+        dl = tension / DISABLED_LINE_DAMPING * dt
+        revs = self._shaft_revs()
+        # meters of line out per shaft rev, signed, at the present winding
+        eps = 1e-4
+        dl_drev = (self.sc.get_unspooled_length(revs + eps)
+                   - self.sc.get_unspooled_length(revs)) / eps
+        if dl_drev == 0:
+            self.vel = 0.0
+            return
+        d_rad = self.direction * (dl / dl_drev) * 2 * math.pi
+        self.raw_rad += d_rad
+        self.vel = d_rad / dt
 
     # -- DaMiaoMotor interface -------------------------------------------------
 
