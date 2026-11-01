@@ -3,6 +3,8 @@ Estimate the current position and velocity of the gantry and gripper continuousl
 
 Uses a more simplified approach based on initial experimentation with a focus on speed
 """
+import os
+import json
 import time
 import numpy as np
 import asyncio
@@ -35,6 +37,54 @@ _ANCHOR_PAIRS = ((0,1), (1,2), (2,3), (3,0), (0,2), (1,3))
 # but they are named unconditionally so the filter's sensor list does not depend on that flag.
 _HANG_KEYS = tuple(combinations(range(4), 3)) + tuple(combinations(range(4), 2))
 HANG_SENSOR_NAMES = {key: 'hang' + ''.join(map(str, key)) for key in _HANG_KEYS}
+
+# Simulator only. Set to the UDP port simulator/mujoco_bridge.serve_truth broadcasts on (9899)
+# and the estimator reports the simulator's true gantry position, velocity and line anchor
+# points in place of its own: a way to tell motion errors caused by estimation apart from those
+# that are not. The anchor points are replaced too, because the true position is in the
+# simulator's frame, which a calibrated config only approximates.
+SIM_TRUTH_ENV = 'STRINGMAN_SIM_TRUTH'
+
+# Set to a file path and the estimator appends every input the filter takes, as JSON lines, so
+# a run can be replayed offline against other filter settings. See KFRecorder.
+KF_LOG_ENV = 'STRINGMAN_KF_LOG'
+
+# For experiments: a JSON object overriding filter settings, e.g.
+#   {"acceleration_std_dev": 0.1, "hang_biases": false}
+# acceleration_std_dev, bias_std_dev and the *_noise_std_dev values replace the constants in
+# Positioner2.__init__; hang_biases false pins every hang sensor's bias at zero.
+KF_PARAMS_ENV = 'STRINGMAN_KF_PARAMS'
+
+
+class KFRecorder:
+    """Appends filter inputs to a JSON lines file, one event per line. Event kinds:
+        p  model_time after a predict, then the estimate it produced
+        v  a camera sighting: capture time, anchor number, position
+        h  the last record of each line: [time, length, speed, tension] x4
+        c  a commanded velocity update: the time it was applied at, the velocity
+        r  a bias reset after new reference lengths: the position the biases were reset to
+    Each event leads with the wall time it happened, so the file replays in order."""
+
+    def __init__(self, path):
+        self.f = open(path, 'a', buffering=1 << 16)
+        self.last_flush = time.time()
+
+    def log(self, kind, *values):
+        now = time.time()
+        self.f.write(json.dumps([kind, now, *values]) + '\n')
+        if now - self.last_flush > 1.0:
+            self.f.flush()
+            self.last_flush = now
+
+
+class _SimTruthProtocol(asyncio.DatagramProtocol):
+    def __init__(self, positioner):
+        self.positioner = positioner
+
+    def datagram_received(self, data, addr):
+        msg = json.loads(data)
+        self.positioner.sim_truth = (np.array(msg['pos']), np.array(msg['vel']),
+                                     np.array(msg['anchor_points']))
 
 def find_intersection(positions, lengths):
     """Triangulation by least squares
@@ -320,6 +370,11 @@ class Positioner2:
         # If some nonzero speed was occuring on any line at the last update, this will be None
         self.stop_cutoff = time.time()
 
+        # (pos, vel, anchor_points) from the simulator, when SIM_TRUTH_ENV is set
+        self.sim_truth = None
+
+        self.recorder = KFRecorder(os.environ[KF_LOG_ENV]) if os.environ.get(KF_LOG_ENV) else None
+
         # last estimate of the gripper pose
         self.grip_pose = (np.zeros(3), np.zeros(3))
 
@@ -339,17 +394,29 @@ class Positioner2:
         self.include_two_line_hangs = False
         self.last_visual_cutoff = time.time()
 
-        # Expected standard deviation in gantry acceleration
-        acceleration_std_dev=0.001
-        # noise in the position biases used for each sensor. the biases can be 10 to 50 cm in my experience.
-        # this small constant reflects the assumtion that the bias for a camera is expected to change at least 10x slower than the gantry position.
-        bias_std_dev=0.0001
+        # Expected standard deviation in gantry acceleration, m/s^2. At 0.001 the filter believed
+        # the gantry almost never changes speed and trailed it by ~11 cm through every move in
+        # simulation; anything from 0.03 to 1 removed that lag.
+        acceleration_std_dev=0.1
+        # how fast each sensor's position bias may drift, m/sqrt(s). the biases can be 10 to 50 cm in my
+        # experience but change much slower than the gantry moves. 0.0012 is the drift the filter had
+        # when this was added per filter call instead of per second, at the ~140 calls/s it makes.
+        bias_std_dev=0.0012
         # noise in visual observations of gantry position from a single camera 
         visual_noise_std_dev=0.01 # experimentally confirmed.
         # noise in hang position as a sensor. This is odd, it will be tightly near some position but make large jumps in z occationally.
         hang_noise_std_dev=0.005
         # the velocity that was commanded of the robot is also considered a sensor. the actual movement may differ from it somewhat.
         commanded_vel_std_dev=0.02
+
+        overrides = json.loads(os.environ.get(KF_PARAMS_ENV) or '{}')
+        if overrides:
+            logger.warning(f'{KF_PARAMS_ENV} overrides filter settings: {overrides}')
+        acceleration_std_dev = overrides.get('acceleration_std_dev', acceleration_std_dev)
+        bias_std_dev = overrides.get('bias_std_dev', bias_std_dev)
+        visual_noise_std_dev = overrides.get('visual_noise_std_dev', visual_noise_std_dev)
+        hang_noise_std_dev = overrides.get('hang_noise_std_dev', hang_noise_std_dev)
+        commanded_vel_std_dev = overrides.get('commanded_vel_std_dev', commanded_vel_std_dev)
 
         self.visual_noise_covariance = np.diag([visual_noise_std_dev**2] * 3)
         self.hang_noise_covariance = np.diag([hang_noise_std_dev**2] * 3)
@@ -359,6 +426,11 @@ class Positioner2:
         self.sensor_names = ['v0', 'v1' ,'v2' ,'v3'] + list(HANG_SENSOR_NAMES.values())
         self.kf = KalmanFilter(self.sensor_names, acceleration_std_dev, bias_std_dev)
         self.kf.state_estimate[:3] = last_gant_pos
+        if not overrides.get('hang_biases', True):
+            for i, name in enumerate(self.sensor_names):
+                if name in HANG_SENSOR_NAMES.values():
+                    j = 6 + 3 * i
+                    self.kf.state_covariance[j:j+3, j:j+3] = np.eye(3) * 1e-12
 
         # recorded amount of time take to perform various update steps
         self.predict_time_taken = 0
@@ -501,13 +573,36 @@ class Positioner2:
             self.kf.predict_present()
             # keep the estimate physically inside the reachable work area
             self.clamp_state_to_work_area()
+            if self.recorder:
+                self.recorder.log('p', self.kf.model_time, self.kf.state_estimate[:6].tolist())
             self.gant_pos = self.kf.state_estimate[:3].copy()
             self.gant_vel = self.kf.state_estimate[3:6].copy()
+            if self.sim_truth is not None:
+                self.apply_sim_truth()
             self.predict_time_taken = time.time()-start_time
             self.estimate_gripper()
             self.detect_grip()
             self.send_positions()
             await self.ob.flush_tele_buffer()
+
+    def apply_sim_truth(self):
+        """Overwrite the estimate with the simulator's true state. The filter itself carries on
+        untouched, so this hides its output rather than steering it."""
+        pos, vel, anchor_points = self.sim_truth
+        if np.max(np.abs(anchor_points - self.anchor_points)) > 1e-4:
+            self.set_anchor_points(anchor_points)
+        self.gant_pos = pos.copy()
+        self.gant_vel = vel.copy()
+
+    async def listen_sim_truth(self, port):
+        loop = asyncio.get_running_loop()
+        transport, _ = await loop.create_datagram_endpoint(
+            lambda: _SimTruthProtocol(self), local_addr=('127.0.0.1', port))
+        logger.warning(f'{SIM_TRUTH_ENV} set: reporting the simulator\'s true gantry state on port {port}, not the estimate')
+        try:
+            await asyncio.Future()
+        finally:
+            transport.close()
 
     async def update_visual(self):
         while self.run:
@@ -530,6 +625,8 @@ class Positioner2:
                 timestamp = measurement[0]
                 anchor_num = int(measurement[1])
                 this_visual_pos = measurement[2:]
+                if self.recorder:
+                    self.recorder.log('v', float(timestamp), anchor_num, this_visual_pos.tolist())
                 self.kf.update(this_visual_pos, timestamp, self.visual_noise_covariance, 'position', self.sensor_names[anchor_num])
 
                 # average this visual position into self.visual_pos. this is purely for the UI
@@ -548,6 +645,8 @@ class Positioner2:
 
             # Look at the last report for each anchor line.
             records = [alr.getLast() for alr in self.datastore.anchor_line_record]
+            if self.recorder:
+                self.recorder.log('h', [list(map(float, r)) for r in records])
             
             # time, length, speed, tension
             lengths = np.array([r[1] for r in records])
@@ -602,7 +701,10 @@ class Positioner2:
     async def update_commanded_vel(self):
         """provide an observation to the filter based on the commanded velocity"""
         while self.run:
-            self.kf.update(self.commanded_vel, time.time(), self.vel_noise_covariance, 'velocity')
+            t = time.time()
+            if self.recorder:
+                self.recorder.log('c', t, self.commanded_vel.tolist())
+            self.kf.update(self.commanded_vel, t, self.vel_noise_covariance, 'velocity')
             await asyncio.sleep(1/30)
 
     def estimate_gripper(self):
@@ -676,6 +778,8 @@ class Positioner2:
                 visual_task = tg.create_task(self.update_visual())
                 hang_task = tg.create_task(self.update_hang())
                 comv_task = tg.create_task(self.update_commanded_vel())
+                if os.environ.get(SIM_TRUTH_ENV):
+                    tg.create_task(self.listen_sim_truth(int(os.environ[SIM_TRUTH_ENV])))
                 # tension_task = tg.create_task(self.log_tension_residual())
 
         except asyncio.exceptions.CancelledError:

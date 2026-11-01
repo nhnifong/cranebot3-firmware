@@ -162,7 +162,9 @@ DERAIL_MIN_RANGE_M = 0.20
 # the gantry. Cards are still unless someone moves them.
 CARD_SENSOR_NAMES = ['v0', 'v1', 'v2', 'v3']
 CARD_ACCELERATION_STD_DEV = 0.001
-CARD_BIAS_STD_DEV = 0.0001
+# m/sqrt(s). Set where 0.0001 per filter call was, at ~40 calls/s (a predict and an update per
+# sighting, two anchor cameras): KalmanFilter now scales bias drift by elapsed time instead.
+CARD_BIAS_STD_DEV = 0.0006
 # (m) a card is smaller and usually farther from the cameras than the gantry marker
 CARD_VISUAL_NOISE_COVARIANCE = np.diag([0.03**2] * 3)
 
@@ -2437,6 +2439,8 @@ class AsyncObserver:
         data = self.datastore.gantry_pos.deepCopy()
         position = np.mean(data[:,2:], axis=0)
         logger.debug(f'Resetting filter biases with assumed position of {position}')
+        if self.pe.recorder:
+            self.pe.recorder.log('r', position.tolist())
         self.pe.kf.reset_biases(position)
 
     async def stop_all(self):
@@ -5640,7 +5644,7 @@ class AsyncObserver:
             spool_no = line_no % 2
             await self.anchors[line_no//2].send_commands({'set_tension_target': (value, spool_no)})
 
-    async def move_direction_speed(self, uvec, speed=None, starting_pos=None, downward_bias=-0.04, key=DEFAULT_VELOCITY_KEY):
+    async def move_direction_speed(self, uvec, speed=None, starting_pos=None, downward_bias=0.0, key=DEFAULT_VELOCITY_KEY):
         """Move in the direction of the given unit vector at the given speed.
         Any move must be based on some assumed starting position. if none is provided,
         we will use the last one sent from position_estimator
@@ -5650,10 +5654,9 @@ class AsyncObserver:
         On average, half will be too high, and half will be too low.
         Because there are four lines and the gantry only hangs stably from three,
         the actual point where the gantry ends up hanging after any move will always be higher than intended
-        So a small downward bias is introduced into the requested direction to account for this.
-        The size of the bias should theoretically be a function of the the magnitude of position and line errors,
-        but we don't have that info. alternatively we could calibrate the bias to make horizontal movements level
-        according to the laser rangefinder.
+        downward_bias tilts the requested direction down to account for this. It defaults to zero: the
+        upward drift it was compensating for came mostly from the position estimate lagging the gantry,
+        and with that fixed a bias of -0.04 sank a 5 s lateral move by about 6 cm in simulation.
 
         if speed is None, uvec is assumed to be velocity and used directly with no bias
 

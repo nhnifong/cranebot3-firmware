@@ -28,8 +28,11 @@ WHAT THIS IS NOT, YET. Reinforcement learning wants the opposite of real-time pa
 does not want a websocket stack in the loop. See the note at the bottom of this file.
 """
 
+import asyncio
+import json
 import logging
 import math
+import socket
 import os
 import threading
 import time
@@ -110,10 +113,33 @@ NEAR_PLANE_M = 0.004
 # Reproduced here so that unwrapping code is actually exercised.
 POS_WRAP_RAD = 25.0
 
+# The DaMiao ACC and DEC registers are not in rad/s^2: spool_dm's MAX_ACCEL of 0.01 was
+# measured as a 10 rad/s^2 ramp (experiments/torque_offset.py), so rad/s per millisecond.
+DAMIAO_RAD_S2_PER_ACC = 1000.0
+
 # With torque off a DaMiao is not free: it drags like a wheel with a disk brake, and a
 # line can be pulled off it at about 0.2 m/s under about 1 kg of pull. Modeled as
 # viscous, payout speed = tension / this, in N per m/s. From feel, not a measurement.
 DISABLED_LINE_DAMPING = 9.81 / 0.2
+
+# Localhost UDP port the true gantry state is broadcast on, for a host run with
+# STRINGMAN_SIM_TRUTH to use in place of its own estimate. See serve_truth.
+SIM_TRUTH_PORT = 9899
+SIM_TRUTH_HZ = 60
+
+# Where each line, in LINE_MAP order, leaves its last eyelet, and the hook it ties to on
+# the gantry.
+LINE_EYELET_SITES = ('a0_direct', 'eyelet_A', 'a1_direct', 'eyelet_B')
+LINE_HOOK_SITES = ('hook_0', 'hook_1', 'hook_2', 'hook_3')
+
+# The wall time every simulated camera stream's timestamps count from. ffmpeg stamps each
+# frame with the wall time it reads it, less this, so a frame's capture time is this plus its
+# time in the container, the same sum the host makes with the zero point a component reports
+# in video_ready. On the robot that zero point is measured (component_server's
+# dts_zero_offset); here it is simply chosen, and robot_simulator hands it to the servers.
+# Counting frames instead, as ffmpeg does by default, put every frame ~1.5 s in the future:
+# the mpegts muxer starts at 1.4 s, and frames queued before the client connects add the rest.
+STREAM_EPOCH = time.time()
 
 logger = logging.getLogger(__name__)
 
@@ -126,14 +152,13 @@ class MujocoWorld:
     and the physics thread holds it only while stepping.
     """
 
-    def __init__(self, path=DEFAULT_MODEL, realtime=1.0, min_spool_accel=5.0,
+    def __init__(self, path=DEFAULT_MODEL, realtime=1.0,
                  room_side=DEFAULT_ROOM_SIDE_M, cam_tilt_deg=DEFAULT_CAM_TILT_DEG):
         self.model = mujoco.MjModel.from_xml_path(path)
         self.data = mujoco.MjData(self.model)
         self.room_side = float(room_side)
         self.cam_tilt_deg = float(cam_tilt_deg)
         self.realtime = realtime
-        self.min_spool_accel = min_spool_accel
         self.lock = threading.RLock()
         self._run = False
         self._thread = None
@@ -381,6 +406,21 @@ class MujocoWorld:
         with self.lock:
             return np.array(self.data.site_xpos[sid])
 
+    def truth(self):
+        """The gantry state the host only estimates, in the host's terms.
+
+        The host models the gantry as one point, the gantry origin, that all four lines
+        meet at. Here they tie to hooks a few centimeters off it, so each line's anchor
+        point is reported as its eyelet less that hook's offset from the origin: with those,
+        |origin - anchor point| is the line's free span exactly, as the host assumes."""
+        sid = lambda n: mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, n)
+        with self.lock:
+            origin = np.array(self.data.site_xpos[sid('gantry_origin')])
+            anchors = [self.data.site_xpos[sid(e)] - (self.data.site_xpos[sid(h)] - origin)
+                       for e, h in zip(LINE_EYELET_SITES, LINE_HOOK_SITES)]
+            t = float(self.data.time)
+        return t, origin, np.array(anchors)
+
 
 class MujocoSpoolMotor:
     """Stands in for damiao_motor.DaMiaoMotor, backed by one MuJoCo line.
@@ -408,7 +448,7 @@ class MujocoSpoolMotor:
         self.raw_rad = 0.0        # true shaft angle, motor frame, unwrapped
         self.cmd_vel = 0.0        # commanded shaft velocity, rad/s, motor frame
         self.vel = 0.0            # actual, after the acceleration ramp
-        self.accel = None         # rad/s^2, from set_acceleration
+        self.accel = None         # rad/s^2, from set_acceleration's register value
         self.enabled = False
         self.mode = None
         self.last_turn = 0        # way the shaft last turned, for the reported friction
@@ -443,12 +483,6 @@ class MujocoSpoolMotor:
             if accel is None or accel <= 0:
                 self.vel = target
             else:
-                # The firmware's MAX_ACCEL default is 0.01 rad/s^2, which would take
-                # minutes to reach cruise. min_spool_accel floors it so the simulator is
-                # usable out of the box; pass min_spool_accel=None for the value verbatim.
-                floor = self.world.min_spool_accel
-                if floor is not None:
-                    accel = max(accel, floor)
                 step = accel * dt
                 self.vel += float(np.clip(target - self.vel, -step, step))
             self.raw_rad += self.vel * dt
@@ -488,11 +522,11 @@ class MujocoSpoolMotor:
 
     def set_acceleration(self, a):
         with self.lock:
-            self.accel = abs(a)
+            self.accel = abs(a) * DAMIAO_RAD_S2_PER_ACC
 
     def set_deceleration(self, d):
         with self.lock:
-            self.accel = abs(d)
+            self.accel = abs(d) * DAMIAO_RAD_S2_PER_ACC
 
     def send_cmd_vel(self, target_velocity=0.0):
         with self.lock:
@@ -973,8 +1007,13 @@ async def serve_stream(spec, world_streamer=None):
         'ffmpeg',
         '-f', 'rawvideo', '-pix_fmt', 'rgb24',
         '-s', '%dx%d' % (spec.width, spec.height),
-        '-r', str(spec.fps),
+        '-framerate', str(spec.fps),
+        '-use_wallclock_as_timestamps', '1',
         '-i', '-',
+        # keep the wall clock read times through to the container, counted from STREAM_EPOCH
+        '-fps_mode', 'passthrough', '-enc_time_base', '1/90000',
+        '-copyts', '-output_ts_offset', repr(-STREAM_EPOCH),
+        '-muxdelay', '0', '-muxpreload', '0',
         '-vcodec', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
         '-pix_fmt', 'yuv420p',
         '-b:v', str(spec.bitrate),
@@ -1009,25 +1048,56 @@ async def serve_stream(spec, world_streamer=None):
         raise
 
 
-def seed_reference_lengths(anchor_servers):
-    """Tell each spool loop how much line is really out.
+async def serve_truth(world, port=SIM_TRUTH_PORT, hz=SIM_TRUTH_HZ):
+    """Broadcast the true gantry position, velocity and line anchor points to localhost.
+
+    Nothing reads this unless the host is run with STRINGMAN_SIM_TRUTH set, which makes its
+    position estimator report these instead of its estimate: a way to tell motion errors
+    caused by estimation apart from those that are not."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    last = None
+    try:
+        while True:
+            t, pos, anchors = world.truth()
+            vel = np.zeros(3) if last is None or t <= last[0] else (pos - last[1]) / (t - last[0])
+            last = (t, pos)
+            msg = {'pos': pos.tolist(), 'vel': vel.tolist(), 'anchor_points': anchors.tolist()}
+            try:
+                sock.sendto(json.dumps(msg).encode(), ('127.0.0.1', port))
+            except OSError:
+                pass
+            await asyncio.sleep(1 / hz)
+    finally:
+        sock.close()
+
+
+def seed_reference_lengths(anchor_servers, world):
+    """Set each spool loop's line length to what a perfect calibration would.
 
     A freshly started spool loop has no zero angle, so it believes its whole winding is
-    paid out -- 7.5 m against the 4.2 m the model actually hangs at. On the real robot
-    the host fixes that during calibration by calling setReferenceLength; doing the same
-    here means the simulator starts consistent instead of spending its first minute
-    reeling in line that was never out.
+    paid out. On the real robot the host's half calibration fixes that with
+    setReferenceLength, and the length it sets is not the line on the spool but the
+    distance from the line's last eyelet to the gantry origin: the host models every line
+    as running straight from an eyelet to one point, and for an indirect line that drops
+    the ~4 m cross-room run entirely. Seeding with the line really paid out instead left
+    the indirect lines ~4 m too long for any hang point to fit, so the position estimator
+    silently got no line length measurements at all.
     """
+    _, origin, _ = world.truth()
+    sid = lambda n: mujoco.mj_name2id(world.model, mujoco.mjtObj.mjOBJ_SITE, n)
     for a_i, server in enumerate(anchor_servers):
         for s_i, spool in enumerate(server.spools):
             motor = spool.motor
             if not isinstance(motor, MujocoSpoolMotor):
                 continue
-            true_len = motor.true_length()
+            with world.lock:
+                eyelet = np.array(world.data.site_xpos[sid(LINE_EYELET_SITES[motor.line_index])])
+            span = float(np.linalg.norm(origin - eyelet))
             # the loop needs one pass to have read an angle before this means anything
             spool.last_angle = motor._shaft_revs()
-            spool.setReferenceLength(true_len)
-            logger.info('anchor %d spool %d seeded to %.3f m', a_i, s_i, true_len)
+            spool.setReferenceLength(span)
+            logger.info('anchor %d spool %d seeded to %.3f m (%.3f m really out)',
+                        a_i, s_i, span, motor.true_length())
 
 
 def make_patchers(world):

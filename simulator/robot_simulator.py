@@ -198,6 +198,9 @@ async def _run_servers(no_video, patchers, world):
         await asyncio.sleep(0)
         streamer = mujoco_bridge.CameraStreamer(world, specs, asyncio.get_running_loop())
         streamer.start()
+        # the streams stamp frames from STREAM_EPOCH, so that is their zero point
+        for server in anchors + [gripper]:
+            server.mock_camera_zero_ts = mujoco_bridge.STREAM_EPOCH
 
     elif not no_video:
         # video streams — anchor: 1920×1080 @ 10 fps / 520 kbps (matches stream_command in anchor_server.py)
@@ -215,11 +218,12 @@ async def _run_servers(no_video, patchers, world):
     ))
 
     if world is not None:
-        # give the spool loops a moment to take their first reading, then tell them how
-        # much line is really out (see mujoco_bridge.seed_reference_lengths)
+        # give the spool loops a moment to take their first reading, then set their line
+        # lengths the way a perfect calibration would (see mujoco_bridge.seed_reference_lengths)
         import mujoco_bridge
         await asyncio.sleep(0.5)
-        mujoco_bridge.seed_reference_lengths(anchors)
+        mujoco_bridge.seed_reference_lengths(anchors, world)
+        tasks.append(asyncio.create_task(mujoco_bridge.serve_truth(world)))
         logging.info('mujoco: gantry at %s', world.gantry_position().round(3))
 
     if no_video:

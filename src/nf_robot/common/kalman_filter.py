@@ -24,7 +24,8 @@ class KalmanFilter:
             sensor_names (list): A list of strings for each sensor's name.
             acceleration_std_dev (float): Standard deviation of unmodeled acceleration.
                                           This is the primary tuning parameter for filter smoothness.
-            bias_std_dev (float): Standard deviation of the sensor bias change.
+            bias_std_dev (float): How fast each sensor bias drifts, as a random walk: the standard
+                                  deviation of its change over one second.
         """
         # State vector: [x, y, z, vx, vy, vz, bias1_x, bias1_y, bias1_z, bias2_x, ...]^T
         self.sensor_names = sensor_names
@@ -75,10 +76,12 @@ class KalmanFilter:
         process_noise_covariance[3:6, :3] = np.eye(3) * dt3 / 2 * q_accel_squared
         process_noise_covariance[3:6, 3:6] = np.eye(3) * dt2 * q_accel_squared
         
-        # Add the bias noise (assumed to be a random walk, constant Q)
+        # Add the bias noise, a random walk whose variance grows with elapsed time. It was once a
+        # constant per call, which made the drift rate depend on how often the filter was called.
+        bias_variance = self.bias_std_dev**2 * abs(dt)
         for i in range(self.num_sensors):
             start_idx = 6 + 3 * i
-            process_noise_covariance[start_idx:start_idx+3, start_idx:start_idx+3] = np.eye(3) * self.bias_std_dev**2
+            process_noise_covariance[start_idx:start_idx+3, start_idx:start_idx+3] = np.eye(3) * bias_variance
         
         return process_noise_covariance
 
@@ -135,12 +138,13 @@ class KalmanFilter:
         corrected_state_at_meas_time = state_at_meas_time + kalman_gain @ innovation
         corrected_cov_at_meas_time = (np.eye(self.state_size) - kalman_gain @ measurement_matrix) @ cov_at_meas_time
 
-        # Propagate corrected state forward to the current time
+        # Propagate corrected state forward to the current time. No process noise: predict already
+        # added it for this interval, and the retrodiction above did not take it back out, so
+        # adding it here counted the time between measurement and model_time twice.
         prop_F = self._get_F(delta_time)
-        prop_Q = self._get_process_noise_covariance(delta_time)
 
         self.state_estimate = prop_F @ corrected_state_at_meas_time
-        self.state_covariance = prop_F @ corrected_cov_at_meas_time @ prop_F.T + prop_Q
+        self.state_covariance = prop_F @ corrected_cov_at_meas_time @ prop_F.T
 
     @_quiet_matmul
     def reset_biases(self, perfect_position):

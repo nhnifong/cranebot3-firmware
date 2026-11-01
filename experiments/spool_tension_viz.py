@@ -19,6 +19,10 @@ at http://127.0.0.1:4258/ with a panel per line showing:
     - the friction both readings take off the motor torque: the holding torque the reported
       tension uses, by the way the shaft last turned, and the capped credit the mute uses
     - the correction speed the regulator adds, and the commanded line speed before and after
+    - how much line has been withheld since the line last started paying out: what it was told
+      to pay out minus what the motor turned, and the parts of that the soft mute and the
+      regulator's reel-in correction account for. The rest is the motor's acceleration lag,
+      about v^2/(2a), around 1.4 cm per start at 0.1 m/s.
 
 Anchors on firmware older than the regulator fields in the diag row send only the first ten;
 for those the mode is inferred from the commanded speed without the power line's extra
@@ -82,6 +86,29 @@ class Spools:
         self.path = None
         self.last_t = None
         self.has_diag = False
+        self.withheld = [self._fresh_withheld() for _ in range(N_LINES)]
+
+    @staticmethod
+    def _fresh_withheld():
+        return {"last_t": None, "paying": False, "total": 0.0, "mute": 0.0, "reg": 0.0}
+
+    def _accumulate(self, line_no, s):
+        """Add one full-rate diag sample to the line's withheld-line totals, which restart
+        each time the line starts paying out, and copy them onto the sample."""
+        w = self.withheld[line_no]
+        dt = 0.0 if w["last_t"] is None else min(max(s["t"] - w["last_t"], 0.0), 0.1)
+        w["last_t"] = s["t"]
+        aim = s.get("aim") or 0.0
+        if aim > 0:
+            if not w["paying"]:
+                w.update(paying=True, total=0.0, mute=0.0, reg=0.0)
+            actual = s["vel"] / (2 * math.pi) * s["mpr"] if s.get("mpr") else aim
+            w["total"] += (aim - actual) * dt
+            w["mute"] += aim * (1 - (s.get("mute") if s.get("mute") is not None else 1)) * dt
+            w["reg"] += max(0.0, -(s.get("correction") or 0.0)) * dt
+        else:
+            w["paying"] = False
+        s.update(w_total=w["total"], w_mute=w["mute"], w_reg=w["reg"], paying=w["paying"])
 
     def reset(self, path, header):
         with self.lock:
@@ -96,6 +123,7 @@ class Spools:
                     except ValueError:
                         pass
             self.has_diag = False
+            self.withheld = [self._fresh_withheld() for _ in range(N_LINES)]
 
     def add_tick(self, tick):
         with self.lock:
@@ -113,6 +141,8 @@ class Spools:
                         return min(recs, key=lambda r: abs(r[0] - t))[1] if recs else None
 
                     samples = [sample_from_diag(r, tension_at) for r in rows]
+                    for s in samples:
+                        self._accumulate(line_no, s)
                 else:
                     # no diag from this anchor: the tension alone
                     samples = [{"t": r[0], "tension": r[3], "mode": None}
@@ -205,7 +235,8 @@ PAGE = r"""<!doctype html>
   .k { color:var(--muted); font-size:12px; }
   .v { font-size:clamp(14px, 1.7vh, 18px); font-weight:650; font-variant-numeric:tabular-nums; }
   .v small { font-size:12px; color:var(--muted); font-weight:500; }
-  .plot { flex:1; min-height:60px; position:relative; }
+  .plot { flex:2; min-height:60px; position:relative; }
+  .plot.w { flex:1; min-height:40px; margin-top:4px; }
   .plot canvas { position:absolute; inset:0; width:100%; height:100%; display:block; }
   .legend { display:flex; gap:14px; color:var(--muted); font-size:12px; margin-top:4px; white-space:nowrap;
             overflow:hidden; }
@@ -243,14 +274,20 @@ for (let i = 0; i < 4; i++) {
       <div><div class="k">adding</div><div class="v" data-f="hold_n"></div></div>
       <div><div class="k">mute credits friction</div><div class="v" data-f="credit"></div></div>
       <div><div class="k">adding</div><div class="v" data-f="credit_n"></div></div>
+      <div><div class="k">withheld this payout</div><div class="v" data-f="w_total"></div></div>
+      <div><div class="k">by soft mute</div><div class="v" data-f="w_mute"></div></div>
+      <div><div class="k">by reel-in correction</div><div class="v" data-f="w_reg"></div></div>
+      <div><div class="k">accel lag + other</div><div class="v" data-f="w_rest"></div></div>
     </div>
     <div class="plot"><canvas></canvas></div>
+    <div class="plot w"><canvas></canvas></div>
     <div class="legend">
       <span><span class="sw" style="background:var(--tension)"></span>tension</span>
       <span><span class="sw" style="background:var(--mute)"></span>mute's reading</span>
       <span><span class="sw" style="background:var(--target)"></span>target ± band</span>
       <span><span class="sw" style="background:rgba(255,93,93,0.5);height:10px"></span>soft mute holding back payout</span>
       <span>strip: regulator mode</span>
+      <span>lower: withheld cm <span class="sw" style="background:#ff5d5d"></span>total <span class="sw" style="background:#ffb347"></span>mute <span class="sw" style="background:#b48cff"></span>reel-in</span>
     </div>
     <div class="note" data-f="note"></div>
   </section>`);
@@ -337,6 +374,44 @@ function draw(canvas, samples, now, cfg, windowS) {
   }
 }
 
+function drawWithheld(canvas, samples, now, windowS) {
+  const dpr = devicePixelRatio || 1;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  const g = canvas.getContext("2d");
+  g.scale(dpr, dpr);
+  const L = 40, R = 8, T = 4, B = 4;
+  const pw = W - L - R, ph = H - T - B;
+  let hi = 2, lo = -1;
+  for (const s of samples) for (const k of ["w_total", "w_mute", "w_reg"])
+    if (s[k] != null) { hi = Math.max(hi, s[k] * 100 + 0.5); lo = Math.min(lo, s[k] * 100 - 0.5); }
+  const x = t => L + pw * (1 - (now - t) / windowS);
+  const y = v => T + ph * (1 - (v - lo) / (hi - lo));
+  g.fillStyle = "#11161d"; g.fillRect(L, T, pw, ph);
+  // shade the stretches where the line is told to pay out
+  for (let k = 0; k < samples.length - 1; k++) if (samples[k].paying) {
+    g.fillStyle = "rgba(255,255,255,0.04)";
+    g.fillRect(x(samples[k].t), T, Math.max(1, x(samples[k + 1].t) - x(samples[k].t)), ph);
+  }
+  g.strokeStyle = "#232a35"; g.lineWidth = 1; g.fillStyle = "#8b95a5"; g.font = "11px system-ui"; g.textAlign = "right";
+  const step = [0.5, 1, 2, 5, 10, 20, 50].find(st => ph * st / (hi - lo) >= 14) || 100;
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
+    g.beginPath(); g.moveTo(L, y(v)); g.lineTo(L + pw, y(v)); g.stroke();
+    g.fillText(v.toFixed(step < 1 ? 1 : 0), L - 6, y(v) + 4);
+  }
+  g.save(); g.translate(11, T + ph / 2); g.rotate(-Math.PI / 2); g.textAlign = "center"; g.fillText("cm", 0, 0); g.restore();
+  g.save(); g.beginPath(); g.rect(L, T, pw, ph); g.clip();
+  for (const [key, color] of [["w_reg", "#b48cff"], ["w_mute", "#ffb347"], ["w_total", "#ff5d5d"]]) {
+    g.strokeStyle = color; g.lineWidth = 1.8; g.beginPath(); let on = false;
+    for (const s of samples) {
+      if (s[key] == null) { on = false; continue; }
+      on ? g.lineTo(x(s.t), y(s[key] * 100)) : g.moveTo(x(s.t), y(s[key] * 100)); on = true;
+    }
+    g.stroke();
+  }
+  g.restore();
+}
+
 function render(d) {
   const head = document.getElementById("head");
   if (!d.path) return;
@@ -388,9 +463,16 @@ function render(d) {
       const gap = s.tension - s.mute_tension;
       notes.push(`the mute reads ${Math.abs(gap).toFixed(2)} N ${gap >= 0 ? "below" : "above"} the reported tension: the difference between the friction each credits`);
     }
+    const cm = v => v == null ? "–" : `${(v * 100).toFixed(1)} <small>cm</small>`;
+    f(i, "w_total").innerHTML = cm(s.w_total);
+    f(i, "w_mute").innerHTML = cm(s.w_mute);
+    f(i, "w_reg").innerHTML = cm(s.w_reg);
+    f(i, "w_rest").innerHTML = cm(s.w_total == null ? null : s.w_total - s.w_mute - s.w_reg);
     f(i, "note").textContent = notes.join(" · ");
     f(i, "note").title = notes.join("\n");
-    draw(card.querySelector("canvas"), samples, d.now, cfg, d.window_s);
+    const canvases = card.querySelectorAll("canvas");
+    draw(canvases[0], samples, d.now, cfg, d.window_s);
+    drawWithheld(canvases[1], samples, d.now, d.window_s);
   });
 }
 

@@ -158,6 +158,9 @@ class RobotComponentServer:
         self.stream_video_task = None
         self.zc = None # zerconf instance.
         self.mock_camera_port = None
+        # wall time a mock camera's stream timestamps count from, when its feeder knows it.
+        # None reports the moment the stream is announced, which is only roughly right.
+        self.mock_camera_zero_ts = None
         self.extra_tasks = []
         self.stream_command = stream_command # subclasses may override
         self.have_client = False
@@ -236,7 +239,8 @@ class RobotComponentServer:
             if self.mock_camera_port is not None:
                 # in a unit test, use mock camera. it's already running, just tell the client to connect to it
                 print(f'Anchor server is configured to use mock camera on localhost:{self.mock_camera_port}')
-                self.update['video_ready'] = (self.mock_camera_port, time.time())
+                zero_ts = time.time() if self.mock_camera_zero_ts is None else self.mock_camera_zero_ts
+                self.update['video_ready'] = (self.mock_camera_port, zero_ts)
                 # normally the only other thing this task needs to do is watch the output of rpicam-vid and collect information
                 # indiciating the wall time of the DTS zero point
                 # this behavior is not at part of the test and the client will receive the default of now

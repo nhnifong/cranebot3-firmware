@@ -168,6 +168,10 @@ class TestPositionEstimator(unittest.TestCase):
 
         The fix is to use the current time (not commanded_vel_ts) when issuing idle
         zero-velocity updates.
+
+        Since KalmanFilter.update stopped adding process noise on its way back from the
+        measurement time, a stale timestamp no longer inflates the covariance either, so both
+        paths are now required to stay quiet rather than the stale one to reproduce the bug.
         """
         rng = np.random.default_rng(seed=0)
         sensor_names = ['v0', 'v1', 'v2', 'v3', 'hang']
@@ -214,11 +218,8 @@ class TestPositionEstimator(unittest.TestCase):
         self.assertLess(fresh_jitter, 0.05,
             f"Fresh-ts jitter too high: {fresh_jitter*100:.1f} cm — filter is unstable even with correct timestamps")
 
-        # Confirm the bug is real: stale timestamps must cause meaningfully more jitter
-        # than fresh ones.
-        self.assertGreater(stale_jitter, fresh_jitter * 3,
-            f"Expected stale-ts jitter to far exceed fresh-ts jitter "
-            f"(stale={stale_jitter*100:.1f} cm, fresh={fresh_jitter*100:.1f} cm)")
+        self.assertLess(stale_jitter, 0.05,
+            f"Stale-ts jitter too high: {stale_jitter*100:.1f} cm — a stale velocity timestamp destabilizes the filter")
 
 
 class TestPositionEstimatorAsync(unittest.IsolatedAsyncioTestCase):
