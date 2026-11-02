@@ -158,6 +158,38 @@ A profiled two-hour playroom session cleared about 70 items, roughly 1.4 minutes
 - **Keep your own turns cheap.** One snapshot per cycle, taken by the `wait` that ends the motion, is enough to identify the item and choose its container. Batch maneuver edits, since each reload and test costs a minute or more. Time between motion tasks was about 16% of wall time once the loop was running.
 - **Avoid long side trips mid-task.** `spin-recover` (about 2 minutes) and other calibrations belong at the start, or after a clear sign that something is wrong.
 
+### The floorclean maneuver
+
+`floorclean` is a built-in maneuver that runs the loop described above, so you don't have to write one. It works without `--mcp_allow_code`. The robot works through a queue on its own while you look at images, so it is never waiting on you.
+
+```
+run_verb('cleandest pit -1.5 -1.75 1.0 0.4')       # big target: opens on the fly inside the 0.4 m circle
+run_verb('cleandest bin 0.66 -0.04 0.6')           # small target: centers, descends, then opens
+run_verb('cleanadd 0.2,0.3,pit -0.1,0.5,bin')      # queue jobs
+run_verb('clean')                                  # start; returns at once
+wait(until='event', timeout=60, snapshot='gripper')
+  -> a log event "HELD at [...] bound for pit ...", with the gripper image of what it got
+run_verb('cleanto bin')                            # only if the grasp got something else
+```
+
+| Verb | What it does |
+|---|---|
+| `clean` | Motion task. Runs the queue, and finishes once the queue has stayed empty for 45 s. |
+| `cleandest NAME X Y Z [RADIUS] [WRIST]` | Sets a place to let go, as a gripper position. Use `-` to skip the radius. A wrist angle turns the wrist first, to line long items up with a container. |
+| `cleanadd JOB ...` | Queues jobs, also during `clean`. A job is `x,y,dest[,tries,wander,hover,trust]`, with empty fields for the defaults (2 tries, 0.5 m wander, 0.55 m hover). |
+| `cleanto NAME` | Changes where the carried item goes, without stopping. |
+| `cleanclear`, `cleanshow` | Empties the queue, or shows it with the current job and destinations. |
+| `cleanstats` | Totals for jobs, grasp attempts and time per phase, and the path of the per-job log. |
+
+- **Order is chosen for you.** The next job is the one with the least travel from the gripper, through the item, to its container.
+- **Expect `wait(until='event')` to be how you follow it.** Pass the `next_event_seq` from the last reply as `since`, or an event that arrived between calls can be missed.
+- **Redirect fast on short carries.** A carry can take only a few seconds, and looking and replying took 4-10 s in testing. `cleanto` is refused once the gripper has started down over a small target, and the redirect is lost if the item has been released. Set the likely destination in the job to begin with.
+- **Grabs can be something large nearby.** With a large `wander`, a grasp near a fabric laundry bin picked the bin up by its rim. Use a `wander` of about 0.25 and a lower `hover` near things that must not be picked up or that distract the model.
+- **Flag thin items `trust`.** A rubber glove or a sock can close the fingers past the "closed on nothing" check. `trust` keeps the hold, at the cost of sometimes carrying nothing, so look at the image.
+- **Coordinates are starting points.** A grasp often gets a neighbor within `wander`, so refresh the queue from a new ortho view as it empties, and clear jobs whose items have gone. A miss costs 15-60 s.
+
+Measured on one cluttered playroom: about 66 items in 45 minutes, a median cycle of 26 s into a ball pit and 32 s into a bin, with 56% of the time spent in the grasp.
+
 ## The experimental loop
 
 Use this loop to develop a behavior:

@@ -294,6 +294,9 @@ class TestBuiltins(ManeuverTestCase):
             'cluster': 'cluster_sort',
             'basketdata': 'basket_episodes', 'findbasket': 'find_basket',
             'fixdrops': 'pick_and_place',
+            'clean': 'floorclean', 'cleanadd': 'floorclean', 'cleanclear': 'floorclean',
+            'cleandest': 'floorclean', 'cleanshow': 'floorclean', 'cleanstats': 'floorclean',
+            'cleanto': 'floorclean',
         })
         controls = {field: handler.__self__.name for field, handler in ob._maneuver_controls.items()}
         self.assertEqual(controls, {

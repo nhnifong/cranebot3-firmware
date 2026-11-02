@@ -6,10 +6,11 @@ from nf_robot.host.maneuvers.diagnostics import Diagnostics
 from nf_robot.host.maneuvers.drop_point import DropPoint
 from nf_robot.host.maneuvers.ferry import Ferry
 from nf_robot.host.maneuvers.find_basket import FindBasket
+from nf_robot.host.maneuvers.floor_clean import FloorClean
 from nf_robot.host.maneuvers.lerobot import Lerobot
 from nf_robot.host.maneuvers.parking import Parking
 from nf_robot.host.maneuvers.pick_and_place import PickAndPlace
 from nf_robot.host.maneuvers.plates import Plates
 
 BUILTIN_MANEUVERS = (Parking, DropPoint, Lerobot, PickAndPlace, Plates, Diagnostics, Ferry,
-                     ClusterSort, BasketEpisodes, FindBasket)
+                     ClusterSort, BasketEpisodes, FindBasket, FloorClean)
