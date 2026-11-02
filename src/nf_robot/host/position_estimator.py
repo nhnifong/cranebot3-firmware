@@ -63,6 +63,8 @@ class KFRecorder:
         h  the last record of each line: [time, length, speed, tension] x4
         c  a commanded velocity update: the time it was applied at, the velocity
         r  a bias reset after new reference lengths: the position the biases were reset to
+        hh a height hold tick: target height, estimated height, vertical correction sent,
+           whether the cameras had seen the gantry recently
     Each event leads with the wall time it happened, so the file replays in order."""
 
     def __init__(self, path):
@@ -436,6 +438,8 @@ class Positioner2:
         self.predict_time_taken = 0
         self.visual_time_taken = 0
         self.hang_time_taken = 0
+        # wall time the last camera sighting of the gantry reached the filter, 0 before the first
+        self.last_visual_time = 0.0
 
         # last commanded gantry velocity.
         self.commanded_vel = np.zeros(3)
@@ -619,6 +623,7 @@ class Positioner2:
                 continue
                 
             self.last_visual_cutoff = np.max(data[:,0])
+            self.last_visual_time = time.time()
 
             # update filter with every datapoint
             for measurement in data:

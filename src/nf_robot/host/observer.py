@@ -106,6 +106,30 @@ DEFAULT_VELOCITY_KEY = 'ob:default'
 SWING_VELOCITY_KEY = 'ob:swingc'
 NUDGE_VELOCITY_KEY = 'ob:centering'
 SPIN_VELOCITY_KEY = 'ob:spin'
+HEIGHT_HOLD_VELOCITY_KEY = 'ob:heighthold'
+# Camera based height hold ('heighthold on|off'). While the gantry is being driven, the lines
+# carry it up a little whatever the move (spool acceleration lag, line lengths that disagree
+# with the anchor geometry, the soft mute), about 1.5 cm/s in fast driving. The hold keeps a
+# target height that only moves with commanded vertical speed, and adds a vertical correction
+# toward it, but only while the cameras have seen the gantry recently: away from them the
+# estimate's height comes from the line lengths, which do not see this drift.
+HEIGHT_HOLD_PERIOD_S = 0.1
+# (1/s) correction speed per meter of height error
+HEIGHT_HOLD_GAIN = 0.5
+# (m/s) the most the correction adds, so coming back into view after a long blind stretch
+# eases the gantry back instead of lurching. Comfortably above the drift it has to cancel.
+HEIGHT_HOLD_MAX_MPS = 0.08
+# (m) height error left alone
+HEIGHT_HOLD_DEADBAND_M = 0.02
+# (s) the newest camera sighting must be at most this old for the hold to correct
+HEIGHT_HOLD_MAX_SIGHTING_AGE_S = 1.0
+# (m) below this rangefinder reading the gripper is at or near whatever is under it, where
+# its height is not meant to be held; the target follows the gantry instead
+HEIGHT_HOLD_MIN_RANGE_M = 0.3
+# (m/s) a driving velocity slower than this counts as not driving
+HEIGHT_HOLD_DRIVE_MPS = 0.001
+# (m/s) the correction is only re-sent once it has changed by this much
+HEIGHT_HOLD_RESEND_MPS = 0.002
 # The step names set_startup_sequence starts with, which is what an --auto_start robot did
 # before the sequence was configurable.
 DEFAULT_STARTUP_SEQUENCE = ('unpark', 'pick_and_place', 'park')
@@ -128,7 +152,7 @@ BUILTIN_VERBS = frozenset({
     'spincal', 'spin-recover', 'fingercal', 'eyelets', 'gripcards', 'stow', 'upright', 'swinglatency',
     'swinglatencycal', 'polecal', 'reset_wrist', 'spind', 'sync_timezone', 'pull_logs', 'fan',
     'untwist', 'setvar', 'savevar', 'spoollog', 'holdtension', 'tensionreg', 'findorigin', 'centerorigin',
-    'servograsp', 'servowatch', 'servocenter', 'servoloop',
+    'servograsp', 'servowatch', 'servocenter', 'servoloop', 'heighthold',
 })
 # (seconds) how far a wrist record may be from a frame's capture time and still describe
 # where the wrist was when that frame was taken. Grip sensors arrive with the gripper's
@@ -484,6 +508,10 @@ class AsyncObserver:
         self._device = None
         self._telem_log_handler: TelemetryLogHandler | None = None
         self.swing_cancellation_task = None
+        self.height_hold_task = None
+        # the gantry velocity move_direction_speed last sent apart from the height hold's own
+        # correction, after the speed limit and work area: what the gantry is being driven at
+        self.drive_velocity = np.zeros(3)
         self.local_models = local_models
         # ortho projection state - written by _ortho_worker thread, read by run_perception AI task
         self.ortho_event = threading.Event()
@@ -1031,6 +1059,75 @@ class AsyncObserver:
             self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=False, present='.'))
             r = await self.flush_tele_buffer()
             self.slow_stop_all_spools()
+
+    def set_height_hold(self, enabled: bool) -> bool:
+        """Start or stop the camera based height hold. Returns whether it was running."""
+        was_running = self.height_hold_task is not None and not self.height_hold_task.done()
+        if enabled and not was_running:
+            self.height_hold_task = asyncio.create_task(self.run_height_hold())
+        elif not enabled and was_running:
+            self.height_hold_task.cancel()
+        return was_running
+
+    def _height_hold_paused(self):
+        """Whether something other than driving owns the gantry's height right now: a motion
+        task or seek sends its own line speeds, which a correction summed into them would
+        disturb, and a gripper at or near the floor is not meant to be held up."""
+        if self.motion_task is not None and not self.motion_task.done():
+            return True
+        if self._seek_task is not None and not self._seek_task.done():
+            return True
+        laser = self.laser_range()
+        return laser is not None and laser < HEIGHT_HOLD_MIN_RANGE_M
+
+    async def run_height_hold(self):
+        """Task which holds the gantry at the height it was driven to. See HEIGHT_HOLD_PERIOD_S.
+
+        The target starts at the estimated height and moves only with the commanded vertical
+        speed. The correction is only applied while the gantry is being driven, so a stopped
+        gantry is never moved by it, and only while the cameras see the gantry; in a blind
+        stretch the target is kept and the drift is taken out once it is seen again.
+        """
+        logger.info('Height hold on')
+        target = None
+        sent = 0.0
+        last = time.monotonic()
+        try:
+            self.active_set.add(HEIGHT_HOLD_VELOCITY_KEY)
+            while self.run_command_loop:
+                await asyncio.sleep(HEIGHT_HOLD_PERIOD_S)
+                now = time.monotonic()
+                dt, last = now - last, now
+                z = float(self.pe.gant_pos[2])
+                seen = time.time() - self.pe.last_visual_time < HEIGHT_HOLD_MAX_SIGHTING_AGE_S
+                paused = self._height_hold_paused()
+                vz = 0.0
+                if target is None or paused:
+                    target = z
+                else:
+                    target += float(self.drive_velocity[2]) * dt
+                    error = target - z
+                    driven = np.linalg.norm(self.drive_velocity) > HEIGHT_HOLD_DRIVE_MPS
+                    if seen and driven and abs(error) > HEIGHT_HOLD_DEADBAND_M:
+                        vz = float(np.clip(HEIGHT_HOLD_GAIN * error, -HEIGHT_HOLD_MAX_MPS, HEIGHT_HOLD_MAX_MPS))
+                if self.pe.recorder:
+                    self.pe.recorder.log('hh', target, z, vz, bool(seen))
+                if paused:
+                    # whatever owns the gantry sends its own line speeds; only drop our part
+                    self.input_velocities[HEIGHT_HOLD_VELOCITY_KEY] = (np.zeros(3), time.monotonic())
+                    sent = 0.0
+                elif abs(vz - sent) >= HEIGHT_HOLD_RESEND_MPS or (vz == 0.0 and sent != 0.0):
+                    await self.move_direction_speed(np.array([0.0, 0.0, vz]), key=HEIGHT_HOLD_VELOCITY_KEY)
+                    sent = vz
+                else:
+                    # keep the entry from expiring without sending a move
+                    self.input_velocities[HEIGHT_HOLD_VELOCITY_KEY] = (np.array([0.0, 0.0, sent]), time.monotonic())
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self.input_velocities.pop(HEIGHT_HOLD_VELOCITY_KEY, None)
+            self.active_set.discard(HEIGHT_HOLD_VELOCITY_KEY)
+            logger.info('Height hold off')
 
     async def _induce_swing(self, direction=np.array([1.0, 0.0, 0.0]), cycles=2, speed=0.05):
         """Pump the gripper into a swing by driving the gantry back and forth at
@@ -1581,6 +1678,13 @@ class AsyncObserver:
                 logger.info(f'set tension target on line {line_no} to {value}')
             else:
                 logger.warning(f'invalid holdtension command, expected "holdtension LINE VALUE|off": {item.action}')
+        if item.action.startswith('heighthold'):
+            # 'heighthold on|off' starts or stops the camera based height hold
+            parts = item.action.split()
+            if len(parts) == 2 and parts[1] in ('on', 'off'):
+                self.set_height_hold(parts[1] == 'on')
+            else:
+                logger.warning(f'invalid heighthold command, expected "heighthold on|off": {item.action}')
         if item.action.startswith('tensionreg'):
             parts = item.action.split()
             if len(parts) == 2:
@@ -2489,6 +2593,7 @@ class AsyncObserver:
             # Slow stop all spools. gripper too
             asyncio.create_task(client.slow_stop_spool())
         self.pe.record_commanded_vel(np.zeros(3))
+        self.drive_velocity = np.zeros(3)
         # this stops the spools directly, bypassing move_direction_speed, so the stale
         # 'default' velocity must be cleared here too or it'll get summed back in the
         # next time anything (e.g. swing cancellation) triggers a combined move.
@@ -5339,6 +5444,9 @@ class AsyncObserver:
         if self.swing_cancellation_task is not None:
             self.swing_cancellation_task.cancel()
             tasks.append(self.swing_cancellation_task)
+        if self.height_hold_task is not None:
+            self.height_hold_task.cancel()
+            tasks.append(self.height_hold_task)
         if self._clear_item_task is not None:
             self._clear_item_task.cancel()
             tasks.append(self._clear_item_task)
@@ -5696,9 +5804,13 @@ class AsyncObserver:
         self._prune_input_velocities() # drop any source keys that have gone stale
         # the key we just set is always fresh and in the active set, so the sum is guaranteed a 3-vector
         total_velocity = np.sum([self.input_velocities[k][0] for k in self.active_set if k in self.input_velocities], axis=0)
-        
+        # the same without the height hold's correction, which the hold integrates its target from
+        drive_velocity = sum((self.input_velocities[k][0] for k in self.active_set
+                              if k in self.input_velocities and k != HEIGHT_HOLD_VELOCITY_KEY), np.zeros(3))
+
         # Determine the total requested speed before limits
         speed = np.linalg.norm(total_velocity)
+        requested_speed = speed
 
         # enforce a model dependent speed limit
         speed_limit = self.speed_limit()
@@ -5728,6 +5840,8 @@ class AsyncObserver:
         ])
             
         self.pe.record_commanded_vel(total_velocity)
+        # scaled down, or zeroed, by the same limits as the total
+        self.drive_velocity = drive_velocity * (np.linalg.norm(total_velocity) / requested_speed if requested_speed > 0 else 0.0)
         return total_velocity
 
     def get_last_frame(self, camera_key):
