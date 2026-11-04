@@ -134,8 +134,8 @@ class PersonLocator:
             if np.linalg.norm(nearest[1] - primary[1]) <= SAME_PERSON_RADIUS_M:
                 chosen.append(nearest)
         xy = np.mean([p[1] for p in chosen], axis=0)
-        logger.debug(f'person locator: {len(people)} people, holder score {primary[3]:.2f}, '
-                     f'cameras {[p[0] for p in chosen]}, at {xy.round(2)}')
+        # logger.debug(f'person locator: {len(people)} people, holder score {primary[3]:.2f}, '
+        #              f'cameras {[p[0] for p in chosen]}, at {xy.round(2)}')
         return np.array([xy[0], xy[1], 0.0])
 
     def _choose(self, people):
