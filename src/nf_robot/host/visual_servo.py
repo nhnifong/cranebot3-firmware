@@ -22,6 +22,7 @@ await, cleaning up in a finally.
 """
 
 import asyncio
+from dataclasses import dataclass
 import logging
 import pathlib
 import time
@@ -46,27 +47,15 @@ SERVO_MODES = (SERVO_MODE_GRASP, SERVO_MODE_OBSERVE, SERVO_MODE_CENTER)
 # ---------------------------------------------------------------------------
 # Approach and descent
 # ---------------------------------------------------------------------------
-# (m) range to the item below which the grip is started, and where the descent profile
-# aims to run out - so the two agree on where the approach ends.
+# (m) range to the item below which the grip is started, and where the default descent
+# profile aims to run out - so the two agree on where the approach ends.
 RANGE_ITEM = 0.02
 # (m) below this, a low target-present score no longer aborts: too far in to go looking
 # for something better.
 COMMIT_RANGE_M = 0.3
-# Descent speed as a function of how far there is left to fall, rather than one number
-# for the whole approach. A constant slow enough to be safe at the bottom spends the
-# whole descent being slow where nothing is at stake, and one fast enough to be quick at
-# the top arrives at the object still moving. Speed proportional to the range still to
-# close makes the approach exponential: fast while there is room, self-limiting as the
-# floor comes up, and no braking phase to tune.
-#
-#   range   0.60  0.40  0.20  0.15  0.10  0.06
-#   m/s     0.12  0.12  0.12  0.08  0.05  0.03
-DESCENT_GAIN = 0.35         # (1/s) speed asked for per meter of range left to close
-DESCENT_SPEED_MAX = 0.20    # (m/s) cap while there is plenty of room below
-DESCENT_SPEED_MIN = 0.07    # (m/s) floor, or the last centimeters never arrive
-LATERAL_GAIN = 0.9          # (1/s) fraction of the remaining offset commanded per second
+# The descent speed and the other constants a grasp's pace comes from are in GRASP_PROFILES.
 LATERAL_SPEED_MAX = 0.15    # (m/s)
-# Descent is gated on being centered, and the tolerance is a fraction of the range, which
+# Descent depends on being centered, and the tolerance is a fraction of the range, which
 # makes it an angular tolerance: 3cm of error at 60cm up is a correction the rest of the
 # descent absorbs, and the same 3cm at 8cm up is a miss.
 CENTER_TOL_FRACTION = 0.12
@@ -127,9 +116,9 @@ TARGET_EMA_RESET_M = 0.5
 STUCK_DISTANCE_M = 0.05
 STUCK_TIMEOUT_S = 5.0
 
-# (m) how far a grasp's gantry may wander horizontally from where it started, unless the
-# caller asks for another limit (None for none).
-DEFAULT_MAX_WANDER_M = 0.5
+# Pass as max_wander_m to use the wander limit of the current grasp profile. The other
+# values a caller can pass are a limit in meters, or None for no limit.
+PROFILE_WANDER = 'profile'
 # (s) how long the target may sit outside a grasp's wander limit before the grasp gives up.
 # The filtered target still jitters with the swing, so one frame past the edge means little.
 WANDER_GIVE_UP_S = 1.0
@@ -158,10 +147,9 @@ CLOSE_CONFIRM_FRAMES = 60
 # and is different on every frame of the same situation; when to start and how hard to
 # finish are properties of the object, which is what makes them worth predicting.
 CLOSE_PROB_THRESHOLD = 0.45
-# (normalized finger speed) how fast the close runs once it starts, and how long it takes
-# to get there. The ramp is not politeness: a step to full speed puts a jolt through half
-# a meter of hanging pole at the moment the jaws are arriving at the object.
-CLOSE_SPEED = 0.45
+# (s) how long the close takes to reach the profile's close_speed. The ramp is not
+# politeness: a step to full speed puts a jolt through half a meter of hanging pole at the
+# moment the jaws are arriving at the object.
 CLOSE_RAMP_S = 0.3
 # (sensor units) how close the commanded force has to get to the predicted one before the
 # close stops pushing. The gripper turns finger speed into a force ramp once it feels
@@ -283,6 +271,79 @@ def choose_wrist_setpoint(goal_deg, wrist_now, neutral=WRIST_NEUTRAL_DEG,
                key=lambda c: abs(c - wrist_now) + neutral_pull * abs(c - neutral))
 
 
+@dataclass(frozen=True)
+class GraspProfile:
+    """The constants that set a grasp's pace. Chosen with the 'grab-profile' debug command."""
+    # Descent speed is a function of how far there is left to fall, rather than one number
+    # for the whole approach. A constant slow enough to be safe at the bottom spends the
+    # whole descent being slow where nothing is at stake, and one fast enough to be quick
+    # at the top arrives at the object still moving.
+    descent_end_range_m: float  # (m) range at which the speed asked for reaches zero
+    descent_gain: float         # (1/s) speed asked for per meter of range above that
+    descent_speed_max: float    # (m/s) cap while there is plenty of room below
+    descent_speed_min: float    # (m/s) floor, or the last centimeters never arrive
+    lateral_gain: float         # (1/s) fraction of the remaining offset commanded per second
+    # (multiple of the centering tolerance) the error at which descent has tapered to a
+    # stop. Inside the tolerance it runs at full speed, and between the two it falls off
+    # linearly, so a target wobbling across the tolerance slows the descent rather than
+    # stopping and restarting it. None stops the descent outright outside the tolerance.
+    center_taper_end: float | None
+    # (m) how far a grasp's gantry may wander horizontally from where it started, unless
+    # the caller asks for another limit
+    max_wander_m: float
+    close_speed: float          # (normalized finger speed) how fast the close runs
+    # After a successful grasp, the lift goes slowly at first, until the fingers are clear
+    # of the floor and the pole is vertical, which keeps unwanted swinging to a minimum.
+    lift_slow_speed: float      # (m/s)
+    lift_slow_s: float
+    # and then all at once
+    lift_fast_speed: float      # (m/s)
+    lift_fast_s: float
+
+
+DEFAULT_GRASP_PROFILE = 'default'
+GRASP_PROFILES = {
+    # Speed proportional to the range still to close makes the approach exponential: fast
+    # while there is room, self-limiting as the floor comes up, and no braking phase to tune.
+    #
+    #   range   0.60  0.40  0.20  0.15  0.10  0.06
+    #   m/s     0.12  0.12  0.12  0.08  0.05  0.03
+    DEFAULT_GRASP_PROFILE: GraspProfile(
+        descent_end_range_m=RANGE_ITEM,
+        descent_gain=0.35,
+        descent_speed_max=0.20,
+        descent_speed_min=0.07,
+        lateral_gain=0.9,
+        center_taper_end=None,
+        max_wander_m=0.5,
+        close_speed=0.45,
+        lift_slow_speed=0.05,
+        lift_slow_s=1.0,
+        lift_fast_speed=0.15,
+        lift_fast_s=2.0,
+    ),
+    # Runs at the cap while there is room, brakes hard on a ramp ending at 18cm, and covers
+    # the last stretch at the floor speed, where the model needs time to correct.
+    #
+    #   range   0.60  0.30  0.26  0.22  0.19  0.10
+    #   m/s     0.30  0.30  0.28  0.14  0.035 0.035
+    'fast': GraspProfile(
+        descent_end_range_m=0.18,
+        descent_gain=3.5,
+        descent_speed_max=0.30,
+        descent_speed_min=0.035,
+        lateral_gain=0.95,
+        center_taper_end=3.0,
+        max_wander_m=1.0,
+        close_speed=1.1,
+        lift_slow_speed=0.07,
+        lift_slow_s=0.5,
+        lift_fast_speed=0.2,
+        lift_fast_s=1.0,
+    ),
+}
+
+
 def limit_wander(lateral, error_xy, here_xy, origin_xy, limit_m, tolerance_m):
     """Keep a lateral velocity from carrying the gantry further than limit_m from origin_xy.
 
@@ -300,6 +361,15 @@ def limit_wander(lateral, error_xy, here_xy, origin_xy, limit_m, tolerance_m):
         if radial > 0:
             lateral = lateral - radial * outward
     return lateral, target_beyond
+
+
+def centered_fraction(error_m, tolerance_m, taper_end):
+    """The fraction of the descent speed to use at this centering error, from 0 to 1.
+    taper_end is GraspProfile.center_taper_end."""
+    if taper_end is None:
+        return 1.0 if error_m < tolerance_m else 0.0
+    taper_width = (taper_end - 1.0) * tolerance_m
+    return clamp((taper_end * tolerance_m - error_m) / taper_width, 0.0, 1.0)
 
 
 class TargetFilter:
@@ -381,12 +451,15 @@ class VisualServo:
     """Runs the visual servoing model against a robot, in one of SERVO_MODES.
 
     Constructed with the observer, whose gripper client, datastore, position estimate and
-    motion primitives it drives. Holds the checkpoint and nothing else.
+    motion primitives it drives. Holds the checkpoint and the grasp profile, and nothing else.
     """
 
     def __init__(self, observer):
         self.ob = observer
         self.model = None
+        # Not saved: every run of the observer starts on the default.
+        self.profile_name = DEFAULT_GRASP_PROFILE
+        self.profile = GRASP_PROFILES[DEFAULT_GRASP_PROFILE]
         self.filter = TargetFilter()
         self.wrist_filter = WristFilter()
         # Where the staged finger program has got to. Reset per attempt: a close that
@@ -398,6 +471,12 @@ class VisualServo:
         self.center_offset = None
         # (time, prediction) of the newest frame the model was run on, in any mode
         self.last_prediction = None
+
+    def set_profile(self, name):
+        """Switch to one of GRASP_PROFILES. A grasp already running picks it up as it goes,
+        apart from the wander limit, which is fixed when the grasp starts."""
+        self.profile = GRASP_PROFILES[name]
+        self.profile_name = name
 
     def reset_close(self):
         self.close_started_at = None
@@ -597,7 +676,7 @@ class VisualServo:
             return 0.0
 
         ramp = min(1.0, (now - self.close_started_at) / CLOSE_RAMP_S) if CLOSE_RAMP_S else 1.0
-        speed = CLOSE_SPEED * ramp
+        speed = self.profile.close_speed * ramp
         await self.ob.gripper_client.send_commands(
             {'set_finger_speed': speed * FINGER_SPEED_FULL_SCALE})
         return speed
@@ -655,19 +734,20 @@ class VisualServo:
         """How fast to descend right now, in m/s, from the range and what the lateral
         correction is already spending.
 
-        The profile is proportional to the range still to close, aiming to run out where
-        the grip starts, so the descent slows itself as the floor comes up rather than
+        The speed is proportional to the range left above the grasp profile's
+        descent_end_range_m, so the descent slows itself as the floor comes up rather than
         braking on a schedule.
 
-        The headroom term does nothing at these speeds and is there for the day the cap is
-        raised. move_direction_speed enforces the machine's limit by scaling the *whole*
+        The headroom term keeps the cap from eating the lateral correction when it is near
+        the machine's limit. move_direction_speed enforces the limit by scaling the *whole*
         velocity vector, so a descent asked for beyond it does not simply get shortened -
         it shrinks the lateral correction summed with it in the same proportion, and the
         loop stops steering exactly when it is moving fastest.
         """
-        profile = DESCENT_GAIN * max(0.0, range_to_target - RANGE_ITEM)
+        p = self.profile
+        speed = p.descent_gain * max(0.0, range_to_target - p.descent_end_range_m)
         headroom = float(np.sqrt(max(0.0, self.ob.speed_limit() ** 2 - lateral_speed ** 2)))
-        return clamp(min(profile, headroom), DESCENT_SPEED_MIN, DESCENT_SPEED_MAX)
+        return clamp(min(speed, headroom), p.descent_speed_min, p.descent_speed_max)
 
     # -- whether we have it -------------------------------------------------
 
@@ -724,13 +804,14 @@ class VisualServo:
 
     # -- the modes ---------------------------------------------------------
 
-    async def run(self, mode=SERVO_MODE_GRASP, attempts=None, max_wander_m=DEFAULT_MAX_WANDER_M):
+    async def run(self, mode=SERVO_MODE_GRASP, attempts=None, max_wander_m=PROFILE_WANDER):
         """Run one of SERVO_MODES. True only if a grasp ended with the object held.
 
         `attempts` overrides how many tries a grasp gets before it reports failure.
         `max_wander_m` keeps a grasp's gantry within that horizontal distance of where it
         started, for grasping beside things that must not be touched; a target beyond it is
-        given up on rather than chased. None lets it wander anywhere.
+        given up on rather than chased. None lets it wander anywhere, and PROFILE_WANDER
+        takes the limit from the current grasp profile.
 
         The debugging modes run until the motion task is cancelled and return False, since
         nothing was grasped.
@@ -743,6 +824,8 @@ class VisualServo:
         try:
             if mode in (SERVO_MODE_OBSERVE, SERVO_MODE_CENTER):
                 return await self._watch(steering=mode == SERVO_MODE_CENTER)
+            if max_wander_m == PROFILE_WANDER:
+                max_wander_m = self.profile.max_wander_m
             return await self._grasp(NUM_ATTEMPTS if attempts is None else attempts, max_wander_m)
         except asyncio.CancelledError:
             raise
@@ -778,7 +861,7 @@ class VisualServo:
             if steering:
                 confident = self.target_found(prediction)
                 self.center_offset = (time.time(), error if confident else None)
-                lateral = error_xy * LATERAL_GAIN if confident else np.zeros(2)
+                lateral = error_xy * self.profile.lateral_gain if confident else np.zeros(2)
                 lateral_speed = float(np.linalg.norm(lateral))
                 if lateral_speed > LATERAL_SPEED_MAX:
                     lateral = lateral * (LATERAL_SPEED_MAX / lateral_speed)
@@ -971,9 +1054,8 @@ class VisualServo:
             error_xy = self.filter.error(prediction)
             error = float(np.linalg.norm(error_xy))
             tolerance = max(CENTER_TOL_MIN_M, CENTER_TOL_FRACTION * range_to_target)
-            centered = error < tolerance
 
-            lateral = error_xy * LATERAL_GAIN
+            lateral = error_xy * self.profile.lateral_gain
             lateral_speed = float(np.linalg.norm(lateral))
             if lateral_speed > LATERAL_SPEED_MAX:
                 lateral = lateral * (LATERAL_SPEED_MAX / lateral_speed)
@@ -988,7 +1070,8 @@ class VisualServo:
                     beyond_since = time.time()
                 elif time.time() - beyond_since > WANDER_GIVE_UP_S:
                     return WANDER_REASON, False, evidence, asked_to_close
-            descent = self.descent_speed(range_to_target, lateral_speed) if centered else 0.0
+            descent = (self.descent_speed(range_to_target, lateral_speed)
+                       * centered_fraction(error, tolerance, self.profile.center_taper_end))
             await self.ob.move_direction_speed([lateral[0], lateral[1], -descent])
 
             if range_to_target > WRIST_LOCK_RANGE_M:
@@ -1119,13 +1202,14 @@ class VisualServo:
     async def _lift(self):
         """Carry the object up and away from the floor."""
         logger.info('Successful grasp')
+        p = self.profile
         # slowly at first, until the fingers are clear of the floor and the pole is
         # vertical, which keeps unwanted swinging to a minimum
-        await self.ob.move_direction_speed(np.array([0, 0, 0.05]))
-        await asyncio.sleep(1.0)
+        await self.ob.move_direction_speed(np.array([0, 0, p.lift_slow_speed]))
+        await asyncio.sleep(p.lift_slow_s)
         # and then all at once
-        await self.ob.move_direction_speed(np.array([0, 0, 0.15]))
-        await asyncio.sleep(2.0)
+        await self.ob.move_direction_speed(np.array([0, 0, p.lift_fast_speed]))
+        await asyncio.sleep(p.lift_fast_s)
         logger.info('Stop moving')
         self.ob.slow_stop_all_spools()
 

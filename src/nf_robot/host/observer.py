@@ -63,7 +63,7 @@ from nf_robot.host.arp_gripper_client import (ArpeggioGripperClient, rotate_vect
                                               OPEN, CLOSED, RANGE_MAX_AGE_S)
 from nf_robot.host import swing
 from nf_robot.host.person_locator import PersonLocator
-from nf_robot.host.visual_servo import VisualServo, DEFAULT_MAX_WANDER_M, SERVO_MODE_GRASP, SERVO_MODE_OBSERVE, SERVO_MODE_CENTER
+from nf_robot.host.visual_servo import VisualServo, GRASP_PROFILES, PROFILE_WANDER, SERVO_MODE_GRASP, SERVO_MODE_OBSERVE, SERVO_MODE_CENTER
 from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.position_estimator import Positioner2
 from nf_robot.host.telemetry_manager import TelemetryManager, LOCAL, normalize_control_plane_host
@@ -152,7 +152,7 @@ BUILTIN_VERBS = frozenset({
     'spincal', 'spin-recover', 'fingercal', 'eyelets', 'gripcards', 'stow', 'upright', 'swinglatency',
     'swinglatencycal', 'polecal', 'reset_wrist', 'spind', 'sync_timezone', 'pull_logs', 'fan',
     'untwist', 'setvar', 'savevar', 'spoollog', 'holdtension', 'tensionreg', 'findorigin', 'centerorigin',
-    'servograsp', 'servowatch', 'servocenter', 'servoloop', 'heighthold',
+    'servograsp', 'servowatch', 'servocenter', 'servoloop', 'heighthold', 'grab-profile',
 })
 # (seconds) how far a wrist record may be from a frame's capture time and still describe
 # where the wrist was when that frame was taken. Grip sensors arrive with the gripper's
@@ -1703,6 +1703,15 @@ class AsyncObserver:
                 await self.find_origin_card()
                 await self._center_card_in_view('origin')
             r = await self.invoke_motion_task(find_then_center_origin())
+        if words and words[0] == 'grab-profile':
+            # 'grab-profile NAME' sets the pace of visual servoing grasps until the observer
+            # restarts, when it goes back to the default.
+            if len(words) == 2 and words[1] in GRASP_PROFILES:
+                self.servo.set_profile(words[1])
+                logger.info(f'Grasp profile set to {words[1]}')
+            else:
+                logger.warning(f'invalid grab-profile command, expected "grab-profile NAME" with NAME one of '
+                               f'{sorted(GRASP_PROFILES)}: {item.action}. The current profile is {self.servo.profile_name}')
         if item.action == 'servograsp':
             # One visual servoing grasp from wherever the gripper is now, without the
             # pick and place loop. Park it over the object first, roughly - closing the
@@ -5972,12 +5981,12 @@ class AsyncObserver:
             return None
         return latest[1]
 
-    async def grasp(self, max_wander_m=DEFAULT_MAX_WANDER_M):
+    async def grasp(self, max_wander_m=PROFILE_WANDER):
         """Try to grasp whatever is directly below the gripper. True if it is now held.
 
         max_wander_m keeps the visual servo within that horizontal distance of where the
-        gantry started, so it cannot chase something further off (None for no limit); a
-        lerobot grasp ignores it."""
+        gantry started, so it cannot chase something further off (None for no limit, and by
+        default the limit of the current grasp profile); a lerobot grasp ignores it."""
         lerobot = self.maneuvers.get('lerobot')
         if lerobot is not None and lerobot.use_for_grasp:
             # A lerobot session may be driving from our own subprocess or connected

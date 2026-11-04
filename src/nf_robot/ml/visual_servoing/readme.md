@@ -799,6 +799,8 @@ It prints the commit title it is pinning to, so check that is the upload you mea
 
 The `servograsp` debug command runs one grasp from wherever the gripper is parked, so a
 checkpoint can be tried without the pick and place loop choosing targets around it.
+`grab-profile fast` switches grasps to the faster constants in `GRASP_PROFILES` until
+`grab-profile default` or the next restart of the observer.
 `servoloop` repeats that forever - grasp, drop where the lift ended, settle, again -
 logging a running tally after every attempt:
 
