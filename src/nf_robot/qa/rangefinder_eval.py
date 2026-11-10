@@ -2,10 +2,17 @@
 # Each time a rangefinder comes online it gets a fresh set of stats: current range, rolling
 # variance, and min/max seen. Point the sensor at open space or a distant surface. A sensor with
 # its protective film still under the window shows noisy, short readings from reflections off the film.
+#
+# The film probability comes from comparing long and short distance modes. A real target reads about
+# the same in both, while the film's reflection reads near zero in short mode but well above it in
+# long mode. Any trustworthy far reading is strong evidence that no film is present. The likelihood
+# ratios below are hand set from a small number of sensors, so treat the result as a guide and not
+# a calibrated probability.
 
 import time
 import math
 import argparse
+import statistics
 from collections import deque
 import board
 import busio
@@ -16,6 +23,19 @@ from nf_robot.robot.gripper_i2c import VL53L1X_ADDR
 POLL_INTERVAL = 0.3 # seconds between bus scans while waiting for a rangefinder
 STALL_TIMEOUT = 1.0 # no new data for this long means the sensor was swapped or stopped ranging
 CLEAR_LINE = '\r\x1b[K'
+
+SHORT_MODE = 1
+LONG_MODE = 2
+FILM_CHECK_INTERVAL = 3.0 # seconds between film checks
+FILM_CHECK_BUDGET = 50 # timing budget in ms used during a film check
+FILM_CHECK_SETTLE_SHOTS = 3 # shots discarded after a mode change
+FILM_CHECK_SHOTS = 4 # shots per mode that are compared
+FILM_FAR_CM = 60 # the film's reflection hides anything truly this far away in long mode
+FILM_SHORT_RATIO = 0.5 # short mode reading below this fraction of long mode looks like film
+FILM_LR_FAR = 0.02 # likelihood ratios of film vs no film for each check outcome
+FILM_LR_DISAGREE = 20
+FILM_LR_AGREE = 0.2
+FILM_MAX_LOG_ODDS = math.log(99) # limits the estimate to 1-99% so it can recover quickly
 
 
 def rangefinder_present(i2c):
@@ -71,6 +91,71 @@ class Stats:
                 f'min {lo} max {hi} | invalid {invalid_pct:4.1f}% of {total}')
 
 
+class FilmEstimate:
+    def __init__(self):
+        self.log_odds = 0.0
+        self.checks = 0
+
+    def add(self, long_cm, short_cm):
+        ratio = film_likelihood_ratio(long_cm, short_cm)
+        self.checks += 1
+        self.log_odds += math.log(ratio)
+        self.log_odds = max(-FILM_MAX_LOG_ODDS, min(FILM_MAX_LOG_ODDS, self.log_odds))
+
+    def summary(self):
+        if not self.checks:
+            return 'film   -'
+        return f'film {100 / (1 + math.exp(-self.log_odds)):3.0f}%'
+
+
+def film_likelihood_ratio(long_cm, short_cm):
+    """Likelihood of these median readings with film vs without. None means no valid reading."""
+    if long_cm is None:
+        return 1.0
+    if long_cm >= FILM_FAR_CM:
+        return FILM_LR_FAR
+    if short_cm is None:
+        return 1.0
+    if short_cm < FILM_SHORT_RATIO * long_cm:
+        return FILM_LR_DISAGREE
+    return FILM_LR_AGREE
+
+
+def read_shot(rangefinder):
+    deadline = time.time() + STALL_TIMEOUT
+    while not rangefinder.data_ready:
+        if time.time() > deadline:
+            raise TimeoutError('no data during film check') # an OSError, handled as an unplug
+        time.sleep(0.005)
+    distance = rangefinder.distance
+    rangefinder.clear_interrupt()
+    return distance
+
+
+def configure(rangefinder, mode, budget):
+    rangefinder.stop_ranging()
+    rangefinder.distance_mode = mode
+    rangefinder.timing_budget = budget
+    rangefinder.start_ranging()
+    for _ in range(FILM_CHECK_SETTLE_SHOTS):
+        read_shot(rangefinder)
+
+
+def median_range(rangefinder, mode):
+    configure(rangefinder, mode, FILM_CHECK_BUDGET)
+    shots = [read_shot(rangefinder) for _ in range(FILM_CHECK_SHOTS)]
+    valid = [d for d in shots if d is not None]
+    return statistics.median(valid) if valid else None
+
+
+def check_film(rangefinder, film, args):
+    """Update the film estimate, then return the sensor to the mode being evaluated."""
+    long_cm = median_range(rangefinder, LONG_MODE)
+    short_cm = median_range(rangefinder, SHORT_MODE)
+    film.add(long_cm, short_cm)
+    configure(rangefinder, args.mode, args.budget)
+
+
 def evaluate(i2c, n, args):
     """Range continuously until the sensor disappears from the bus. Returns final stats."""
     rangefinder = VL53L1X(i2c)
@@ -80,22 +165,28 @@ def evaluate(i2c, n, args):
     print(f'{CLEAR_LINE}Rangefinder #{n} online.')
 
     stats = Stats(args.window)
+    film = FilmEstimate()
     distance = None
     last_data = time.time()
+    last_film_check = 0
     try:
         while True:
+            if time.time() - last_film_check > FILM_CHECK_INTERVAL:
+                check_film(rangefinder, film, args)
+                last_film_check = time.time()
+                last_data = last_film_check
             if rangefinder.data_ready:
                 distance = rangefinder.distance
                 rangefinder.clear_interrupt()
                 stats.add(distance)
                 last_data = time.time()
-                print(f'{CLEAR_LINE}#{n} {stats.summary(distance)}', end='', flush=True)
+                print(f'{CLEAR_LINE}#{n} {stats.summary(distance)} | {film.summary()}', end='', flush=True)
             elif time.time() - last_data > STALL_TIMEOUT:
                 break
             time.sleep(0.005)
     except OSError:
         pass # unplugged mid-transaction
-    return stats, distance
+    return stats, distance, film
 
 
 def main():
@@ -115,13 +206,13 @@ def main():
             wait_for_rangefinder(i2c)
             n += 1
             try:
-                stats, distance = evaluate(i2c, n, args)
+                stats, distance, film = evaluate(i2c, n, args)
             except (OSError, RuntimeError) as e:
                 print(f'{CLEAR_LINE}Rangefinder #{n} failed to initialize: {e}')
                 time.sleep(POLL_INTERVAL)
                 continue
             # leave a permanent line per sensor so earlier results stay on screen
-            print(f'{CLEAR_LINE}#{n} offline. final: {stats.summary(distance)}')
+            print(f'{CLEAR_LINE}#{n} offline. final: {stats.summary(distance)} | {film.summary()}')
     except KeyboardInterrupt:
         print()
 

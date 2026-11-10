@@ -3963,22 +3963,27 @@ class AsyncObserver:
                 return
 
             need_sc_restart = self.set_swing_cancellation(False)
-
-            for direction in [[0,0,1], [0,0,-1]]:
-                await self.tension_and_wait()
-                # wait for some new obs
-                await asyncio.sleep(0.5)
-                # visual_pos is already the cross where the lines meet, not the tag
-                lengths = np.linalg.norm(self.pe.anchor_points - self.pe.visual_pos, axis=1)
-                await self.sendReferenceLengths(lengths)
-                await asyncio.sleep(0.25)
-                # move in direction for short time
-                await self.move_direction_speed(direction, 0.05, downward_bias=0)
-                await asyncio.sleep(0.25)
-                self.slow_stop_all_spools()
-
-            if need_sc_restart:
-                self.set_swing_cancellation(True)
+            try:
+                for direction in [[0,0,1], [0,0,-1]]:
+                    await self.tension_and_wait()
+                    # wait for some new obs
+                    await asyncio.sleep(0.5)
+                    # visual_pos is already the cross where the lines meet, not the tag
+                    lengths = np.linalg.norm(self.pe.anchor_points - self.pe.visual_pos, axis=1)
+                    await self.sendReferenceLengths(lengths)
+                    await asyncio.sleep(0.25)
+                    # move in direction for short time
+                    await self.move_direction_speed(direction, 0.05, downward_bias=0)
+                    await asyncio.sleep(0.25)
+                    self.slow_stop_all_spools()
+            finally:
+                # Put swing cancellation back however this ends, so a calibration cut short
+                # (a replaced task, an error) does not silently leave it off. A stop or a
+                # safety trip turned it off on purpose, so those are left alone.
+                run = self._motion_runs.get(asyncio.current_task())
+                reason = run.cancel_reason if run is not None else None
+                if need_sc_restart and reason not in ('stopped', 'tension', 'marker'):
+                    self.set_swing_cancellation(True)
 
         except asyncio.CancelledError:
             raise
