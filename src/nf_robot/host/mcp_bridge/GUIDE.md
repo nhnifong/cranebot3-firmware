@@ -133,6 +133,40 @@ if not grip['held']:
 await self.ob.set_finger_angle(-60)                  # let go
 ```
 
+## Practical tricks
+
+Lessons from driving the robot through MCP. Assume about 90% of them still hold: any of them may have become obsolete or wrong since it was written.
+
+### Grasping
+
+- **Grip by asking for constant force, not by constant finger angle.** Use `grip` / `ob.close_grip()`: it closes at a constant speed, the gripper switches to force mode on contact, and the force is held. Closing to a fixed angle on an object seldom works and can even overload the finger servo if you catch something the wrong way.
+- **In clutter, it helps to dive into something with fingers nerly closed** Close to ~80 before descending, and open them only near the object (laser range ~0.08 m). Opening pushes neighbours aside instead of a finger landing on them. Objects have to be between fingers to grasp.
+- **Be opportunistic in a pile.** Auto GRASP over a pile reliably comes up with one or two pieces in ~18 s, much faster than aiming at a particular one. Take whatever comes; if it is more than one, drop them from ~0.3 m onto open floor so they bounce apart, then pick them singly.
+- **Open fingertips reach ~0.10 m below the rangefinder.** With the fingers open the laser never reads less than ~0.10 over bare floor; open them at ~0.15 m, then lower in small steps and stop when the pole starts to lean (fingertips on the floor) and close there.
+- **People and children may come into the work area.** Watch the frames for hands and feet, and stop when someone is reaching in. They are used to the robot though and it's fairly harmless and slow.
+- **A held object blinds the rangefinder** and fills the middle of the palm camera. Use the estimated height while carrying, and ignore blobs in the middle of the frame when looking for things on the floor.
+- **Before an auto grasp, put the target at the image center.** The servo model steers from there. Releasing is different: things fall from the fingertips, which sit 10-15 cm from the image center (see "Clearing a floor").
+- **Recenter at ~0.3 m range before the final drop.** The gantry drifts several centimetres during a descent.
+- **Image right in the room frame** is `ob.gripper_camera_to_room([1, 0, 0])`; use it to turn a pixel offset into a nudge. One pixel of the 684 px frame is about depth / 302 m, where depth is the camera's distance to the thing in that pixel, not necessarily the laser range.
+- **Fingers close along image horizontal.** Rotate the wrist so the object's long axis is image vertical.
+- **Auto grasp may fail near walls** and other motion may too. due to a tangle prevention mechanism, spools refuse to let out line if they are compeltely slack, which has the side effect of phantom forces within about 20cm of walls that can prevent you from getting close to them. the longest lines are the loose ones and the spool won't let them out any further because it's reading approximately zero tension. worse in tall rooms
+- **Automatic GRASP can wander** to whatever the servo model finds most prominent, up to ~0.7 m away. Near things that must not be touched, call `ob.grasp(max_wander_m=...)` from a script, but below about 0.25 it mostly gives up instead of grasping.
+- **A tilt over ~7 deg near the floor means the gripper is resting on something.** Lines go slack and lateral nudges barely move it. Lift a few cm before moving sideways.
+
+### Moving things
+
+- **Lay long floppy objects straight by lift-and-sweep.** Lift until it hangs nearly free, carry it over open floor, then move horizontally while descending so it unrolls behind the gripper.
+- **Try to set things down at the same height from a surface you picked them up with**
+
+### Seeing
+
+- **The position estimate drifts 5-20 cm** between visits, worst after a marker dropout, and height can drift by 0.3 m or more over many dives; a half calibration resets both. Absolute coordinates are not good enough for tight layouts; place relative to what the palm camera sees, and check the result in the ortho view.
+- **The gantry marker drops out in predictable places** such as very low, where it is viewed with a steep angle, or obscured by the "cross" on the top of the gantry. it can also be in one of the blind spots of either camera. encoder based positioning (aka hang point prediction) keeps working and feeding the kalman filter in the position estimator.
+- **Ortho pixels to room:** on the 1000 px ortho, x = (u - 500) / 200, y = (500 - v) / 200 (`ml/ortho_target/model.py`).
+- **The robot itself shows up in the ortho** as a smeared shape with a line: the gripper and pole projected from the air. It is not an obstacle on the floor. It can be white, copper, or pink.
+- **Crop the ortho at full resolution** (`ob.latest_ortho()`, save a crop to a file and read it) to count small objects; the 512 px tool image is too coarse.
+- **The marker-fault popup can clear on its own** once the gantry rises.
+
 ## Clearing a floor
 
 Lessons from tidying a cluttered playroom into bins.
@@ -189,6 +223,26 @@ run_verb('cleanto bin')                            # only if the grasp got somet
 - **Coordinates are starting points.** A grasp often gets a neighbor within `wander`, so refresh the queue from a new ortho view as it empties, and clear jobs whose items have gone. A miss costs 15-60 s.
 
 Measured on one cluttered playroom: about 66 items in 45 minutes, a median cycle of 26 s into a ball pit and 32 s into a bin, with 56% of the time spent in the grasp.
+
+### Fast cleanup
+
+From playroom sessions. A queue-driven loop cut a roughly 70-item cleanup from 129 min to 45 min. Grasping was still more than half of that time, and retries were about 40% of grasping.
+
+- **Run a job queue in a maneuver, and feed it while it works.** One motion verb pops the cheapest job (travel from here to the item plus item to its container), flies to a hover point, grasps, carries, drops, and starts the next. The agent only adds jobs (`x,y,dest` from the ortho) and redirects carried items. Queue several ahead so the robot never waits on you. The built-in `floorclean` maneuver is a working version (see "The floorclean maneuver" above); it logs a per-job row of fly, grasp, carry and calibration time for reporting.
+- **Assume the grasp got what you queued.** Carry at once, and look at the snapshot while it flies. Redirect only if it grabbed something unexpected. An agent turn takes 10-15 s, so redirects only work for containers more than a few seconds away.
+- **Drop into big targets on the fly, center over small ones.** For a ball pit, open as soon as the gripper is inside its circle. Small bins need a half calibration, centering, a short settle, then the release.
+- **Near an on-the-fly target, don't let the servo choose.** Items grabbed beside the ball pit landed in it before a redirect could arrive (a booklet, a fabric item, a toy phone). Near the pit, queue only what is clearly a ball, use `max_wander_m` about 0.25 and a lower hover. Don't queue items against the rim either: the gripper can grab the rim and tip the pit over.
+- **One `grasp()` call per job, then requeue misses for later.** Each call already makes up to 3 internal attempts. A second call at once usually repeats the first failure; coming back after nearby items have moved works better.
+- **Reject false holds yourself.** The holding head can read 0.9-1.0 with the fingers shut on nothing (angle about 88-90, pad voltage at most 0.06). The servo then reports success and skips its own retries. Count those as misses. For thin items, such as a rubber glove, that sensors cannot tell from empty, mark the job as trusted.
+- **Start lower over a distractor.** A dark tripod foot or a printed cover pulls the model. Hovering at 0.35-0.45 m instead of 0.55 m narrows the view to the target.
+- **Merge soft things going to the same place.** Dropping one sock on another and grabbing both saves a trip. This does not work for hard toys.
+- **Work out the image axes before measuring a drop point.** Nudge +x by 0.15 m and see which way the scene shifts. The mapping turns with the wrist, so measure again if the wrist moves.
+- **Capture the visual servo's own log** to learn why grasps end. From `run_script(motion=False)`, add a `logging.FileHandler` to the `nf_robot.host.visual_servo` logger. Its lines (`Close head says go`, `approach ended: ...`, `Close ended empty ...`) separate profile problems from model problems.
+- **Check redirects with a script.** `run_verb` does not return a non-motion verb's value, so `cleanto` gives no sign of whether it was accepted. Read the maneuver's state from `run_script(motion=False)`.
+- **Try a grab profile on a few items before committing.** `grab-profile fast` scored 1 hold in 5 on 2026-11-10, against 5 in 10 for `default` the same day; its misses shut the fingers on nothing. Switch back after about 5 misses rather than running a whole job on it.
+- **A high, idle robot is normal.** Users park it about 2 m up so people can walk under it, and a stop you did not send is usually the user. Ask why before restarting.
+- **Leave alone what the user says to leave.** Large flat mats, brooms and other awkward things cost more than they're worth. Keep a list of skipped items for the report.
+- **Report per subtask.** Give time spent flying, grasping, carrying and calibrating, plus holds per `grasp()` call, false holds rejected, and items that went to the wrong place.
 
 ## The experimental loop
 
