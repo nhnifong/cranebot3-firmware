@@ -61,6 +61,14 @@ export class GamepadController {
     private keyStates: { [code: string]: boolean } = {};
     private arrowPressTimestamps: { [code: string]: number } = {};
 
+    // Keyboard movement keys (WASDQE) are all-or-nothing, so their axes are slew-rate
+    // limited toward the target instead of jumping. Only keyboard values pass through this;
+    // gamepad and touch input are merged afterwards untouched.
+    private readonly KEY_RAMP_UP_SEC = 0.5;   // time from 0 to full
+    private readonly KEY_RAMP_DOWN_SEC = 0.25; // time from full to 0
+    private keyAxes = { x: 0, y: 0, z: 0 };
+    private lastKeyRampT: number | null = null;
+
     // Change Detection (Store last "Action" vector: [vx, vy, vz, speed, finger, wrist])
     private lastAction = new Float32Array(6);
 
@@ -204,10 +212,11 @@ export class GamepadController {
      * Returns a format identical to getGamepadState but using keyboard input.
      */
     public getKeyboardState() {
+        this.updateKeyAxes();
         return {
             leftStick: {
-                x: (this.keys.has('KeyA') ? -1 : 0) + (this.keys.has('KeyD') ? 1 : 0),
-                y: (this.keys.has('KeyS') ? -1 : 0) + (this.keys.has('KeyW') ? 1 : 0)
+                x: this.keyAxes.x,
+                y: this.keyAxes.y,
             },
             rightStick: {
                 x: -this.arrowRamp('ArrowLeft') + this.arrowRamp('ArrowRight'),
@@ -223,8 +232,8 @@ export class GamepadController {
                 lb: false,
                 rb: false,
                 // Triggers - Value is 0.0 to 1.0
-                lt: this.keys.has('KeyQ') ? 1 : 0,
-                rt: this.keys.has('KeyE') ? 1 : 0,
+                lt: Math.max(0, -this.keyAxes.z),
+                rt: Math.max(0, this.keyAxes.z),
                 // Extras
                 select: this.keys.has('Backspace'),
                 start: this.keys.has('Enter'),
@@ -238,6 +247,31 @@ export class GamepadController {
                 dpadRight: this.keys.has('Digit3')
             }
         };
+    }
+
+    // Move each keyboard movement axis toward its key-implied target at a bounded rate.
+    private updateKeyAxes() {
+        const now = performance.now() / 1000;
+        // Clamp dt so a stalled frame (backgrounded tab) can't skip the ramp.
+        const dt = this.lastKeyRampT === null ? 0 : Math.min(now - this.lastKeyRampT, 0.1);
+        this.lastKeyRampT = now;
+
+        const targets = {
+            x: (this.keys.has('KeyA') ? -1 : 0) + (this.keys.has('KeyD') ? 1 : 0),
+            y: (this.keys.has('KeyS') ? -1 : 0) + (this.keys.has('KeyW') ? 1 : 0),
+            z: (this.keys.has('KeyQ') ? -1 : 0) + (this.keys.has('KeyE') ? 1 : 0),
+        };
+        for (const axis of ['x', 'y', 'z'] as const) {
+            const cur = this.keyAxes[axis];
+            const target = targets[axis];
+            // Moving away from zero ramps up; moving toward zero (or reversing through it) ramps down.
+            const rampingUp = cur * target >= 0 && Math.abs(target) > Math.abs(cur);
+            const rate = 1 / (rampingUp ? this.KEY_RAMP_UP_SEC : this.KEY_RAMP_DOWN_SEC);
+            const step = rate * dt;
+            const delta = target - cur;
+            const next = Math.abs(delta) <= step ? target : cur + Math.sign(delta) * step;
+            this.keyAxes[axis] = Math.abs(next) < 1e-3 ? 0 : next;
+        }
     }
 
     private pressRamp(heldSince: number, slowVal: number, fastVal: number, rampAfter: number): number {
