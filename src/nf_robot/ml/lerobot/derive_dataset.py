@@ -312,7 +312,9 @@ def derive_dataset(
             output_dir,
             recorded_calibration.load_anchor_poses(anchor_config) if anchor_config else ()
         )
-        if anchor_config:
+        # Unless the tilt is being dropped: adding it to only the sources with a config
+        # would leave them with a feature the rest lack, and the merge refuses that.
+        if anchor_config and recorded_calibration.ANCHOR_CAM_TILT_KEY not in (drop_features or ()):
             added |= recorded_calibration.add_anchor_cam_tilt_feature(
                 output_dir, load_anchor_config(anchor_config)[2])
         if added:

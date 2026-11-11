@@ -77,6 +77,9 @@ _CAMERA_MODES: dict[str, dict[int, tuple[int, int]]] = {
     "gripper_ortho":     {0: (448, 256), 3: (512, 512)},
     "all_square":        {0: (384, 384), 3: (512, 512), 1: (960, 544), 2: (960, 544)},
     "all":               {0: (684, 384), 3: (512, 512), 1: (960, 544), 2: (960, 544)},
+    # Every real camera at the resolution it is recorded at, without the ortho floor view,
+    # which is synthesized from the anchor cameras rather than seen. For end to end models.
+    "all_original":      {0: (684, 384), 1: (960, 544), 2: (960, 544)},
 }
 
 # action_space -> ordered list of action component names.
