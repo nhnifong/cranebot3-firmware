@@ -41,6 +41,12 @@ HOLD_LOOP_HZ = 100
 HOLD_STALE_COMMANDS = 20  # commands in a row with no feedback before aborting
 EMPTY_SPOOL_RADIUS_M = 0.036  # the most tension per N.m, so the tension limit trips early, not late
 POS_WRAP_RAD = 25.0  # reported position wraps over [-12.5, 12.5] rad
+WIND_RADIUS_M = 0.0362  # spool radius used to turn a length of line into revolutions, fishing line or power line
+
+
+def line_revs(length_m):
+    """Spool revolutions that wind length_m of line."""
+    return length_m / (2 * pi * WIND_RADIUS_M)
 
 
 def scan_motors(controller, motor_type=MOTOR_TYPE, ids=MOTOR_ID_SCAN_RANGE, duration=0.5):
@@ -305,14 +311,12 @@ def set_motor_power(on):
     subprocess.run(["sudo", "pinctrl", "set", str(MOTOR_POWER_GPIO), "op", level], check=True)
 
 
-def wind_with_ramp(motor, direction, total_revs, max_rev_per_s=4.0, accel_rev_per_s2=2.0, dt=0.02):
+def ramp_profile(total_revs, max_rev_per_s=4.0, accel_rev_per_s2=2.0, dt=0.02):
     """
-    Wind `total_revs` revolutions of line onto the spool using a trapezoidal speed
-    profile: ramp up to max_rev_per_s, cruise, then ramp back down before stopping.
-    The integral of the velocity profile equals total_revs by construction, so the
+    Yield the spool speed in rev/s for each dt step of a trapezoidal profile that
+    turns `total_revs` revolutions: ramp up to max_rev_per_s, cruise, then ramp back
+    down. The integral of the profile equals total_revs by construction, so the
     correct amount of line is wound regardless of the ramp shape.
-
-    send_cmd_vel expects rad/s, so rev/s values are converted with 2*pi.
     """
     ramp_time = max_rev_per_s / accel_rev_per_s2
     ramp_revs = 0.5 * max_rev_per_s * ramp_time  # revs covered during one ramp
@@ -327,25 +331,31 @@ def wind_with_ramp(motor, direction, total_revs, max_rev_per_s=4.0, accel_rev_pe
         cruise_revs = total_revs - 2 * ramp_revs
         cruise_time = cruise_revs / max_rev_per_s
 
-    def hold(vel_rev_per_s):
-        motor.send_cmd_vel(target_velocity=direction * vel_rev_per_s * 2 * pi)
-        time.sleep(dt)
-
     # ramp up
     t = 0.0
     while t < ramp_time:
-        hold(accel_rev_per_s2 * t)
+        yield accel_rev_per_s2 * t
         t += dt
     # cruise
     t = 0.0
     while t < cruise_time:
-        hold(peak_rev_per_s)
+        yield peak_rev_per_s
         t += dt
     # ramp down
     t = 0.0
     while t < ramp_time:
-        hold(max(peak_rev_per_s - accel_rev_per_s2 * t, 0.0))
+        yield max(peak_rev_per_s - accel_rev_per_s2 * t, 0.0)
         t += dt
+
+
+def wind_with_ramp(motor, direction, total_revs, max_rev_per_s=4.0, accel_rev_per_s2=2.0, dt=0.02):
+    """
+    Wind `total_revs` revolutions of line onto the spool following ramp_profile.
+    send_cmd_vel expects rad/s, so rev/s values are converted with 2*pi.
+    """
+    for vel_rev_per_s in ramp_profile(total_revs, max_rev_per_s, accel_rev_per_s2, dt):
+        motor.send_cmd_vel(target_velocity=direction * vel_rev_per_s * 2 * pi)
+        time.sleep(dt)
 
     motor.send_cmd_vel(target_velocity=0)
 
@@ -567,9 +577,7 @@ def main():
     for motor, direction, name, length in motors:
         val = input(f"Do you need to wind the {name} motor? y/n")
         if val == 'y':
-            radius = 0.0362
-            circumfrence = 2*pi*radius
-            revs = length / circumfrence
+            revs = line_revs(length)
 
             # A powerline, when this anchor has one, always goes on the upper spool
             # (the server's 'high' spool); every other spool takes fishing line.
