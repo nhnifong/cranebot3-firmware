@@ -8,7 +8,8 @@
 #   cameras  all_original: gripper 684x384 and both anchors 960x544, as recorded. Every
 #            source is recorded at those sizes in AV1, so nothing is re-encoded. The ortho
 #            floor view is dropped because it is synthesized, not seen.
-#   state    every observation.state component, untrimmed, plus anchor_poses.
+#   state    20 of the 44 recorded observation.state components (see keep_state_features),
+#            plus anchor_poses.
 #   action   gripper_vel: the commanded gripper-frame velocity, wrist and finger speeds,
 #            trimmed out of the recorded dual_vel_contact action.
 #
@@ -84,8 +85,38 @@ merge:
   - naavox/james-oct15
   - naavox/bedroom-oct15
 
-# No keep_state_features: all 44 observation.state components are kept, and every source
-# records the same 44.
+# 20 wide, which fits every policy that caps state: g05 (20), wall_oss_05 (26), dm05 (32).
+# Dropped from the recorded 44:
+#   - the bearing/distance to all five named targets. toybox and trashcan are never
+#     reported and sit at the room origin, parking_location mostly too, and hamper and
+#     gamepad are missing in several rooms.
+#   - gripper_rot_0..3. 0 and 3 are ~1.0 with no spread, 1 equals 2, and both are ~0;
+#     the tilt is carried by rot_4 and rot_5.
+#   - gantry_position_*, which is gripper_pos_* plus the pole.
+#   - visual_pos_* and hang_pos_*, the position estimator's inputs (hang_pos jumps by
+#     metres between frames).
+#   - swing_cancellation_on, on in 99% of frames.
+keep_state_features:
+  - vel_x
+  - vel_y
+  - vel_z
+  - wrist_speed
+  - finger_speed
+  - gripper_pos_x
+  - gripper_pos_y
+  - gripper_pos_z
+  - gripper_rot_4
+  - gripper_rot_5
+  - spin
+  - finger_angle
+  - laser_rangefinder
+  - finger_pressure
+  - wrist_angle
+  - target_force
+  - tension_0
+  - tension_1
+  - tension_2
+  - tension_3
 
 # Only sources from aug3 on carry anchor_poses. The merge needs one feature set, so the
 # older ones gain it from their anchor_config instead of the newer ones losing it.

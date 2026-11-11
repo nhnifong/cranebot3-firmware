@@ -20,6 +20,9 @@ Modal-specific flags
                   already be pushed to GitHub for Modal to fetch it. Pin a commit (not a branch):
                   Modal caches the image layer by the pip spec string, so a branch name would keep
                   reusing a stale build, whereas a new commit hash forces a rebuild.
+  --lerobot_extras Comma-separated lerobot extras to install (default: training,multi_task_dit).
+                  A policy type added after the default was written needs its own extra here,
+                  e.g. training,dm05 for --policy.type=dm05.
 
 Prerequisites
 -------------
@@ -51,6 +54,7 @@ _modal_parser.add_argument("--gpu_type", default="H200")
 _modal_parser.add_argument("--timeout_hours", type=float, default=24.0)
 _modal_parser.add_argument("--hf_secret", default="huggingface")
 _modal_parser.add_argument("--lerobot_ref", default=_DEFAULT_LEROBOT_REF)
+_modal_parser.add_argument("--lerobot_extras", default="training,multi_task_dit")
 _modal_args, _ = _modal_parser.parse_known_args()
 
 _GPU_TYPE = _modal_args.gpu_type
@@ -64,7 +68,7 @@ _LEROBOT_REF = _modal_args.lerobot_ref
 # any other value -> the nhnifong/lerobot fork at that git ref (commit/branch/tag).
 # The fork carries the multi_task_dit + dinov3 / use_visual_cross_attention code.
 # ---------------------------------------------------------------------------
-_LEROBOT_EXTRAS = "lerobot[training,multi_task_dit]"
+_LEROBOT_EXTRAS = f"lerobot[{_modal_args.lerobot_extras}]"
 _LEROBOT_FORK_URL = "git+https://github.com/nhnifong/lerobot.git"
 if _LEROBOT_REF.lower() == "public":
     _LEROBOT_SPEC = _LEROBOT_EXTRAS
@@ -145,6 +149,15 @@ def main() -> None:
             "or 'public' for the published PyPI lerobot. Registered here so it is consumed "
             "rather than forwarded to lerobot-train (the image is actually built from the "
             "import-time parse above)."
+        ),
+    )
+
+    parser.add_argument(
+        "--lerobot_extras",
+        default="training,multi_task_dit",
+        help=(
+            "Comma-separated lerobot extras for the image. Registered here so it is consumed "
+            "rather than forwarded to lerobot-train (the image is built from the import-time parse)."
         ),
     )
 

@@ -24,7 +24,7 @@ python src/nf_robot/ml/lerobot/train_modal.py \
   --save_freq=5000 \
   --log_freq=25 \
   --num_workers=12 \
-  --wandb.enable=false \
+  --trackio.enable=false \
   --rename_map='{"observation.images.anchor_camera_0": "observation.images.image", "observation.images.gripper_camera":  "observation.images.image2", "observation.images.anchor_camera_1": "observation.images.image3"}'
 
 
@@ -72,7 +72,7 @@ python src/nf_robot/ml/lerobot/train_modal.py \
   --save_freq=5000 \
   --log_freq=25 \
   --num_workers=12 \
-  --wandb.enable=false \
+  --trackio.enable=false \
   --rename_map='{"observation.images.anchor_camera_0": "observation.images.image", "observation.images.gripper_camera":  "observation.images.image2", "observation.images.anchor_camera_1": "observation.images.image3"}'
 
 

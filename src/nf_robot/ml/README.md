@@ -151,7 +151,7 @@ lerobot-train \
   --policy.sigma_min=0.0 \
   --policy.repo_id="naavox/dit-grasp-1" \
   --policy.push_to_hub=true \
-  --wandb.enable=false \
+  --trackio.enable=false \
   --tolerance_s=0.001 \
   --save_freq=5000 \
   --batch_size=92
@@ -196,7 +196,7 @@ lerobot-train \
   --policy.sigma_min=0.0 \
   --policy.repo_id="naavox/dit-dino-3" \
   --policy.push_to_hub=true \
-  --wandb.enable=false \
+  --trackio.enable=false \
   --tolerance_s=0.001 \
   --save_freq=5000 \
   --batch_size=44
@@ -228,7 +228,7 @@ lerobot-train \
   --policy.train_expert_only=true \
   --policy.use_relative_actions=false \
   --policy.device=cuda \
-  --wandb.enable=false \
+  --trackio.enable=false \
   --steps=20000 \
   --batch_size=32
 ```
@@ -257,7 +257,7 @@ lerobot-train \
   --output_dir=outputs/train/my_smolvla \
   --job_name=my_smolvla_training \
   --policy.device=cuda \
-  --wandb.enable=false \
+  --trackio.enable=false \
   --steps=20000 \
   --batch_size=64
 ```
@@ -282,7 +282,7 @@ lerobot-train \
   --dataset.image_transforms.enable=true \
   --dataset.image_transforms.max_num_transforms=3 \
   --rename_map='{"observation.images.gripper_camera": "observation.images.image", "observation.images.anchor_camera_0": "observation.images.exterior_1_left", "observation.images.anchor_camera_1": "observation.images.exterior_2_left"}' \
-  --wandb.enable=false \
+  --trackio.enable=false \
   --steps=30000 \
   --save_freq=5000 \
   --batch_size=320 \
@@ -320,7 +320,7 @@ python src/nf_robot/ml/lerobot/train_modal.py \
   --dataset.repo_id=naavox/<dataset> \
   --policy.repo_id="naavox/<model>" \
   --policy.push_to_hub=true \
-  --wandb.enable=false \
+  --trackio.enable=false \
   --save_freq=5000 \
   --num_workers=10 \
   --batch_size=<n> \
@@ -351,7 +351,7 @@ python src/nf_robot/ml/lerobot/train_modal.py \
   --policy.sigma_min=0.0 \
   --policy.repo_id="naavox/dit-move" \
   --policy.push_to_hub=true \
-  --wandb.enable=false \
+  --trackio.enable=false \
   --batch_size=400 \
   --tolerance_s=0.001 \
   --save_freq=5000 \

@@ -58,7 +58,7 @@ lerobot-train \
   --output_dir=outputs/train/act_laundry_grasp_2 \
   --job_name=act_c \
   --policy.device=cuda \
-  --wandb.enable=false \
+  --trackio.enable=false \
   --policy.repo_id=naavox/act_laundry_grasp_2 \
   --steps=100000 \
   --batch_size=10 \
@@ -69,7 +69,7 @@ lerobot-train \
   --policy.type=diffusion \
   --output_dir=outputs/train/dif_laundry_grasp \
   --policy.device=cuda \
-  --wandb.enable=false \
+  --trackio.enable=false \
   --policy.repo_id=naavox/dif_laundry_grasp \
   --steps=80000 \
   --batch_size=10
@@ -83,7 +83,7 @@ lerobot-train \
     --policy.pretrained_path=lerobot/pi05_base \
     --policy.compile_model=true \
     --policy.gradient_checkpointing=true \
-    --wandb.enable=false \
+    --trackio.enable=false \
     --policy.dtype=bfloat16 \
     --policy.freeze_vision_encoder=true \
     --policy.train_expert_only=true \
@@ -112,7 +112,7 @@ lerobot-train \
   --policy.integration_method=euler \
   --policy.sigma_min=0.0 \
   --policy.repo_id="naavox/dit-grasp-1" \
-  --wandb.enable=false \
+  --trackio.enable=false \
   --tolerance_s=0.001 \
   --policy.push_to_hub=true \
   --save_freq=5000 \
@@ -142,7 +142,7 @@ lerobot-train \
   --policy.integration_method=euler \
   --policy.sigma_min=0.0 \
   --policy.repo_id="naavox/dit-dino-3" \
-  --wandb.enable=false \
+  --trackio.enable=false \
   --tolerance_s=0.001 \
   --policy.push_to_hub=true \
   --save_freq=5000 \
@@ -169,7 +169,7 @@ python src/nf_robot/ml/lerobot/train_modal.py \
   --policy.sigma_min=0.0   \
   --policy.repo_id="naavox/dit-move"   \
   --policy.push_to_hub=true \
-  --wandb.enable=false \
+  --trackio.enable=false \
   --batch_size=400 \
   --tolerance_s=0.001 \
   --save_freq=5000 \
@@ -203,7 +203,7 @@ lerobot-train \
   --output_dir=outputs/train/my_smolvla \
   --job_name=my_smolvla_training \
   --policy.device=cuda \
-  --wandb.enable=false
+  --trackio.enable=false
 
 JEPA
 
@@ -221,7 +221,7 @@ python src/nf_robot/ml/lerobot/train_modal.py \
   --output_dir=./outputs/jepa-3/training \
   --dataset.image_transforms.enable=true \
   --dataset.image_transforms.max_num_transforms=3 \
-  --wandb.enable=false \
+  --trackio.enable=false \
   --rename_map='{"observation.images.gripper_camera": "observation.images.image", "observation.images.anchor_camera_0": "observation.images.exterior_1_left", "observation.images.anchor_camera_1": "observation.images.exterior_2_left"}' \
   --steps=30000 \
   --save_freq=5000 \

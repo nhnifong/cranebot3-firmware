@@ -19,7 +19,7 @@ python src/nf_robot/ml/lerobot/train_modal.py \
   --policy.freeze_vision_encoder=true \
   --policy.train_expert_only=true \
   --policy.use_relative_actions=true \
-  --wandb.enable=false \
+  --trackio.enable=false \
   --steps=10000 \
   --save_freq=1000 \
   --log_freq=25 \
