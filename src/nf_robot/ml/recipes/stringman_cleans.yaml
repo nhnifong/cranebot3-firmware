@@ -29,14 +29,12 @@ merge:
   # --- the sources of combined_targets_reblend, with its episode selections ---
   # Recorded before the anchor_poses feature existed. Each one's anchor_config is used only
   # to backfill that feature (see backfill_anchor_poses below).
-  - repo_id: naavox/move_clutter_nick_2
-    include_episodes: ["48-56"]
-    anchor_config: ../calibrations/conf_nick_move_clutter_nick_2.json
 
   - repo_id: justink04/laundry-in-hamper-7-19-26
     anchor_config: ../calibrations/justin.json
 
   - repo_id: justink04/laundry-in-hamper-7-23-26
+    exclude_episodes: ["7"]
     anchor_config: ../calibrations/justin.json
 
   - repo_id: justink04/trash-in-trashcan-7-23-26

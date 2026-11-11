@@ -105,6 +105,7 @@ import logging
 import os
 import shutil
 import sys
+from fractions import Fraction
 from pathlib import Path
 
 from lerobot.datasets.dataset_tools import delete_episodes, merge_datasets, recompute_stats
@@ -181,6 +182,86 @@ def normalize_video_info(converted: list[tuple[str, Path]]) -> None:
 
     for _, path, info in infos:
         path.write_text(json.dumps(info, indent=4))
+
+
+# Time base lerobot's encoder writes, and so the one every recording and re-encoded video has.
+CANONICAL_VIDEO_TIME_BASE = Fraction(1, 15360)
+
+
+def _remux_to_time_base(path: Path, time_base: Fraction) -> None:
+    """Rewrite one video's packets in time_base, without re-encoding."""
+    import av
+
+    tmp = path.with_suffix(".timebase.tmp.mp4")
+    with av.open(str(path)) as src:
+        v_in = src.streams.video[0]
+        in_tb = v_in.time_base
+        scale = in_tb / time_base
+        frames = 0
+        last_dts = None
+        # The mp4 muxer picks its own track timescale (1/90000) unless told otherwise.
+        with av.open(str(tmp), mode="w",
+                     options={"video_track_timescale": str(time_base.denominator // time_base.numerator)}) as dst:
+            v_out = dst.add_stream_from_template(v_in, opaque=True)
+            v_out.time_base = time_base
+            for packet in src.demux(v_in):
+                if packet.size == 0:
+                    continue
+                # duration too: lerobot reads a file's length off its last packet's end, and
+                # a duration left in the old units shifts every episode merged after it.
+                for attr in ("pts", "dts", "duration"):
+                    value = getattr(packet, attr)
+                    if not value:
+                        continue
+                    exact = value * scale
+                    if exact.denominator != 1:
+                        raise ValueError(
+                            f"{path}: {attr} {value} in {in_tb} is not a whole number of "
+                            f"{time_base} ticks; cannot re-time it without re-encoding"
+                        )
+                    setattr(packet, attr, int(exact))
+                if packet.dts is not None:
+                    if last_dts is not None and packet.dts <= last_dts:
+                        raise ValueError(f"{path}: re-timed dts {packet.dts} does not increase past {last_dts}")
+                    last_dts = packet.dts
+                packet.time_base = time_base
+                packet.stream = v_out
+                dst.mux(packet)
+                frames += 1
+    with av.open(str(tmp)) as check:
+        stream = check.streams.video[0]
+        if stream.time_base != time_base:
+            raise RuntimeError(f"{path}: re-muxed time base came out {stream.time_base}, wanted {time_base}")
+    if frames == 0:
+        raise RuntimeError(f"{path}: no video packets to re-mux")
+    tmp.replace(path)
+
+
+def normalize_video_time_base(root: Path, name: str,
+                              time_base: Fraction = CANONICAL_VIDEO_TIME_BASE) -> int:
+    """Put every video of a dataset in one time base, so the merge can concatenate them.
+
+    Works around lerobot 0.7.0. Its delete_episodes cuts a video by copying packets, and
+    the mp4 it writes has a 1/90000 timescale, while untouched videos keep the 1/15360 they
+    were encoded with. concatenate_video_files then muxes the second file's timestamps
+    into the first file's time base without rescaling them, and the merge dies with
+    "non monotonically increasing dts". Re-timing is lossless: a 30 fps frame is 3000
+    ticks of 1/90000 and 512 of 1/15360, and the packets are copied, not re-encoded.
+
+    Returns the number of files rewritten.
+    """
+    import av
+
+    rewritten = 0
+    for path in sorted((root / "videos").glob("**/*.mp4")):
+        with av.open(str(path)) as container:
+            current = container.streams.video[0].time_base
+        if current == time_base:
+            continue
+        logging.info(f"[{name}] re-timing {path.relative_to(root)} from {current} to {time_base}")
+        _remux_to_time_base(path, time_base)
+        rewritten += 1
+    return rewritten
 
 
 def resolve_source_revision(repo_id: str) -> str | None:
@@ -827,6 +908,13 @@ def build(
         converted.append((repo_id, converted_root))
 
     # Step 4: merge the converted datasets into the final output location.
+    # Every source's videos in one time base first, or lerobot 0.7.0's concatenation
+    # breaks on a mix of cut and uncut files; see normalize_video_time_base. Done here
+    # rather than after each delete_episodes so conversions reused by --resume get it too.
+    for repo_id, root in converted:
+        if normalize_video_time_base(root, root.name):
+            validate_dataset(repo_id, root, expected_camera_mode=camera_mode,
+                             decode_videos=verify_decode)
     # First reconcile cosmetic video-metadata differences so the merge's strict
     # feature-equality check passes (raises if critical fields truly differ).
     if len(converted) > 1:
