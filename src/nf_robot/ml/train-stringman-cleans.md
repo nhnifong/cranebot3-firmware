@@ -8,9 +8,21 @@ wrist_speed, finger_speed`), language tasks, and three cameras at their recorded
 `recipes/stringman_cleans.yaml` before using these commands. The copy built before the 20-wide state
 was added has 44, which dm05, g05, wall_oss_05 and lawam reject.
 
-Every flag set below passes the policy's own `validate_features` against the dataset's features. That
-does not prove the weights load or that a step fits in memory. Before a long run, do a short one with
-`--steps=20 --save_freq=20 --policy.push_to_hub=false`.
+**Camera names and state width.** A policy loaded with `--policy.path` keeps the input features in
+its checkpoint's config.json: that checkpoint's camera names and state width, not the dataset's. Left
+alone, that fails with "camera features are not policy inputs" or a state-width mismatch. Each
+`--policy.path` command below therefore:
+- renames the dataset's cameras onto the checkpoint's camera names with `--rename_map`, where the
+  checkpoint names cameras;
+- overrides `--policy.input_features` for those same keys, giving the 20-wide state and each camera's
+  real shape. The override is merged into the checkpoint's dict rather than replacing it, which is
+  why the cameras are renamed instead of listed under their dataset names.
+
+`cosmos3_edge` is built with `--policy.type` and takes the dataset's features directly.
+
+Every command's settings were checked by building the policy config the way `make_policy` does and
+running its `validate_features`. Only lawam has actually trained (on the 5090). For the others, run
+`--steps=20 --save_freq=20 --policy.push_to_hub=false` before a long run.
 
 ## Which new policies fit
 
@@ -22,7 +34,7 @@ does not prove the weights load or that a step fits in memory. Before a long run
 | `g05` | `lerobot/g05_base` | 12 GB | yes; state limit 20, slots given explicitly. **Non-commercial licence** | B200 |
 | `wall_oss_05` | `lerobot/wall-oss-0.5` | 8 GB | yes; state limit 26; two camera slots, so `anchor_camera_1` is unused | B200 |
 | `lingbot_vla_v2` | `lerobot/lingbot_vla_v2_base` | 26 GB | yes; state and action mapped onto its canonical slots | B200 |
-| `lawam` | `jialei02/lawam-pretrain-lerobot` | 7 GB | yes; ignores state by default (limit 32) | 5090 with the VLM frozen, or B200 |
+| `lawam` | `jialei02/lawam-pretrain-lerobot` | 7 GB | yes; ignores state by default (limit 32); cameras renamed onto the checkpoint's | 5090 with the VLM frozen (tested), or B200 |
 | `flux3` | `black-forest-labs/flux-3-action-base` (gated) | 25 GB | **no**: state width must equal action width (5) | none |
 | `fineart_vla` | `lerobot/FineART-VLA-subtask-midtrained` | 9 GB | **no**: trains on subtask annotations the dataset does not have. Without them it is pi05 | none |
 | `longwam` | `Efficient-Large-Model/Long-WAM-*` | 25 GB | **no**: fixed to exactly 2 cameras, a 7-wide action and an 8-wide state | none |
@@ -97,6 +109,7 @@ python src/nf_robot/ml/lerobot/train_modal.py \
   --detach true \
   --dataset.repo_id=naavox/stringman_cleans \
   --policy.path=lerobot/dm05_base \
+  --policy.input_features='{"observation.state": {"type": "STATE", "shape": [20]}, "observation.images.gripper_camera": {"type": "VISUAL", "shape": [3, 384, 684]}, "observation.images.anchor_camera_0": {"type": "VISUAL", "shape": [3, 544, 960]}, "observation.images.anchor_camera_1": {"type": "VISUAL", "shape": [3, 544, 960]}}' \
   --policy.chunk_size=30 \
   --policy.n_action_steps=10 \
   --policy.repo_id=naavox/dm05-cleans \
@@ -117,7 +130,9 @@ Galaxea G0.5 with its flow action head. **Licence: G0.5 Community License, non-c
 - `stringman` is a new embodiment name, so the slots are given explicitly. The 20 state components
   fill the policy's 20 state slots, and the 5 action components take the first 5 of its 20 action
   slots.
-- The camera slots are the three cameras, overhead first.
+- The checkpoint's camera slots are `head_rgb`, `left_wrist_rgb` and `right_wrist_rgb`. The anchors
+  fill the first two and the gripper the third. g05 declares each slot at its 256x256 working size
+  and resizes the images itself.
 
 ```bash
 python src/nf_robot/ml/lerobot/train_modal.py \
@@ -131,7 +146,8 @@ python src/nf_robot/ml/lerobot/train_modal.py \
   --policy.embodiment=stringman \
   --policy.state_slots='[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]' \
   --policy.action_slots='[0,1,2,3,4]' \
-  --policy.camera_order='[observation.images.anchor_camera_0,observation.images.anchor_camera_1,observation.images.gripper_camera]' \
+  --rename_map='{"observation.images.anchor_camera_0": "observation.images.head_rgb", "observation.images.anchor_camera_1": "observation.images.left_wrist_rgb", "observation.images.gripper_camera": "observation.images.right_wrist_rgb"}' \
+  --policy.input_features='{"observation.state": {"type": "STATE", "shape": [20]}, "observation.images.head_rgb": {"type": "VISUAL", "shape": [3, 544, 960]}, "observation.images.left_wrist_rgb": {"type": "VISUAL", "shape": [3, 544, 960]}, "observation.images.right_wrist_rgb": {"type": "VISUAL", "shape": [3, 384, 684]}}' \
   --policy.chunk_size=16 \
   --policy.n_action_steps=8 \
   --policy.repo_id=naavox/g05-cleans \
@@ -150,8 +166,8 @@ python src/nf_robot/ml/lerobot/train_modal.py \
 
 A Qwen2.5-VL 4B model with routed action experts and a fixed 26-wide state and action. The 20 and 5
 wide features are padded and masked.
-- The checkpoint has two camera slots: anchor 0 goes in the scene slot and the gripper in the wrist
-  slot. `anchor_camera_1` is left out.
+- The checkpoint has two camera slots, `face_view` and `right_wrist_view`. Anchor 0 is renamed into
+  the first and the gripper into the second; `anchor_camera_1` is left out.
 - `use_language_recipe=false`, because its default recipe trains subtask text the dataset doesn't
   have.
 
@@ -165,7 +181,8 @@ python src/nf_robot/ml/lerobot/train_modal.py \
   --dataset.repo_id=naavox/stringman_cleans \
   --policy.path=lerobot/wall-oss-0.5 \
   --policy.use_language_recipe=false \
-  --policy.camera_key_mapping='{"observation.images.anchor_camera_0": "face_view", "observation.images.gripper_camera": "right_wrist_view"}' \
+  --rename_map='{"observation.images.anchor_camera_0": "observation.images.face_view", "observation.images.gripper_camera": "observation.images.right_wrist_view"}' \
+  --policy.input_features='{"observation.state": {"type": "STATE", "shape": [20]}, "observation.images.face_view": {"type": "VISUAL", "shape": [3, 544, 960]}, "observation.images.right_wrist_view": {"type": "VISUAL", "shape": [3, 384, 684]}}' \
   --policy.repo_id=naavox/wall-oss-05-cleans \
   --policy.push_to_hub=true \
   --output_dir=/multitask_dit_data/wall-oss-05-cleans \
@@ -202,6 +219,8 @@ python src/nf_robot/ml/lerobot/train_modal.py \
   --detach true \
   --dataset.repo_id=naavox/stringman_cleans \
   --policy.path=lerobot/lingbot_vla_v2_base \
+  --rename_map='{"observation.images.anchor_camera_0": "observation.images.camera_top", "observation.images.anchor_camera_1": "observation.images.camera_wrist_left", "observation.images.gripper_camera": "observation.images.camera_wrist_right"}' \
+  --policy.input_features='{"observation.state": {"type": "STATE", "shape": [20]}, "observation.images.camera_top": {"type": "VISUAL", "shape": [3, 544, 960]}, "observation.images.camera_wrist_left": {"type": "VISUAL", "shape": [3, 544, 960]}, "observation.images.camera_wrist_right": {"type": "VISUAL", "shape": [3, 384, 684]}}' \
   --policy.state_slots='{"base.velocity": {"origin_keys": [{"observation.state": {"start": 0, "end": 3}}]}, "reserved.slots": {"origin_keys": [{"observation.state": {"start": 3, "end": 5}}]}, "end.position": {"origin_keys": [{"observation.state": {"start": 5, "end": 11}}, {"observation.state": {"start": 12, "end": 14}}, {"observation.state": {"start": 15, "end": 20}}]}, "effector.position": {"origin_keys": [{"observation.state": {"start": 11, "end": 12}}, {"observation.state": {"start": 14, "end": 15}}]}}' \
   --policy.action_slots='{"base.velocity": {"origin_keys": [{"action": {"start": 0, "end": 3}}]}, "effector.position": {"origin_keys": [{"action": {"start": 3, "end": 5}}]}}' \
   --policy.repo_id=naavox/lingbot-vla-v2-cleans \
@@ -223,16 +242,27 @@ A latent world action model on Qwen3-VL-2B.
 - The latent-action encoder watches `anchor_camera_0`.
 - State is not used (`flow_use_state=false`).
 
-With both backbones frozen, only the latent-action and flow heads train, which should leave room for
-more than batch 8 on the 5090.
+Camera names: with `--policy.path`, lerobot keeps the checkpoint's own input features
+(`observation.images.image` for the scene, `image2` for the wrist) instead of taking the dataset's.
+Naming the dataset's cameras in the role flags then fails with "camera features are not policy
+inputs".
+- `--rename_map` puts the dataset's cameras under the checkpoint's names.
+- `--policy.input_features` declares a third camera, `image3`, so `anchor_camera_1` is kept as a
+  second primary view rather than dropped.
+- The shapes are the dataset's; lawam resizes every view to 256x256 itself.
+
+With both backbones frozen, 636M of the 2.56B parameters train. Measured on the 5090: batch 16 uses
+25.3 GB at 0.49 s/step, and batch 24 runs out of memory.
 
 ```bash
 lerobot-train \
   --dataset.repo_id=naavox/stringman_cleans \
   --policy.path=jialei02/lawam-pretrain-lerobot \
-  --policy.primary_image_features='["observation.images.anchor_camera_0","observation.images.anchor_camera_1"]' \
-  --policy.wrist_image_features='["observation.images.gripper_camera"]' \
-  --policy.lam_image_feature=observation.images.anchor_camera_0 \
+  --rename_map='{"observation.images.anchor_camera_0": "observation.images.image", "observation.images.gripper_camera": "observation.images.image2", "observation.images.anchor_camera_1": "observation.images.image3"}' \
+  --policy.input_features='{"observation.images.image": {"type": "VISUAL", "shape": [3, 544, 960]}, "observation.images.image2": {"type": "VISUAL", "shape": [3, 384, 684]}, "observation.images.image3": {"type": "VISUAL", "shape": [3, 544, 960]}}' \
+  --policy.primary_image_features='["observation.images.image","observation.images.image3"]' \
+  --policy.wrist_image_features='["observation.images.image2"]' \
+  --policy.lam_image_feature=observation.images.image \
   --policy.freeze_vision_backbone=true \
   --policy.freeze_llm_backbone=true \
   --policy.device=cuda \
@@ -259,9 +289,11 @@ python src/nf_robot/ml/lerobot/train_modal.py \
   --detach true \
   --dataset.repo_id=naavox/stringman_cleans \
   --policy.path=jialei02/lawam-pretrain-lerobot \
-  --policy.primary_image_features='["observation.images.anchor_camera_0","observation.images.anchor_camera_1"]' \
-  --policy.wrist_image_features='["observation.images.gripper_camera"]' \
-  --policy.lam_image_feature=observation.images.anchor_camera_0 \
+  --rename_map='{"observation.images.anchor_camera_0": "observation.images.image", "observation.images.gripper_camera": "observation.images.image2", "observation.images.anchor_camera_1": "observation.images.image3"}' \
+  --policy.input_features='{"observation.images.image": {"type": "VISUAL", "shape": [3, 544, 960]}, "observation.images.image2": {"type": "VISUAL", "shape": [3, 384, 684]}, "observation.images.image3": {"type": "VISUAL", "shape": [3, 544, 960]}}' \
+  --policy.primary_image_features='["observation.images.image","observation.images.image3"]' \
+  --policy.wrist_image_features='["observation.images.image2"]' \
+  --policy.lam_image_feature=observation.images.image \
   --policy.repo_id=naavox/lawam-cleans \
   --policy.push_to_hub=true \
   --output_dir=/multitask_dit_data/lawam-cleans \

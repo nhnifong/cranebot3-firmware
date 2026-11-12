@@ -19,6 +19,16 @@ run at full speed with the pin held low. These fans also have their tach and GND
 wires swapped by hand to match the hats' connector. Set HOLD_PIN_LOW to False to
 use the temperature control below with fans that tolerate the hats' drive.
 
+Later hat revisions drop the MOSFET: the GPIO drives the fan's PWM wire directly
+through a 1k resistor, and the connector has tach and GND in the Pi 5 order, so
+stock fans plug straight in. Set DIRECT_DRIVE to True on units with those boards.
+It overrides HOLD_PIN_LOW and turns temperature control on, since a push-pull pin
+drives both edges and the weak pull-up no longer matters. FAN_ACTIVE_LOW says
+which way the fan reads the wire; the Pi 5 device tree drives these fans with
+inverted polarity, so the default assumes the wire held low means full speed.
+Check on the bench with --verbose (MIN/MAX duty via 'fan MIN MAX') and flip it if
+the fan slows when it should speed up.
+
 The anchor hat is recognized by its MCP2515 CAN controller: can0 only exists when
 that chip answers on SPI. Both pins can carry PWM0, so this daemon always drives
 pwmchip0 channel 0 and muxes PWM0 onto the chosen pin itself with pinctrl,
@@ -50,6 +60,9 @@ import os
 import signal
 import subprocess
 import time
+
+DIRECT_DRIVE = False  # True only for hats with the MOSFET removed; see the module docstring
+FAN_ACTIVE_LOW = True  # DIRECT_DRIVE only: fan runs fastest with its PWM wire held low
 
 HOLD_PIN_LOW = True  # full speed for the current fans; see the module docstring
 
@@ -111,6 +124,17 @@ def read_duty_range():
     if not 0.0 <= lo <= hi <= 1.0:
         return MIN_DUTY, MAX_DUTY
     return lo, hi
+
+
+def pin_duty(fan_duty):
+    """Fraction of each period the pin is high, for a fan duty (1.0 = full speed).
+
+    Only a direct-drive hat with an active-low fan inverts; otherwise the duty
+    goes to the pin as is, which is how this daemon has always driven it.
+    """
+    if DIRECT_DRIVE and FAN_ACTIVE_LOW:
+        return 1.0 - fan_duty
+    return fan_duty
 
 
 def duty_for_temp(temp_c, min_duty, max_duty):
@@ -178,7 +202,10 @@ def main():
     args = ap.parse_args()
 
     pwm = SysfsPwm(PWM_CHIP, PWM_CHANNEL, args.frequency)
-    if HOLD_PIN_LOW:
+    hold_pin_low = HOLD_PIN_LOW and not DIRECT_DRIVE
+    if DIRECT_DRIVE:
+        log(f"fan_control: direct drive, fan active-{'low' if FAN_ACTIVE_LOW else 'high'}")
+    if hold_pin_low:
         log("fan_control: holding the fan pin low (full speed), speed control off")
     else:
         log(f"fan_control: {args.frequency:g} Hz, over {TEMP_LOW_C:g}-{TEMP_HIGH_C:g}C")
@@ -196,7 +223,7 @@ def main():
                 route_pwm0_to(pin)
                 log(f"fan_control: fan PWM on GPIO {pin}")
                 routed_pin = pin
-            if HOLD_PIN_LOW:
+            if hold_pin_low:
                 pwm.set_duty(0.0)
                 time.sleep(args.interval)
                 continue
@@ -206,14 +233,14 @@ def main():
                 duty_range = new_range
             temp = read_soc_temp_c()
             duty = duty_for_temp(temp, *duty_range)
-            pwm.set_duty(duty)
+            pwm.set_duty(pin_duty(duty))
             if args.verbose or last_logged is None or abs(duty - last_logged) >= 0.05:
                 temp_s = f"{temp:.1f}C" if temp is not None else "unreadable"
                 log(f"soc_temp={temp_s} duty={duty:.2f}")
                 last_logged = duty
             time.sleep(args.interval)
     finally:
-        pwm.set_duty(0.0 if HOLD_PIN_LOW else FULL_DUTY)
+        pwm.set_duty(0.0 if hold_pin_low else pin_duty(FULL_DUTY))
         log("fan_control: stopping, fan left at full speed")
 
 
