@@ -15,12 +15,14 @@ version of the file readable by every version of the code:
 Run as a script to write the file directly, for a Pi whose build changed without the whole
 anchor_arp_eval procedure being worth re-running:
 
-    python -m nf_robot.robot.server_conf --power --long --set_hostname
+    python -m nf_robot.robot.server_conf --power --winding long --set_hostname
     python -m nf_robot.robot.server_conf --path server.conf
 """
 
 import argparse
 import logging
+
+from nf_robot.common.definitions import default_winding, winding_lengths
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +35,11 @@ DEFAULT_COMPONENT_TYPE = 'arpeggio anchor'
 # the other type anchor_arp_eval writes; i2c_dispatcher keys the powerline spool off it
 POWER_COMPONENT_TYPE = 'arpeggio power anchor'
 
-# how much line anchor_arp_eval.py wound onto the spools: 'long' is its --long mode, which
-# puts 20 m on the lower spool and 12 m on the upper instead of 15 m and 7.5 m.
+# how much line anchor_arp_eval.py wound onto the spools; the lengths each name means are in
+# definitions.winding_lengths. A file without the field predates it, and those were short-wound.
+WINDINGS = tuple(winding_lengths)
+WINDING_DEFAULT = default_winding
 WINDING_SHORT = 'short'
-WINDING_LONG = 'long'
-WINDINGS = (WINDING_SHORT, WINDING_LONG)
 
 # The torque a spool motor reports while holding still with no load on the line, in N.m in the
 # motor's own frame, as (after turning positive, after turning negative). It is the friction the
@@ -86,7 +88,7 @@ def read_server_conf(path=None):
 
 
 def read_winding(path=None):
-    """'long' or 'short'. Anchors built before the field existed were short-wound, and an
+    """One of WINDINGS. Anchors built before the field existed were short-wound, and an
     unrecognized value is treated the same way: a typo here should not stop a boot."""
     _, fields = read_server_conf(path)
     winding = fields.get('winding', WINDING_SHORT)
@@ -122,7 +124,7 @@ def read_hold_torque(motor_id, path=None):
     return hold
 
 
-def write_server_conf(component_type, winding=WINDING_SHORT, hold_torques=None, path=CONF_PATH):
+def write_server_conf(component_type, winding=WINDING_DEFAULT, hold_torques=None, path=CONF_PATH):
     """Rewrite server.conf. Fields first; see the module docstring for why.
 
     hold_torques is {motor_id: (after positive, after negative)}. Measurements already in the
@@ -145,15 +147,17 @@ def main():
     """Write server.conf from the two things it records, without winding any line.
 
     The flags are named after anchor_arp_eval's, which is where these details are normally
-    captured, so the same --long that wound the spools writes the same file here.
+    captured, so the same --winding that wound the spools writes the same file here.
     """
     parser = argparse.ArgumentParser(description=main.__doc__.splitlines()[0])
     parser.add_argument('--power', action='store_true',
                         help=f"this anchor carries the powerline spool ('{POWER_COMPONENT_TYPE}' "
                              f"rather than '{DEFAULT_COMPONENT_TYPE}')")
-    parser.add_argument('--long', action='store_true',
-                        help='spools were wound long (20 m lower, 12 m upper) rather than '
-                             'short (15 m, 7.5 m); the server picks its full spool diameter from this')
+    parser.add_argument('--winding', choices=WINDINGS, default=WINDING_DEFAULT,
+                        help='how much line the spools were wound with (default %(default)s): '
+                             + ', '.join(f'{name} {low:g} m lower / {high:g} m upper'
+                                         for name, (low, high) in winding_lengths.items())
+                             + '. The server picks its full spool diameter from this')
     parser.add_argument('--path', default=CONF_PATH,
                         help=f'file to write (default {CONF_PATH})')
     parser.add_argument('--set_hostname', action='store_true',
@@ -162,9 +166,8 @@ def main():
     args = parser.parse_args()
 
     component_type = POWER_COMPONENT_TYPE if args.power else DEFAULT_COMPONENT_TYPE
-    winding = WINDING_LONG if args.long else WINDING_SHORT
-    write_server_conf(component_type, winding=winding, path=args.path)
-    print(f'Wrote {args.path}: {component_type}, winding={winding}')
+    write_server_conf(component_type, winding=args.winding, path=args.path)
+    print(f'Wrote {args.path}: {component_type}, winding={args.winding}')
 
     if args.set_hostname:
         # Imported here rather than at module scope: every robot server reads this module

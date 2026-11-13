@@ -75,8 +75,9 @@ options:
     --lerobot_grasp       Grasp with a connected lerobot policy session rather than the visual servoing model,
                             which is the default. Falls back to servoing if no session answers.
     --debug               Enable DEBUG level logging
-    --rec_diagnostics     Record the arguments of every optimize_arp_anchors call during full_auto_calibration
-                            to calibration_diagnostics.pkl, for offline analysis. Arpeggio hardware only.
+    --no_rec_diagnostics  Don't record the arguments of every optimize_arp_anchors call during full_auto_calibration
+                            to calibration_diagnostics.pkl. Recording is on by default so every calibration
+                            attempt leaves evidence for offline analysis. Arpeggio hardware only.
     --bind_address        Interface for the local telemetry websocket (port 4245) and all local mjpeg video
                             streams. Set to 0.0.0.0 to access from elsewhere on your network.
     --no_serve_ui         Don't serve the playroom-ui frontend from this machine.

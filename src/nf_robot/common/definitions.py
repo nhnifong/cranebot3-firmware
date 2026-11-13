@@ -76,16 +76,26 @@ damiao_empty_spool_diameter = 72.0
 damiao_full_spool_diameter_fishing_line = 73.1
 damiao_full_spool_diameter_power_line = 86.1
 
+# How much line anchor_arp_eval.py winds onto each spool, by the winding name server.conf records,
+# as (lower spool m, upper spool m). The lower (indirect) line takes more because it routes out
+# around the eyelet. A power line, when fitted, is always on the upper spool.
+winding_lengths = {
+    'short':  (15.0, 7.5),
+    'medium': (17.5, 10.0),
+    'long':   (20.0, 12.0),
+}
+# what anchor_arp_eval winds on a new anchor. Not what a server.conf without a winding field
+# means: those anchors were all built before the field existed, and were short-wound.
+default_winding = 'medium'
+
 # The state each anchor spool is built to, as (line on a full spool in m, the diameter the spool
 # reaches with that much on it in mm). SpiralCalculator ramps the diameter from
 # damiao_empty_spool_diameter up to full_diameter across full_length, so both numbers have to
 # describe the same spool: get full_length wrong and the reported diameter is right for the wrong
 # point on the spiral, which biases length-per-revolution at every angle.
 #
-# anchor_arp_eval.py winds 15 m low / 7.5 m high normally, 20 m / 12 m with --long. The low
-# (indirect) line takes more because it routes out around the eyelet. A power line, when fitted,
-# is always on the high spool; it is much thicker than fishing line, so its pile grows far faster
-# and it is the entry that really moves between the two windings.
+# Power line is much thicker than fishing line, so its pile grows far faster and it is the entry
+# that really moves between windings.
 #
 #   (winding, spool, line type) -> (full_length_m, full_diameter_mm)
 damiao_spool_geometry = {
@@ -95,12 +105,17 @@ damiao_spool_geometry = {
     ('short', 'high', 'fishing'): (assumed_full_line_length, damiao_full_spool_diameter_fishing_line),
     ('short', 'high', 'power'):   (assumed_full_line_length, damiao_full_spool_diameter_power_line),
     ('short', 'low',  'fishing'): (assumed_full_line_length, damiao_full_spool_diameter_fishing_line),
+    # Medium winding, not measured. The two fishing measurements agree on 0.15 mm of diameter per
+    # meter wound (1.1/7.5 and 3.0/20), which puts 10 m at 73.5 mm and 15 m at 74.2 mm. Power line
+    # is interpolated linearly between its two measurements (7.5 m -> 86.1, 12 m -> 100).
+    ('medium', 'high', 'fishing'): (winding_lengths['medium'][1], 73.5),
+    ('medium', 'high', 'power'):   (winding_lengths['medium'][1], 93.8),
+    ('medium', 'low',  'fishing'): (winding_lengths['medium'][0], 74.2),
     # Long winding, measured: 20 m of fishing line piles to 75 mm, 12 m of power line to 100 mm.
-    # The 12 m fishing case was not measured directly, but the two fishing measurements agree on
-    # 0.15 mm of diameter per meter wound (1.1/7.5 and 3.0/20), which puts 12 m at 73.8 mm.
-    ('long',  'high', 'fishing'): (12.0, 73.8),
-    ('long',  'high', 'power'):   (12.0, 100.0),
-    ('long',  'low',  'fishing'): (20.0, 75.0),
+    # The 12 m fishing case was not measured directly; by the 0.15 mm/m above it is 73.8 mm.
+    ('long',  'high', 'fishing'): (winding_lengths['long'][1], 73.8),
+    ('long',  'high', 'power'):   (winding_lengths['long'][1], 100.0),
+    ('long',  'low',  'fishing'): (winding_lengths['long'][0], 75.0),
 }
 
 # arp anchor model

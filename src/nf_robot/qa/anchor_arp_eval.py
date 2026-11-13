@@ -13,6 +13,7 @@ from math import pi, sqrt
 
 from nf_robot.qa.set_hostname import set_component_hostname
 from nf_robot.robot import server_conf
+from nf_robot.common.definitions import winding_lengths
 
 MOTOR_TYPE = "G6215"
 FEEDBACK_ID_REGISTER = 7  # MST_ID
@@ -528,8 +529,10 @@ def test_camera():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--long', action='store_true',
-                        help="Wind extra line: 20 m on the lower spool, 12 m on the upper spool.")
+    parser.add_argument('--winding', choices=server_conf.WINDINGS, default=server_conf.WINDING_DEFAULT,
+                        help='How much line to wind (default %(default)s): '
+                             + ', '.join(f'{name} {low:g} m lower / {high:g} m upper'
+                                         for name, (low, high) in winding_lengths.items()))
     args = parser.parse_args()
 
     # The cranebot service grabs the can bus and camera, so it must be stopped first.
@@ -547,9 +550,9 @@ def main():
     lower_motor.disable()
     upper_motor.disable()
     # lower spool needs more line because it goes around the eyelet
-    lower_length, upper_length = (20.0, 12.0) if args.long else (15.0, 7.5)
-    if args.long:
-        print(f"--long: winding {lower_length} m on the lower spool and {upper_length} m on the upper spool.")
+    winding = args.winding
+    lower_length, upper_length = winding_lengths[winding]
+    print(f"{winding} winding: {lower_length:g} m on the lower spool and {upper_length:g} m on the upper spool.")
     motors = [
         (lower_motor, -1, 'lower', lower_length),
         (upper_motor, 1, 'upper', upper_length),
@@ -567,7 +570,6 @@ def main():
     # Record what differentiates this anchor: which spool it carries, and how much line went on.
     # The server needs the winding to pick the right full spool diameter, and a spool wound long
     # with the thick power line ends up nearly 14 mm fatter than a short one.
-    winding = server_conf.WINDING_LONG if args.long else server_conf.WINDING_SHORT
     server_conf.write_server_conf(anchor_type, winding=winding)
 
     # Give this Pi a hostname unique to its role so the two anchors and the

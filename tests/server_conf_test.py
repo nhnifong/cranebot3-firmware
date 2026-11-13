@@ -80,11 +80,11 @@ class TestServerConf(unittest.TestCase):
         component_type, fields = server_conf.read_server_conf(path)
         self.assertEqual(component_type, 'arpeggio power anchor')
         self.assertEqual(fields['something_added_later'], '7')
-        self.assertEqual(server_conf.read_winding(path), server_conf.WINDING_LONG)
+        self.assertEqual(server_conf.read_winding(path), 'long')
 
     def test_unrecognized_winding_falls_back_rather_than_raising(self):
         """A typo in a hand-edited conf should not stop an anchor from booting."""
-        path = self.write('winding=medium\narpeggio anchor\n')
+        path = self.write('winding=extra_long\narpeggio anchor\n')
         self.assertEqual(server_conf.read_winding(path), server_conf.WINDING_SHORT)
 
     def test_written_file_still_parses_under_the_old_reader(self):
@@ -123,10 +123,23 @@ class TestSpoolGeometry(unittest.TestCase):
         geom = model_constants.damiao_spool_geometry
         for spool, line_type in (('high', 'fishing'), ('high', 'power'), ('low', 'fishing')):
             short_len, short_diam = geom[('short', spool, line_type)]
+            medium_len, medium_diam = geom[('medium', spool, line_type)]
             long_len, long_diam = geom[('long', spool, line_type)]
-            self.assertGreater(long_len, short_len, (spool, line_type))
-            self.assertGreater(long_diam, short_diam, (spool, line_type))
+            self.assertGreater(medium_len, short_len, (spool, line_type))
+            self.assertGreater(medium_diam, short_diam, (spool, line_type))
+            self.assertGreater(long_len, medium_len, (spool, line_type))
+            self.assertGreater(long_diam, medium_diam, (spool, line_type))
             self.assertGreater(short_diam, model_constants.damiao_empty_spool_diameter)
+
+    def test_geometry_lengths_match_what_is_wound(self):
+        """Short is exempt: it keeps the 7.5 m model deployed robots were calibrated against."""
+        geom = model_constants.damiao_spool_geometry
+        for winding, (low, high) in model_constants.winding_lengths.items():
+            if winding == 'short':
+                continue
+            self.assertEqual(geom[(winding, 'low', 'fishing')][0], low)
+            for line_type in ('fishing', 'power'):
+                self.assertEqual(geom[(winding, 'high', line_type)][0], high)
 
 
 if __name__ == '__main__':

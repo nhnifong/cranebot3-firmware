@@ -363,7 +363,7 @@ class AsyncObserver:
     gripper_frame, ...) rather than through pe, datastore, gripper_client or anchors, which
     together with calibration and the robot geometry are the observer's own.
     """
-    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, auto_start=False, local_models=False, port=4245, debug=False, bind_address="127.0.0.1", rec_diagnostics=False, serve_ui=True, ui_port=8090, diamond_size=DIAMOND_SIZE, lerobot_grasp=False) -> None:
+    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, auto_start=False, local_models=False, port=4245, debug=False, bind_address="127.0.0.1", rec_diagnostics=True, serve_ui=True, ui_port=8090, diamond_size=DIAMOND_SIZE, lerobot_grasp=False) -> None:
         self.port = port
         # (half height, half width, floor clearance) of the calibration diamond, in meters.
         # Overridable with --diamond_size. Consumed both by the physical diamond motion in
@@ -4025,13 +4025,6 @@ class AsyncObserver:
             await asyncio.sleep(0.25)
         self.slow_stop_all_spools()
 
-    # A pass's fitness is its optimize_arp_anchors fit_info['total_cost']: the same weighted
-    # sum-of-squares residual cost the optimizer itself minimizes (see multi_card_residuals in
-    # eyelet_calibration.py), computed identically every call so it's directly comparable across
-    # attempts. Lower is better. Warn if a pass costs more than this fraction above the best
-    # (lowest) cost ever recorded for that pass name.
-    CALIBRATION_FITNESS_REGRESSION_TOLERANCE = 0.15
-
     def _flush_calibration_diagnostics(self):
         """Write self._calibration_diagnostics to calibration_diagnostics.pkl.
 
@@ -4090,51 +4083,18 @@ class AsyncObserver:
                     f'to calibration_diagnostics.pkl')
 
     def _record_calibration_fitness(self, pass_name, fit_info):
-        """Attach fit_info to this pass's diagnostics record, and compare its total_cost
-        against the best (lowest) cost ever recorded for this pass name, so a regression is
-        flagged live instead of only being visible from an offline pickle analysis.
+        """Attach fit_info to this pass's diagnostics record and log its total_cost.
 
-        History of the best/last cost per pass persists across runs in
-        calibration_fitness_history.json (survives process restarts, unlike
-        self._calibration_diagnostics which is cleared at the start of every run).
+        total_cost is the weighted sum-of-squares residual cost optimize_arp_anchors minimizes
+        (see multi_card_residuals in eyelet_calibration.py), computed the same way every call,
+        so costs from the pickles of different attempts are directly comparable. Lower is better.
         """
         for record in reversed(self._calibration_diagnostics):
             if record['pass'] == pass_name:
                 record['fit_info'] = fit_info
                 break
         self._flush_calibration_diagnostics()
-
-        history_path = 'calibration_fitness_history.json'
-        try:
-            with open(history_path, 'r') as f:
-                history = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            history = {}
-
-        cost = fit_info['total_cost']
-        now = time.time()
-        entry = history.get(pass_name)
-
-        if entry is not None and cost > entry['best_cost'] * (1 + self.CALIBRATION_FITNESS_REGRESSION_TOLERANCE):
-            msg = (
-                f"Calibration {pass_name} fitness regressed: cost={cost:.4f} vs best-known "
-                f"{entry['best_cost']:.4f} (recorded {time.ctime(entry['best_timestamp'])})"
-            )
-            logger.warning(msg)
-        else:
-            best_desc = f"best-known {entry['best_cost']:.4f}" if entry else "first recorded attempt"
-            logger.info(f'Calibration {pass_name} fitness: cost={cost:.4f} ({best_desc})')
-
-        if entry is None or cost < entry['best_cost']:
-            entry = {**(entry or {}), 'best_cost': cost, 'best_timestamp': now}
-        entry['last_cost'] = cost
-        entry['last_timestamp'] = now
-        history[pass_name] = entry
-
-        tmp_path = history_path + '.tmp'
-        with open(tmp_path, 'w') as f:
-            json.dump(history, f, indent=2)
-        os.replace(tmp_path, history_path)
+        logger.info(f'Calibration {pass_name} fitness: cost={fit_info["total_cost"]:.4f}')
 
     async def full_auto_calibration(self):
         """Automatically determine anchor poses and zero angles
@@ -6094,9 +6054,11 @@ def main():
     )
     parser.add_argument(
         "--rec_diagnostics",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Record the arguments of every optimize_arp_anchors call during full_auto_calibration "
-             "to calibration_diagnostics.pkl, for offline analysis. Arpeggio hardware only."
+             "to calibration_diagnostics.pkl, for offline analysis. On by default so every "
+             "calibration attempt leaves evidence. Arpeggio hardware only."
     )
     parser.add_argument(
         "--bind_address",
