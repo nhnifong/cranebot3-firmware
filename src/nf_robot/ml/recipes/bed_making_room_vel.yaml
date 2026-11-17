@@ -1,0 +1,120 @@
+# Bed making in the room_vel action space, for a policy that reads spatial patch tokens and
+# has a flow matching action head.
+#
+#   cameras  gripper_anchors_224: the gripper and both anchor cameras, each stretched to
+#            224x224, pi05's input size. The synthetic ortho floor view is dropped.
+#            Stretched rather than cropped, so the anchor views keep the whole room. The
+#            robot stretches its live frames the same way at eval time.
+#   state    the same 20 components as stringman_cleans (pi05 caps state at 32).
+#   action   room_vel: vel_z, room_vel_x, room_vel_y, wrist_speed, finger_speed. The
+#            horizontal velocity is in the room frame, so a move toward something seen by
+#            an anchor camera does not depend on the gripper's spin. send_action rotates it
+#            back into the gripper frame with the live spin.
+#
+# Build (does not need a GPU):
+#
+# python src/nf_robot/ml/lerobot/build_dataset.py \
+#     --recipe src/nf_robot/ml/recipes/bed_making_room_vel.yaml \
+#     --temp_dir /home/nhn/data_scratch \
+#     --output_root /home/nhn/data_scratch/bed_making_room_vel \
+#     --upload --keep_intermediate --resume
+#
+# ---------------------------------------------------------------------------------------
+# Policy: pi05 (lerobot/pi05_base)
+#
+# Each camera goes through PaliGemma's SigLIP encoder, which yields a 16x16 grid of
+# patch tokens per view. The VLM attends over all 768 of them, and a separate action
+# expert produces the 50-step action chunk by flow matching. pi05 skips its own resize
+# for images that already arrive at 224x224. Given 960x544 frames it would shrink and pad
+# them, so the anchors would reach the encoder at about 224x127 with the rest padding.
+#
+# --policy.type with --policy.pretrained_path builds the config from the dataset, so the
+# cameras keep their dataset names. No --rename_map is needed here or at eval time.
+# Do not use --policy.use_relative_actions: it subtracts the state from the action,
+# which means nothing for a velocity.
+#
+# Smoke test on the 5090. Only the action expert trains (about 300M parameters), so this
+# fits in 32 GB at a small batch:
+#
+# lerobot-train \
+#   --dataset.repo_id=justink04/bed_making_room_vel \
+#   --policy.type=pi05 \
+#   --policy.pretrained_path=lerobot/pi05_base \
+#   --policy.dtype=bfloat16 \
+#   --policy.gradient_checkpointing=true \
+#   --policy.freeze_vision_encoder=true \
+#   --policy.train_expert_only=true \
+#   --policy.device=cuda \
+#   --policy.push_to_hub=false \
+#   --output_dir=outputs/pi05-bed-room-vel-smoke \
+#   --job_name=pi05-bed-room-vel-smoke \
+#   --batch_size=8 --steps=20 --save_freq=20 --log_freq=5 --num_workers=8 \
+#   --trackio.enable=false
+#
+# Full run on Modal. These are the settings train-pi.md ran on an H100. The dataset is
+# about 63k frames, so 6000 steps at batch 180 is about 17 epochs:
+#
+# python src/nf_robot/ml/lerobot/train_modal.py \
+#   --lerobot_ref public \
+#   --lerobot_extras training,pi \
+#   --gpu_type H100 \
+#   --timeout_hours 10 \
+#   --detach true \
+#   --dataset.repo_id=justink04/bed_making_room_vel \
+#   --policy.type=pi05 \
+#   --policy.pretrained_path=lerobot/pi05_base \
+#   --output_dir=/multitask_dit_data/pi05-bed-room-vel \
+#   --job_name=pi05-bed-room-vel \
+#   --policy.repo_id=justink04/pi05-bed-room-vel \
+#   --policy.push_to_hub=true \
+#   --policy.compile_model=true \
+#   --policy.gradient_checkpointing=true \
+#   --policy.dtype=bfloat16 \
+#   --policy.freeze_vision_encoder=true \
+#   --policy.train_expert_only=true \
+#   --trackio.enable=false \
+#   --steps=6000 \
+#   --save_freq=2000 \
+#   --log_freq=25 \
+#   --num_workers=12 \
+#   --batch_size=180
+#
+# To also fine-tune the VLM, and with it the patch tokens, set train_expert_only=false
+# and freeze_vision_encoder=false, use --gpu_type B200, and start around --batch_size=64.
+# ---------------------------------------------------------------------------------------
+
+output_repo_id: justink04/bed_making_room_vel
+camera_mode: gripper_anchors_224
+center_crop: false
+pad_clamp: false
+
+action_space: room_vel
+
+# The recording already carries anchor_poses and anchor_cam_tilt, so nothing is backfilled.
+merge:
+  - justink04/m2-bed-making-11.11.26
+
+# The 20 components stringman_cleans keeps; see the reasons there.
+keep_state_features:
+  - vel_x
+  - vel_y
+  - vel_z
+  - wrist_speed
+  - finger_speed
+  - gripper_pos_x
+  - gripper_pos_y
+  - gripper_pos_z
+  - gripper_rot_4
+  - gripper_rot_5
+  - spin
+  - finger_angle
+  - laser_rangefinder
+  - finger_pressure
+  - wrist_angle
+  - target_force
+  - tension_0
+  - tension_1
+  - tension_2
+  - tension_3
+
+upload: true

@@ -104,6 +104,10 @@ _ACTION_SPACES: dict[str, list[str]] = {
         "contact_vec_x", "contact_vec_y", "contact_vec_z",
         "episode_end",
     ],
+    # Horizontal velocity in the room frame instead of the gripper frame, so a traversal
+    # toward something seen from an anchor camera does not depend on the gripper's spin.
+    # Ordered as the components sit in dual_vel_contact, which build_dataset trims to.
+    "room_vel": ["vel_z", "room_vel_x", "room_vel_y", "wrist_speed", "finger_speed"],
 }
 DEFAULT_ACTION_SPACE = "dual_vel_contact"
 
