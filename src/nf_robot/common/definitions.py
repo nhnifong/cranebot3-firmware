@@ -81,7 +81,7 @@ damiao_full_spool_diameter_power_line = 86.1
 # around the eyelet. A power line, when fitted, is always on the upper spool.
 winding_lengths = {
     'short':  (15.0, 7.5),
-    'medium': (17.5, 10.0),
+    'medium': (18.5, 10.0),
     'long':   (20.0, 12.0),
 }
 # what anchor_arp_eval winds on a new anchor. Not what a server.conf without a winding field

@@ -23,6 +23,7 @@ STEPS_PER_REV = 4096
 GEAR_RATIO = 10/45 # a finger lever makes this many revolutions per revolution of the drive gear
 FINGER_TRAVEL_DEG = 59 # actually 60 but need small margin of space at wide open. 
 FINGER_TRAVEL_STEPS = FINGER_TRAVEL_DEG / 360 / GEAR_RATIO * STEPS_PER_REV
+WRIST_WIGGLE_STEPS = int(15 / 360 * STEPS_PER_REV)
 
 def verify_i2c_bus(i2c):
     """Scan the I2C bus and confirm exactly the expected devices are present, plus one
@@ -76,6 +77,10 @@ def verify_imu(i2c, addrs):
 
 
 def main():
+    # The cranebot service holds the camera and the servo bus, so it must be stopped first.
+    print('Stopping cranebot service...')
+    subprocess.run(["sudo", "systemctl", "stop", "cranebot.service"])
+
     # Give this Pi a hostname unique to its role so the gripper and the two
     # anchors in a setup don't all share one hostname.
     set_component_hostname("gripper")
@@ -107,8 +112,8 @@ def main():
         # spin the wrist motor a small amount
         input(f"Found exactly two servos with IDs 1 and 2. Press enter to move servo 2 and note which it is")
         wiggle_motor(WRIST_MOTOR_ID)
-        val = input("Did the wrist move? y/n")
-        if val == 'y':
+        val = input("Did the fingers move? y/n ")
+        if val != 'y':
             print('servo IDs correct.')
         else:
             input('Servo IDs are backwards will be swapped. press enter to confirm.')
@@ -127,8 +132,8 @@ def main():
         current_id = servos[0]
         input(f"Found exactly one servo with ID {current_id}. Press enter to move it and note which it is")
         wiggle_motor(current_id)
-        val = input("Did the wrist move? y/n")
-        if val == 'y':
+        val = input("Did the fingers move? y/n ")
+        if val != 'y':
             if current_id == WRIST_MOTOR_ID:
                 print(f"Servo is wrist and already set correctly to {WRIST_MOTOR_ID}.")
             else:
@@ -158,7 +163,15 @@ def main():
     ads = ADS1015(i2c)
     pressure_sensor = AnalogIn(ads, ads1x15.Pin.A0)
 
-    input("Press Enter to move gripper fingers...")
+    input("Press Enter to test the motors...")
+    print("Wiggling wrist...")
+    sts.torque_enable(WRIST_MOTOR_ID, True)
+    wrist_pos = sts.get_position(WRIST_MOTOR_ID)
+    for target in (wrist_pos + WRIST_WIGGLE_STEPS, wrist_pos - WRIST_WIGGLE_STEPS, wrist_pos):
+        sts.set_position(WRIST_MOTOR_ID, target)
+        time.sleep(0.5)
+    sts.torque_enable(WRIST_MOTOR_ID, False)
+
     # Find the position at which the gripper fingers touch.
     print(f"Calibrating finger servo...")
     sts.reset_encoder_to_midpoint(FINGER_MOTOR_ID)
