@@ -32,6 +32,16 @@ GEAR_RATIO = 10/45
 FINGER_TRAVEL_DEG = 59 
 FINGER_TRAVEL_STEPS = FINGER_TRAVEL_DEG / 360 / GEAR_RATIO * STEPS_PER_REV
 DT = 1/60
+# Onboarding signals. A WiFi QR code was read: the fingers open slowly by this fraction of
+# their travel over this long, unlike identify()'s quick finger twitch.
+CODE_SEEN_OPEN_FRACTION = 0.2
+CODE_SEEN_OPEN_S = 3.0
+# how far identify() twitches the finger motor, in steps
+IDENTIFY_TWITCH_STEPS = 120
+# joining that network failed: the wrist turns this far each way and back, a joint
+# neither of the other signals uses.
+CONNECT_FAILED_WIGGLE_STEPS = int(8 / 360 * STEPS_PER_REV)
+CONNECT_FAILED_WIGGLE_STEP_S = 0.5
 GRAVITY = 9.81
 # Ceiling on the raw gyro backlog, in samples: a minute of the 100Hz IMU loop. Only fills
 # while the host has recording on, and it drains every send, so this is just a bound on
@@ -249,6 +259,8 @@ class GripperArpServer(RobotComponentServer):
         self.total_wrist_turns = 0
 
         self.motor_loop_pause = False
+        # held for the length of one onboarding signal, so two cannot fight over the motors
+        self.feedback_lock = asyncio.Lock()
 
         # taps to trigger wifi reset
         self.taps = deque(maxlen=5)
@@ -856,11 +868,63 @@ class GripperArpServer(RobotComponentServer):
         self.motor_loop_pause = True
         pos = self.motors.get_position(FINGER)
         for _ in range(3):
-            self.motors.set_position(FINGER, pos + 60)
+            self.motors.set_position(FINGER, pos + IDENTIFY_TWITCH_STEPS)
             await asyncio.sleep(0.2)
             self.motors.set_position(FINGER, pos)
             await asyncio.sleep(0.2)
         self.motor_loop_pause = False
+
+    async def feedback_code_seen(self):
+        """Open the fingers slowly by CODE_SEEN_OPEN_FRACTION of their travel. If they are
+        too near fully open for that, they first close enough to make room."""
+        if not self.motors_ok:
+            return
+        async with self.feedback_lock:
+            self.motor_loop_pause = True
+            try:
+                self.motors.torque_enable(FINGER, True)
+                closed, opened = self.finger_closed_pos, self.finger_open_pos
+                # 0 closed, 1 fully open
+                start = remap(self.motors.get_position(FINGER), closed, opened, 0, 1)
+                if start > 1 - CODE_SEEN_OPEN_FRACTION:
+                    start = 1 - CODE_SEEN_OPEN_FRACTION
+                    self.motors.set_position(FINGER, remap(start, 0, 1, closed, opened))
+                    await asyncio.sleep(0.5)
+                end = max(0.0, start) + CODE_SEEN_OPEN_FRACTION
+                end_pos = remap(end, 0, 1, closed, opened)
+                # one command at a speed that covers the distance in CODE_SEEN_OPEN_S, so the
+                # servo finishes the move even if something blocks the event loop meanwhile
+                speed = max(1, int(abs(opened - closed) * CODE_SEEN_OPEN_FRACTION / CODE_SEEN_OPEN_S))
+                self.motors.set_position(FINGER, end_pos, speed=speed)
+                await asyncio.sleep(CODE_SEEN_OPEN_S)
+                # The motor loop writes the fingers only when its target changes, and starts
+                # from the saved angle, so make both agree with where the fingers now are.
+                angle = remap(end_pos, opened, closed, -90, 90)
+                self.in_force_mode = False
+                self.desired_finger_angle = angle
+                self.saved_finger_angle = angle
+                self.save_state()
+            finally:
+                self.motor_loop_pause = False
+
+    async def feedback_connect_failed(self):
+        """Wiggle the wrist one way, the other, and back to where it was."""
+        if not self.motors_ok:
+            return
+        async with self.feedback_lock:
+            self.motor_loop_pause = True
+            try:
+                self.motors.torque_enable(WRIST, True)
+                pos = self.motors.get_position(WRIST)
+                for target in (pos + CONNECT_FAILED_WIGGLE_STEPS, pos - CONNECT_FAILED_WIGGLE_STEPS, pos):
+                    self.motors.set_position(WRIST, target)
+                    await asyncio.sleep(CONNECT_FAILED_WIGGLE_STEP_S)
+            finally:
+                self.motor_loop_pause = False
+
+    async def feedback_connected(self):
+        async with self.feedback_lock:
+            await self.identify()
 
     def countFingerPresses(self, pressure):
         """Five taps on the finger pad within two seconds sets the wifi reset event.

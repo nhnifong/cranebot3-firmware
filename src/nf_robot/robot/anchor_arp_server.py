@@ -53,6 +53,16 @@ IDENTIFY_TONE_S = 0.10       # length of one honk
 IDENTIFY_HONK_GAP_S = 0.07   # silence between honks of the same digit
 IDENTIFY_DIGIT_GAP_S = 0.40  # silence between digits, and what a zero is made of
 
+# Onboarding signals, as (pitch in Hz or None for a rest, seconds). Kept in the same low
+# octave as identify() for the same CAN deadline reason, and shaped unlike it: identify() is
+# runs of repeated honks, these are short melodies.
+NOTE_E2, NOTE_F2, NOTE_FS2, NOTE_G2, NOTE_DS2 = 82.41, 87.31, 92.50, 98.00, 77.78
+# a WiFi QR code was read: a rising E-G
+CODE_SEEN_SONG = ((NOTE_E2, 0.18), (None, 0.06), (NOTE_G2, 0.30))
+# joining that network failed: four quick notes falling a semitone at a time from F#
+CONNECT_FAILED_SONG = ((NOTE_FS2, 0.09), (None, 0.04), (NOTE_F2, 0.09), (None, 0.04),
+                       (NOTE_E2, 0.09), (None, 0.04), (NOTE_DS2, 0.09))
+
 # Modes an anchor accepts, its normal one first. A pi 3a+ has the cpu and thermal headroom
 # to hold 1080p30, which the zero 2w does not, so it starts in the faster mode.
 anchor_stream_modes = ('anchor_control',)
@@ -180,6 +190,9 @@ class AnchorArpServer(RobotComponentServer):
         # None suppresses the parent's line updates; readOtherSensors sends both spools
         self.spooler = None
         self.spools = [spooler1, spooler2]
+
+        # held for the length of one song; see sing()
+        self.song_lock = threading.Lock()
 
     async def check_motor_ids(self, settle_s=0.5):
         """Verify both motors answer on the CAN ids this server addresses them by.
@@ -376,28 +389,50 @@ class AnchorArpServer(RobotComponentServer):
         Takes seconds, and busy-waits to hold the pitch, so call it off the event loop.
         """
         digits = identity_digits(get_local_ip())
-        m = self.motors[spool_no]
-        self.spools[spool_no].pauseTrackingLoop()
-        try:
-            m.set_acceleration(IDENTIFY_ACCEL)
-            m.set_deceleration(-IDENTIFY_ACCEL)
-            m.send_cmd_vel(target_velocity=0.0)
-            if digits is None:
-                # Nothing to announce. One long low note still says which anchor is here.
-                play_tone(m, IDENTIFY_NOTES_HZ[0], 0.6)
-                return
-            logging.info(f'identify: singing {"".join(map(str, digits))}')
-            for note_hz, digit in zip(IDENTIFY_NOTES_HZ, digits):
-                for _ in range(digit):
-                    play_tone(m, note_hz, IDENTIFY_TONE_S)
-                    time.sleep(IDENTIFY_HONK_GAP_S)
-                time.sleep(IDENTIFY_DIGIT_GAP_S)
-        finally:
-            # the tracking loop only resends these when MAX_ACCEL changes, so it will not
-            # undo the singing limit on its own.
-            m.set_acceleration(self.conf['MAX_ACCEL'])
-            m.set_deceleration(-self.conf['MAX_ACCEL'])
-            self.spools[spool_no].resumeTrackingLoop()
+        if digits is None:
+            # Nothing to announce. One long low note still says which anchor is here.
+            self.sing(((IDENTIFY_NOTES_HZ[0], 0.6),), spool_no)
+            return
+        logging.info(f'identify: singing {"".join(map(str, digits))}')
+        song = []
+        for note_hz, digit in zip(IDENTIFY_NOTES_HZ, digits):
+            song += [(note_hz, IDENTIFY_TONE_S), (None, IDENTIFY_HONK_GAP_S)] * digit
+            song.append((None, IDENTIFY_DIGIT_GAP_S))
+        self.sing(song, spool_no)
+
+    def sing(self, song, spool_no=1):
+        """Play (pitch Hz or None for a rest, seconds) notes on one motor.
+
+        Busy-waits to hold the pitch, so call it off the event loop. Songs are serialized,
+        since two at once would fight over the motor's velocity and acceleration.
+        """
+        with self.song_lock:
+            m = self.motors[spool_no]
+            self.spools[spool_no].pauseTrackingLoop()
+            try:
+                m.set_acceleration(IDENTIFY_ACCEL)
+                m.set_deceleration(-IDENTIFY_ACCEL)
+                m.send_cmd_vel(target_velocity=0.0)
+                for note_hz, duration_s in song:
+                    if note_hz is None:
+                        time.sleep(duration_s)
+                    else:
+                        play_tone(m, note_hz, duration_s)
+            finally:
+                # the tracking loop only resends these when MAX_ACCEL changes, so it will not
+                # undo the singing limit on its own.
+                m.set_acceleration(self.conf['MAX_ACCEL'])
+                m.set_deceleration(-self.conf['MAX_ACCEL'])
+                self.spools[spool_no].resumeTrackingLoop()
+
+    async def feedback_code_seen(self):
+        await asyncio.to_thread(self.sing, CODE_SEEN_SONG)
+
+    async def feedback_connect_failed(self):
+        await asyncio.to_thread(self.sing, CONNECT_FAILED_SONG)
+
+    async def feedback_connected(self):
+        await asyncio.to_thread(self.identify)
 
     async def process_imu(self, ws):
         """Enable the motors when a client connects.

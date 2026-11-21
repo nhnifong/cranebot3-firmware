@@ -186,6 +186,35 @@ class RobotComponentServer:
             logging.error(f'component error state: {message}')
         self.error_state = message
 
+    async def play_feedback(self, kind):
+        """Play one of the onboarding signals: 'see_code' when a WiFi QR code is read,
+        'failed' when joining its network fails, 'success' when it joins. The QR scanner
+        plays them before the server is running; the host's 'feedback' debug command plays
+        them on demand. A fault in one is logged, never raised, so it cannot stop the
+        scanner or drop a client."""
+        handlers = {
+            'see_code': self.feedback_code_seen,
+            'failed': self.feedback_connect_failed,
+            'success': self.feedback_connected,
+        }
+        if kind not in handlers:
+            logging.warning(f'unknown feedback "{kind}", expected one of {sorted(handlers)}')
+            return
+        try:
+            await handlers[kind]()
+        except Exception:
+            logging.exception(f'"{kind}" feedback failed')
+
+    # Overridden by components that have a way to signal; others have nothing to play.
+    async def feedback_code_seen(self):
+        pass
+
+    async def feedback_connect_failed(self):
+        pass
+
+    async def feedback_connected(self):
+        pass
+
     def clear_error_state(self):
         """Return this component to healthy."""
         if self.error_state is not None:
@@ -308,6 +337,11 @@ class RobotComponentServer:
             # remove color codes
             line = ansi_escape.sub('', line)
             print(line[:-1])
+            # stdout only reaches the journal; camera errors belong in cranebot.log, which
+            # pull_logs returns. Matches rpicam-vid's "ERROR: ***" and libcamera's
+            # "[time] [pid] ERROR V4L2 ..." lines.
+            if line.startswith('ERROR') or ' ERROR ' in line:
+                logging.error(f'rpicam-vid: {line.rstrip()}')
 
             # Look for the line indicating the stream is ready
             match = ready_line_re.match(line)
@@ -332,7 +366,10 @@ class RobotComponentServer:
             # nothing wrong keep waiting for output lines
 
         # wait for the subprocess to exit, whether because we killed it, or it stopped normally
-        return await self.rpicam_process.wait()
+        returncode = await self.rpicam_process.wait()
+        if returncode != 0:
+            logging.warning(f'rpicam-vid exited with code {returncode}')
+        return returncode
 
     async def read_temperature(self):
         while True:
@@ -614,6 +651,9 @@ class RobotComponentServer:
 
             if 'set_fan_duty' in update:
                 self.set_fan_duty(update['set_fan_duty'])
+
+            if 'feedback' in update:
+                self.extra_tasks.append(asyncio.create_task(self.play_feedback(update['feedback'])))
 
             if 'get_logs' in update:
                 self.update['logs'] = self.read_recent_logs()

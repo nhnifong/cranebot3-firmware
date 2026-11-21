@@ -241,3 +241,42 @@ class TestGripperArpServer(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(completion, {'turns_done': 0, 'total_wrist_turns': 0})
 
         self.assertFalse(self.server.wrist_busy)
+    async def test_feedback_see_code_opens_fingers_part_way(self):
+        """'see_code' opens the fingers part way in one slow move, first closing enough to
+        have room if they were near fully open, and leaves the motor loop agreeing with them."""
+        self.server.finger_closed_pos, self.server.finger_open_pos = 1000, 4000
+        self.mock_motors.get_position.return_value = 3800  # nearly open already
+        self.mock_motors.set_position.reset_mock()
+
+        with patch('nf_robot.robot.gripper_arp_server.CODE_SEEN_OPEN_S', 0.05):
+            async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
+                await ws.send(json.dumps({'feedback': 'see_code'}))
+                for _ in range(40):
+                    await asyncio.sleep(0.05)
+                    if self.server.desired_finger_angle == -90:
+                        break
+
+        finger_moves = [c for c in self.mock_motors.set_position.call_args_list if c.args[0] == 1]
+        self.assertAlmostEqual(finger_moves[0].args[1], 3400)
+        self.assertAlmostEqual(finger_moves[1].args[1], 4000)
+        self.assertEqual(self.server.desired_finger_angle, -90)
+        self.assertEqual(self.server.saved_finger_angle, -90)
+        self.assertFalse(self.server.motor_loop_pause)
+
+    async def test_feedback_failed_wiggles_wrist_and_returns(self):
+        """'failed' turns the wrist each way and back to where it started."""
+        self.mock_motors.get_position.return_value = 2000
+        self.mock_motors.set_position.reset_mock()
+
+        with patch('nf_robot.robot.gripper_arp_server.CONNECT_FAILED_WIGGLE_STEP_S', 0.01):
+            await self.server.play_feedback('failed')
+
+        wrist_moves = [c.args[1] for c in self.mock_motors.set_position.call_args_list if c.args[0] == 2]
+        self.assertEqual(wrist_moves[-3:], [2091, 1909, 2000])
+        self.assertFalse(self.server.motor_loop_pause)
+
+    async def test_feedback_fault_is_logged_not_raised(self):
+        """A servo fault during a signal must not escape play_feedback or leave the motor loop paused."""
+        self.mock_motors.set_position.side_effect = TimeoutError('bus')
+        await self.server.play_feedback('failed')
+        self.assertFalse(self.server.motor_loop_pause)

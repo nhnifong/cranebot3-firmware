@@ -153,6 +153,7 @@ BUILTIN_VERBS = frozenset({
     'swinglatencycal', 'polecal', 'reset_wrist', 'spind', 'sync_timezone', 'pull_logs', 'fan',
     'untwist', 'setvar', 'savevar', 'spoollog', 'holdtension', 'tensionreg', 'findorigin', 'centerorigin',
     'servograsp', 'servowatch', 'servocenter', 'servoloop', 'heighthold', 'grab-profile',
+    'feedback',
 })
 # (seconds) how far a wrist record may be from a frame's capture time and still describe
 # where the wrist was when that frame was taken. Grip sensors arrive with the gripper's
@@ -1620,6 +1621,8 @@ class AsyncObserver:
             await self.sync_timezone_to_bots()
         if item.action == 'pull_logs':
             asyncio.create_task(self.pull_logs_to_zip())
+        if words and words[0] == 'feedback':
+            await self.play_component_feedback(words[1:])
         if item.action.startswith('fan '):
             # 'fan MIN MAX' sets the duty range every component's fan follows between its low
             # and high temperatures. Kept on each Pi across reboots.
@@ -1752,6 +1755,30 @@ class AsyncObserver:
                 async with self.prefer_swing_cancellation():
                     await self.servo.score()
             r = await self.invoke_motion_task(servo_score_loop())
+
+    async def play_component_feedback(self, args):
+        """'feedback TARGET KIND' plays one of the WiFi onboarding signals, to check what
+        it looks or sounds like without onboarding again. TARGET is gripper, anchors (all of
+        them) or an anchor number; KIND is see_code, failed or success."""
+        kinds = ('see_code', 'failed', 'success')
+        usage = f'expected "feedback gripper|anchors|ANCHOR_NUM {"|".join(kinds)}"'
+        if len(args) != 2 or args[1] not in kinds:
+            logger.warning(f'invalid feedback command, {usage}: feedback {" ".join(args)}')
+            return
+        target, kind = args
+        if target == 'gripper':
+            clients = [self.gripper_client] if self.gripper_client is not None else []
+        elif target == 'anchors':
+            clients = list(self.anchors.values())
+        elif target.isdigit():
+            clients = [self.anchors[int(target)]] if int(target) in self.anchors else []
+        else:
+            logger.warning(f'invalid feedback target "{target}", {usage}')
+            return
+        if not clients:
+            logger.warning(f'feedback: no connected component matches "{target}"')
+            return
+        await asyncio.gather(*[client.send_commands({'feedback': kind}) for client in clients])
 
     async def set_tension_reg(self, enabled: bool):
         """Enable or disable onboard tension regulation (the floor + soft mute) on both

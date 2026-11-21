@@ -27,7 +27,7 @@ import time
 # damiao_motor is hardware-only; stub the whole module before local imports resolve it.
 sys.modules.setdefault('damiao_motor', MagicMock())
 
-from nf_robot.robot.anchor_arp_server import AnchorArpServer
+from nf_robot.robot.anchor_arp_server import AnchorArpServer, CODE_SEEN_SONG, CONNECT_FAILED_SONG
 
 from port_utils import free_port
 
@@ -465,6 +465,28 @@ class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
                 spool.pauseTrackingLoop.assert_called()
                 spool.resumeTrackingLoop.assert_called()
                 motor.send_cmd_vel.assert_called()
+
+    async def test_feedback_songs_dispatched_from_command(self):
+        """The 'feedback' key plays the matching onboarding song on the low spool's motor."""
+        songs = []
+        with patch.object(self.server, 'sing', side_effect=lambda song, spool_no=1: songs.append(song)):
+            async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
+                await ws.send(json.dumps({'feedback': 'see_code'}))
+                await ws.send(json.dumps({'feedback': 'failed'}))
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and len(songs) < 2:
+                    await asyncio.sleep(0.05)
+        self.assertCountEqual(songs, [CODE_SEEN_SONG, CONNECT_FAILED_SONG])
+
+    async def test_sing_plays_notes_and_rests(self):
+        """sing() plays each pitched note and sleeps through rests, then resumes the loop."""
+        self.server.conf['MAX_ACCEL'] = 5.0
+        pitches = []
+        with patch('nf_robot.robot.anchor_arp_server.play_tone',
+                   side_effect=lambda m, hz, d: pitches.append(hz)):
+            await asyncio.to_thread(self.server.sing, CONNECT_FAILED_SONG)
+        self.assertEqual(pitches, [92.50, 87.31, 82.41, 77.78])
+        self.mock_spools[1].resumeTrackingLoop.assert_called()
 
     # ------------------------------------------------------------------ shutdown
 

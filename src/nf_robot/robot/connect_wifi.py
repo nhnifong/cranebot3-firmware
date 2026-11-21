@@ -13,7 +13,10 @@ from libcamera import controls
 # sudo apt-get install libzbar0
 from pyzbar.pyzbar import decode
 
-async def ensure_connection():
+# seconds between attempts to reopen a QR scanner camera that failed
+CAMERA_RETRY_S = 10
+
+async def ensure_connection(feedback=None):
     """
     Checks for wifi connection.
     Returns once a wifi connection is confirmed.
@@ -24,6 +27,9 @@ async def ensure_connection():
     Returns False if an existing wifi connnection was used, even if it took longer than
     the initial check to come up and the scanner was started in the meantime.
     if no connection is achieved, doesn't return.
+
+    feedback, if given, is the component server, whose play_feedback() signals when a
+    code is read and when joining its network fails.
     """
     connected_event = asyncio.Event()
     # set by the scanner only when nmcli successfully connects using a decoded QR code
@@ -43,7 +49,7 @@ async def ensure_connection():
         logging.info("No connection found after 10 seconds. Starting QR Scanner...")
     
     # Task 2: Scan for QR codes
-    scanner_task = asyncio.create_task(scan_and_configure_wifi(connected_event, qr_connected_event))
+    scanner_task = asyncio.create_task(scan_and_configure_wifi(connected_event, qr_connected_event, feedback))
 
     logging.info("Starting WiFi connection tasks...")
 
@@ -87,23 +93,39 @@ async def monitor_wifi_status(connected_event):
         
         await asyncio.sleep(5)
 
-async def scan_and_configure_wifi(connected_event, qr_connected_event):
+async def scan_and_configure_wifi(connected_event, qr_connected_event, feedback=None):
     """
     Task 2: Continuously takes raw video frames to look for a WiFi QR code.
+
+    The scanner is the only way to onboard a unit, and nothing awaits this task until
+    a connection is made, so a camera failure is logged here and the camera reopened
+    rather than letting the task die unseen.
     """
-    # Initialize Picamera2
+    failures = 0
+    while not connected_event.is_set():
+        try:
+            await scan_with_camera(connected_event, qr_connected_event, feedback)
+        except Exception as e:
+            # Full traceback once; repeats every CAMERA_RETRY_S would flood cranebot.log.
+            if failures == 0:
+                logging.exception(f"QR scanner camera failed. Retrying every {CAMERA_RETRY_S}s.")
+            else:
+                logging.error(f"QR scanner camera failed again ({failures + 1} times): {e!r}")
+            failures += 1
+            await asyncio.sleep(CAMERA_RETRY_S)
+
+async def scan_with_camera(connected_event, qr_connected_event, feedback):
     picam2 = Picamera2()
-    
-    # Configure camera for a moderate resolution RGB output
-    config = picam2.create_preview_configuration(main={"size": (1920, 1080), "format": "RGB888"})
-    picam2.configure(config)
-    picam2.start()
-    # enable continuous autofocus
-    picam2.set_controls({"AfMode": controls.AfModeEnum.Continuous})
-
-    logging.info("Camera scanning for QR codes (Picamera2 / Direct Numpy)...")
-
     try:
+        # Configure camera for a moderate resolution RGB output
+        config = picam2.create_preview_configuration(main={"size": (1920, 1080), "format": "RGB888"})
+        picam2.configure(config)
+        picam2.start()
+        # enable continuous autofocus
+        picam2.set_controls({"AfMode": controls.AfModeEnum.Continuous})
+
+        logging.info("Camera scanning for QR codes (Picamera2 / Direct Numpy)...")
+
         while not connected_event.is_set():
             # Capture raw RGB array
             # shape is (480, 640, 3)
@@ -123,7 +145,11 @@ async def scan_and_configure_wifi(connected_event, qr_connected_event):
                     qr_data = obj.data.decode('utf-8')
                     if qr_data.startswith("WIFI:"):
                         logging.info("WiFi QR code detected.")
-                        
+                        # Played to the end before connecting: nmcli blocks the event loop,
+                        # which would stall a signal running alongside it.
+                        if feedback is not None:
+                            await feedback.play_feedback('see_code')
+
                         # Attempt to connect
                         success = await connect_via_nmcli(qr_data)
                         
@@ -132,6 +158,10 @@ async def scan_and_configure_wifi(connected_event, qr_connected_event):
                             logging.info("Network configuration applied. Waiting for connection...")
                             # Pause to allow the monitor task to verify the connection
                             await asyncio.sleep(10)
+                        else:
+                            logging.info("Could not join the network from the QR code.")
+                            if feedback is not None:
+                                await feedback.play_feedback('failed')
 
             except Exception as e:
                 logging.info(f"Error during scan loop: {e}")
