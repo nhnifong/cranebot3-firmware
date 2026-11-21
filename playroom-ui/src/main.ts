@@ -152,12 +152,13 @@ const room = new DynamicRoom(scene);
 const gamepad = new GamepadController();
 
 // Shared corners array: 2 anchors (indices 0-1) + 2 eyelets (indices 2-3), the fixed
-// Arpeggio topology.
+// Arpeggio topology. Placeholders match the host's default layout in config_loader.py
+// (anchors diagonally opposite, each eyelet across the wall from its anchor).
 const acoords = [
-  { x: 2.5,  y: -2.5, rotZ: -Math.PI / 4 },
-  { x: 2.5,  y: 2.5,  rotZ: -3 * Math.PI / 4 },
-  { x: -2.5, y: 2.5,  rotZ: 3 * Math.PI / 4 },
-  { x: -2.5, y: -2.5, rotZ: Math.PI / 4 },
+  { x: 2,  y: 2,  rotZ: -Math.PI / 4 },
+  { x: -2, y: -2, rotZ: 3 * Math.PI / 4 },
+  { x: -2, y: 2,  rotZ: 3 * Math.PI / 4 },
+  { x: 2,  y: -2, rotZ: Math.PI / 4 },
 ];
 
 const corners: (ArpAnchor | Eyelet)[] = acoords.map((ac, i) => {

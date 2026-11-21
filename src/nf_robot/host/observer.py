@@ -721,12 +721,14 @@ class AsyncObserver:
     def send_anchor_poses(self):
         """Push the stored poses and the setup values that ride with them.
 
-        Only arpeggio anchors have eyelets and tilt adapters to report. The pole goes in
+        Only arpeggio anchors have eyelets and tilt adapters to report. A fresh config is still
+        UNSPECIFIED until anchors are discovered but holds the default arpeggio layout, so it
+        reports them too; otherwise the UI is left drawing its own placeholder eyelets. The pole goes in
         either way: every robot hangs from one. So does the host's own version, which is how
         a UI tells which setup steps this host still needs it to ask about.
         """
         host_version = host_nf_robot_version()
-        if self.config.anchor_type == common.AnchorType.ARPEGGIO:
+        if self.config.anchor_type != common.AnchorType.PILOT:
             self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
                 poses=[a.pose for a in self.config.anchors],
                 eyelets=[a.indirect_line.eyelet_pos for a in self.config.anchors],

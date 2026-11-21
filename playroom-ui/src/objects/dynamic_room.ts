@@ -43,10 +43,10 @@ export class DynamicRoom {
     // array in main.ts: 0-1 anchors, 2-3 eyelets. Overwritten by updateCeilingCorner as poses
     // arrive; the placeholder layout only has to be a box.
     this.corners = [
-      new THREE.Vector3(2.5, 3, 2.5),   // 0: anchor 0
-      new THREE.Vector3(2.5, 3, -2.5),  // 1: anchor 1
-      new THREE.Vector3(-2.5, 3, -2.5), // 2: eyelet 2
-      new THREE.Vector3(-2.5, 3, 2.5)   // 3: eyelet 3
+      new THREE.Vector3(2, 3, -2),  // 0: anchor 0
+      new THREE.Vector3(-2, 3, 2),  // 1: anchor 1
+      new THREE.Vector3(-2, 3, -2), // 2: eyelet 2
+      new THREE.Vector3(2, 3, 2)    // 3: eyelet 3
     ];
 
     // Setup BufferGeometry

@@ -9,10 +9,10 @@ DEFAULT_CONFIG_PATH = Path(__file__).parent / 'configuration.json'
 # Anchors across from eachother
 anchor_defs = [
     # (num, position_xyz, rotation_rvec_xyz)
-    (0, (3.0, 3.0, 2.0),  (0.0, 0.0, -np.pi/4)),    # Anchor -45 deg
-    (2, (-3.0, 3.0, 2.0), (0.0, 0.0, -np.pi/4)),  # Eyelet -135 deg
-    (1, (-3.0, -3.0, 2.0),(0.0, 0.0, 3*np.pi/4)),     # Anchor 45 deg
-    (3, (3.0, -3.0, 2.0), (0.0, 0.0, 3*np.pi/4)),   # Eyelet 135 deg
+    (0, (2.0, 2.0, 2.0),  (0.0, 0.0, -np.pi/4)),    # Anchor -45 deg
+    (2, (-2.0, 2.0, 2.0), (0.0, 0.0, -np.pi/4)),  # Eyelet -135 deg
+    (1, (-2.0, -2.0, 2.0),(0.0, 0.0, 3*np.pi/4)),     # Anchor 45 deg
+    (3, (2.0, -2.0, 2.0), (0.0, 0.0, 3*np.pi/4)),   # Eyelet 135 deg
 ]
 
 def default_arp_anchors():
