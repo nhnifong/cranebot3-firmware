@@ -91,6 +91,8 @@ qa-anchor-arp = "nf_robot.qa.anchor_arp_eval:main"
 "nf_robot.host.mcp_bridge" = ["GUIDE.md"]
 # read by the api_docs tool
 "nf_robot.host.maneuvers" = ["README.md"]
+# the bill of materials; neufangled.com/bom renders it
+"nf_robot.hardware" = ["bill_of_materials.csv"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
