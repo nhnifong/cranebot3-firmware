@@ -173,6 +173,8 @@ Run QA scripts for the specific component type
     /opt/robot/env/bin/qa-gripper-arp
     /opt/robot/env/bin/qa-anchor-arp
 
+Newer images also provide these as `qgrip` and `qanc`.
+
 These scripts both check whether everything is connected as it should be and interactively help wind the spools with the correct amount of wire.
 
 To update to the lastest nf_robot version in a component

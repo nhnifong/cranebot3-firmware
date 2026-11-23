@@ -58,6 +58,11 @@ run_in_chroot "python3 -m venv --system-site-packages /opt/robot/env"
 run_in_chroot "/opt/robot/env/bin/pip install --upgrade pip"
 run_in_chroot "/opt/robot/env/bin/pip install \"nf_robot[pi]\""
 
+# Short names for the component QA scripts. Symlinks rather than shell aliases
+# so they also work under sudo and in non-interactive shells.
+ln -sf /opt/robot/env/bin/qa-gripper-arp "$ROOTFS_DIR/usr/local/bin/qgrip"
+ln -sf /opt/robot/env/bin/qa-anchor-arp "$ROOTFS_DIR/usr/local/bin/qanc"
+
 # Give pi permission to run this service
 run_in_chroot "chown -R pi:pi /opt/robot"
 run_in_chroot "usermod -aG netdev pi"
