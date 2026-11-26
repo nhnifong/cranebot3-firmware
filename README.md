@@ -4,6 +4,10 @@ Control code for the Stringman household robotic crane from Neufangled Robotics
 
 ![](https://storage.googleapis.com/nf-site-assets-prod-b/assets/white_gripper.webp)
 
+This repo contains the code running on the Raspberry Pi's on the robot components as well as the motion controller on the host machine
+
+It's got "firmware" in the name because it used to be just the code for some ESP-32s before I switched to Pi's for more video bandwidth. Now it's almost all Python.
+
 ## [Build Guides and Documentation](https://neufangled.com/docs)
 
 Purchase assembled robots or kits at [neufangled.com](https://neufangled.com/store)
@@ -11,7 +15,7 @@ Purchase assembled robots or kits at [neufangled.com](https://neufangled.com/sto
 ## Installation of stringman controller (Users)
 
 Cloing the repo is not required. Only installation from pip.
-Note that Pytorch and CUDA are dependencies which is around 5.5GB
+Note that Pytorch and CUDA are dependencies which is around 2GB
 
 #### Linux
 
@@ -29,12 +33,15 @@ Note that Pytorch and CUDA are dependencies which is around 5.5GB
 
 #### Windows
 
-Type "Microsft Store" in the start menu, Search for python, Install python 3.13, then open powershell
+Type "Microsft Store" in the start menu, Search for python, Install python 3.13, then open powershell.
+Install in any directory you like. This command uses the system python but a venv works fine on windows too.
 
     cd ~
     python3.13.exe -m pip install "nf_robot[host]"
 
 ## Start robot controller in LAN-only mode.
+
+From the directory and venv where it is installed, run
 
     stringman-headless
 
@@ -50,9 +57,9 @@ The same UI can also be opened at [neufangled.com/playroom](https://neufangled.c
 
 Selecting LAN mode opens the robot in the same way, but a "Bind robot to account" option is available in the run menu. Choosing this asks you to log in with an identity provider such as google, and binds your robot to neufangled.com. It can then be controlled by you or users whom you share it with from anywhere, and managed at [neufangled.com/my-robots](https://neufangled.com/my-robots) whenever it is running with `--prod`.
 
-This extra service is free and completely optional. We understand that privacy and convenience exist in a tradeoff and that decision is yours to make, not ours. Nevertheless, we do not collect or save any of your video even if you do use our relay.
+This extra service is free and completely optional. Privacy and convenience exist in a tradeoff and that decision is yours to make, not ours. Nevertheless, we do not collect or save any of your video even if you do use our relay.
 
-Refer to the [Usage Guide](https://neufangled.com/docs/usage_guide/) for more detailed instructions on setup and use.
+Refer to the [Software Installation Guide](https://neufangled.com/docs/usage_guide/) for more detailed instructions on setup and use.
 
 ## Calibration and Use
 
@@ -76,7 +83,7 @@ options:
                             which is the default. Falls back to servoing if no session answers.
     --debug               Enable DEBUG level logging
     --no_rec_diagnostics  Don't record the arguments of every optimize_arp_anchors call during full_auto_calibration
-                            to calibration_diagnostics.pkl. Recording is on by default so every calibration
+                            to calibration_diagnostics_<timestamp>.pkl. Recording is on by default so every calibration
                             attempt leaves evidence for offline analysis. Arpeggio hardware only.
     --bind_address        Interface for the local telemetry websocket (port 4245) and all local mjpeg video
                             streams. Set to 0.0.0.0 to access from elsewhere on your network.
@@ -89,9 +96,7 @@ At least 8 cores and 8GB of ram.
 In order to perform local inference, some kind of pytorch accelertion is necessary.
 Mini PC's or laptops based on the Ryzen 7 7840HS are probably about the cheapest machines that can run stringman's motion controller since it has an NPU that can be used to accelerate pytorch. A mac mini is also a viable, though more expensive option.
 
-Otherwise, any gaming desktop is usually more than enough.
-
-It was found that restricting opencv's threads can drastically cut CPU use.
+It was found that restricting opencv's threads can drastically cut CPU use on linux.
 precede `stringman-headless` command with 
 
     OPENCV_FOR_THREADS_NUM=2 OPENBLAS_NUM_THREADS=1

@@ -97,7 +97,7 @@ GRIPPER_VID_PORT  = 9890
 
 
 async def main(no_video=False, mujoco_model=None, realtime=1.0,
-               room_side=None, cam_tilt=None):
+               room_side=None, cam_tilt=None, ceiling=None):
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s %(levelname)-8s %(message)s',
@@ -118,6 +118,8 @@ async def main(no_video=False, mujoco_model=None, realtime=1.0,
             kw['room_side'] = room_side
         if cam_tilt is not None:
             kw['cam_tilt_deg'] = cam_tilt
+        if ceiling is not None:
+            kw['ceiling'] = ceiling
         world = mujoco_bridge.MujocoWorld(mujoco_model, realtime=realtime, **kw)
         patchers.extend(mujoco_bridge.make_patchers(world))
         for p in patchers:
@@ -293,6 +295,10 @@ if __name__ == '__main__':
                              '22 and 26 degree variants). The host must be told the same '
                              'angle - indirectLine.camTilt in the robot config - or '
                              'calibration solves against a camera pointing elsewhere.')
+    parser.add_argument('--ceiling', type=float, default=None, metavar='M',
+                        help='Height in meters the anchors and corner eyelet posts are '
+                             'mounted at (default 2). The host config\'s anchor poses and '
+                             'eyelets should be raised to match.')
     args = parser.parse_args()
 
     model = None
@@ -302,8 +308,10 @@ if __name__ == '__main__':
         from mujoco_bridge import DEFAULT_MODEL
         model = DEFAULT_MODEL if args.mujoco is True else args.mujoco
 
-    if model is None and (args.room_side is not None or args.cam_tilt is not None):
-        parser.error('--room-side and --cam-tilt only mean anything with --mujoco')
+    if model is None and (args.room_side is not None or args.cam_tilt is not None
+                          or args.ceiling is not None):
+        parser.error('--room-side, --cam-tilt and --ceiling only mean anything with --mujoco')
 
     asyncio.run(main(no_video=args.no_video, mujoco_model=model, realtime=args.realtime,
-                     room_side=args.room_side, cam_tilt=args.cam_tilt))
+                     room_side=args.room_side, cam_tilt=args.cam_tilt,
+                     ceiling=args.ceiling))

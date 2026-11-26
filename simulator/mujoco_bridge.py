@@ -72,6 +72,7 @@ INDIRECT_LINES = (1, 3)
 # MujocoWorld reconfigures the compiled model to match.
 DEFAULT_ROOM_SIDE_M = 4.0
 DEFAULT_CAM_TILT_DEG = 30.0
+DEFAULT_CEILING_M = 2.0     # height of the anchors and corner posts, as mounted at the ceiling
 
 # Bodies that sit in the room's corners, and the sign of the corner each occupies.
 CORNER_BODIES = {
@@ -153,10 +154,12 @@ class MujocoWorld:
     """
 
     def __init__(self, path=DEFAULT_MODEL, realtime=1.0,
-                 room_side=DEFAULT_ROOM_SIDE_M, cam_tilt_deg=DEFAULT_CAM_TILT_DEG):
+                 room_side=DEFAULT_ROOM_SIDE_M, cam_tilt_deg=DEFAULT_CAM_TILT_DEG,
+                 ceiling=DEFAULT_CEILING_M):
         self.model = mujoco.MjModel.from_xml_path(path)
         self.data = mujoco.MjData(self.model)
         self.room_side = float(room_side)
+        self.ceiling = float(ceiling)
         self.cam_tilt_deg = float(cam_tilt_deg)
         self.realtime = realtime
         self.lock = threading.RLock()
@@ -194,21 +197,28 @@ class MujocoWorld:
         # extent scales with the room, so express the near plane in meters and convert
         self.model.vis.map.znear = NEAR_PLANE_M / float(self.model.stat.extent)
 
-        self._set_room_size(self.room_side)
+        self._set_room_size(self.room_side, self.ceiling)
         self._set_camera_tilt(self.cam_tilt_deg)
         self._measure_geometry()
 
     # -- configuring the room ---------------------------------------------------
 
-    def _set_room_size(self, side):
-        """Move the four corner posts onto a square `side` meters across, and match the
-        floor to it. The corner azimuths do not change, so the gantry's resting yaw and
-        the line-to-arm rigging are unaffected."""
+    def _set_room_size(self, side, ceiling=DEFAULT_CEILING_M):
+        """Move the four corner posts onto a square `side` meters across with their tops
+        `ceiling` meters up, and match the floor to it. The corner azimuths do not change,
+        so the gantry's resting yaw and the line-to-arm rigging are unaffected."""
         half = side / 2.0
         for name, (sx, sy) in CORNER_BODIES.items():
             b = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, name)
             self.model.body_pos[b][0] = sx * half
             self.model.body_pos[b][1] = sy * half
+            self.model.body_pos[b][2] = ceiling
+            # the post under each corner body is a cylinder that should still reach the floor
+            for g in range(self.model.ngeom):
+                if (self.model.geom_bodyid[g] == b
+                        and self.model.geom_type[g] == mujoco.mjtGeom.mjGEOM_CYLINDER):
+                    self.model.geom_size[g][1] = ceiling / 2.0
+                    self.model.geom_pos[g][2] = -ceiling / 2.0
         f = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, 'floor')
         self.model.geom_size[f][0] = half
         self.model.geom_size[f][1] = half
@@ -267,8 +277,8 @@ class MujocoWorld:
                 self.model.key_ctrl[0][a] = self.keyframe_spans[i]
         mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
         mujoco.mj_forward(self.model, self.data)
-        logger.info('room %.2f m, camera tilt %.1f deg: fixed runs %s, keyframe spans %s',
-                    self.room_side, self.cam_tilt_deg,
+        logger.info('room %.2f m, ceiling %.2f m, camera tilt %.1f deg: fixed runs %s, '
+                    'keyframe spans %s', self.room_side, self.ceiling, self.cam_tilt_deg,
                     [round(r, 4) for r in self.fixed_run],
                     [round(v, 4) for v in self.keyframe_spans])
 

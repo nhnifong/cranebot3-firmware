@@ -59,3 +59,4 @@ cluster_sort/
 clutter_record/
 stretch_test/
 floor_clean/
+calibration_diagnostics_*.pkl

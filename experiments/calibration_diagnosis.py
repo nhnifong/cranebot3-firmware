@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Explain what a recorded calibration run actually optimized, and what it cost.
 
-Reads calibration_diagnostics.pkl (written by Observer._record_calibration_diagnostics when
+Reads a calibration_diagnostics_<timestamp>.pkl, the newest by default (written by Observer._record_calibration_diagnostics when
 --rec_diagnostics is on) and reports, for every optimizer pass:
 
   - the cost breakdown by term, with the residual count and per-residual rms behind each one,
@@ -26,6 +26,7 @@ import io
 import itertools
 import logging
 import pickle
+import glob
 import sys
 
 import numpy as np
@@ -304,7 +305,9 @@ def fmt_costs(costs, counts, total):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--pickle', default='calibration_diagnostics.pkl')
+    parser.add_argument('--pickle', default=None,
+                        help='the run to read; defaults to the newest calibration_diagnostics_*.pkl '
+                             'here, or the old fixed-name calibration_diagnostics.pkl if there is none')
     parser.add_argument('--rerun', action='store_true',
                         help='re-run every pass to recover its output geometry, not just the '
                              'inputs the pickle records (slower, needs the same code version)')
@@ -315,6 +318,10 @@ def main(argv=None):
         logging.disable(logging.CRITICAL)
     np.set_printoptions(precision=3, suppress=True)
 
+    if opts.pickle is None:
+        runs = sorted(glob.glob('calibration_diagnostics_*.pkl'))
+        opts.pickle = runs[-1] if runs else 'calibration_diagnostics.pkl'
+        print(f'Reading {opts.pickle}')
     with open(opts.pickle, 'rb') as fh:
         records = pickle.load(fh)
     n_aborts = sum(1 for r in records if 'abort' in r)

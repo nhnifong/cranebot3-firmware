@@ -404,9 +404,11 @@ class AsyncObserver:
         self.debug = debug
         self.loop_monitor = None  # only created in main() when --debug is passed
         # when set, full_auto_calibration pickles the args of every optimize_arp_anchors call
-        # (Arpeggio hardware only) to calibration_diagnostics.pkl for offline analysis.
+        # (Arpeggio hardware only) to calibration_diagnostics_<timestamp>.pkl for offline
+        # analysis, one file per calibration run so a new run never overwrites an old one.
         self.rec_diagnostics = rec_diagnostics
         self._calibration_diagnostics = []
+        self._calibration_diagnostics_path = None
         # (percent_complete, current_action) of the last calibration step reported to the UI,
         # captured in send_ui so that every step counts, including the ones sent from the
         # helpers calibration calls rather than from full_auto_calibration itself. Read only
@@ -2577,8 +2579,16 @@ class AsyncObserver:
                 'two_reference_lengths': (lengths[client.anchor_num*2], lengths[client.anchor_num*2+1])
             }))
 
-        # reset biases on kalman filter
+        # reset biases on kalman filter, to where the anchor cameras have seen the gantry.
+        # The buffer starts zero filled, and those rows (timestamp 0) are not sightings: averaged
+        # in, they drag the assumed position toward the origin, and with no sightings at all
+        # they make it the origin, so the next move drives the gantry up toward the ceiling.
         data = self.datastore.gantry_pos.deepCopy()
+        data = data[data[:, 0] > 0]
+        if len(data) == 0:
+            logger.warning('No gantry sightings from any anchor camera; '
+                           'not resetting filter biases.')
+            return
         position = np.mean(data[:,2:], axis=0)
         logger.debug(f'Resetting filter biases with assumed position of {position}')
         if self.pe.recorder:
@@ -2731,6 +2741,56 @@ class AsyncObserver:
             logger.warning('Falling back to the unfiltered gantry buffer.')
             return self.snapshot_tag_observations()
         return self.snapshot_tag_observations(gantry_since=window_start)
+
+    def _fresh_gantry_sighting_counts(self, since):
+        """Number of gantry marker sightings each anchor camera has captured since `since`."""
+        return {client.anchor_num: sum(1 for ts, _ in list(client.raw_gant_poses) if ts >= since)
+                for client in self.anchors.values()}
+
+    async def wait_for_gantry_marker(self, appear_timeout_s=60.0, collect_timeout_s=30.0,
+                                     min_dets=6):
+        """Ask the operator to bring the gripper's marker tag into view of an anchor camera, and
+        return a fresh snapshot_tag_observations_still once one has seen it enough times.
+
+        For when no anchor camera has seen the gantry at all. Without a sighting the first pass
+        has nothing to place the gantry with, and the filter would be reset to the origin while
+        the gantry hangs somewhere above it, so calibration would drive it toward the ceiling.
+
+        Waits up to appear_timeout_s for any sighting, then up to collect_timeout_s more for
+        min_dets of them from one anchor. Raises RuntimeError if either runs out."""
+        self.slow_stop_all_spools()
+        self.send_ui(pop_message=telemetry.Popup(
+            message="The gripper's marker tag cannot be seen from any anchor camera. "
+                    "please move it into view."))
+        logger.warning(f'No anchor camera can see the gantry marker; waiting up to '
+                       f'{appear_timeout_s:.0f}s for it to come into view.')
+        since = time.time() + VIDEO_LATENCY_S
+
+        deadline = time.time() + appear_timeout_s
+        while max(self._fresh_gantry_sighting_counts(since).values(), default=0) == 0:
+            if time.time() >= deadline:
+                self.send_ui(pop_message=telemetry.Popup(
+                    message="Calibration stopped: the gripper's marker tag never came into "
+                            "view of an anchor camera."))
+                raise RuntimeError(f'Gantry marker not seen by any anchor camera within '
+                                   f'{appear_timeout_s:.0f}s')
+            await asyncio.sleep(0.1)
+
+        deadline = time.time() + collect_timeout_s
+        while True:
+            counts = self._fresh_gantry_sighting_counts(since)
+            if max(counts.values(), default=0) >= min_dets:
+                break
+            if time.time() >= deadline:
+                self.send_ui(pop_message=telemetry.Popup(
+                    message="Calibration stopped: the gripper's marker tag was only seen "
+                            "intermittently. Make sure an anchor camera has a clear view of it."))
+                raise RuntimeError(f'Gantry marker seen too rarely to calibrate: {counts} '
+                                   f'sightings per anchor in {collect_timeout_s:.0f}s, '
+                                   f'wanted {min_dets}')
+            await asyncio.sleep(0.1)
+        logger.info(f'Gantry marker in view: {counts} sightings per anchor; continuing calibration.')
+        return await self.snapshot_tag_observations_still(min_dets=min_dets)
 
     def save_poses_arp(self, anchor_poses, eyelet_positions):
         # Use the optimization output to update anchor poses and spool params
@@ -4055,15 +4115,20 @@ class AsyncObserver:
         self.slow_stop_all_spools()
 
     def _flush_calibration_diagnostics(self):
-        """Write self._calibration_diagnostics to calibration_diagnostics.pkl.
+        """Write self._calibration_diagnostics to this calibration run's own
+        calibration_diagnostics_<timestamp>.pkl, picking the name on the first flush of a run.
 
         Writes to a temp file and renames over the target so a crash or hard kill mid-write
         can never corrupt/truncate the previously-flushed passes still sitting in the file.
         """
-        tmp_path = 'calibration_diagnostics.pkl.tmp'
+        if self._calibration_diagnostics_path is None:
+            self._calibration_diagnostics_path = (
+                f'calibration_diagnostics_{time.strftime("%Y%m%d-%H%M%S")}.pkl')
+        path = self._calibration_diagnostics_path
+        tmp_path = path + '.tmp'
         with open(tmp_path, 'wb') as f:
             pickle.dump(self._calibration_diagnostics, f)
-        os.replace(tmp_path, 'calibration_diagnostics.pkl')
+        os.replace(tmp_path, path)
 
     def _record_calibration_diagnostics(self, pass_name, func, args, kwargs=None):
         """Append one optimize_arp_anchors call's bound arguments to the running
@@ -4084,7 +4149,7 @@ class AsyncObserver:
         self._flush_calibration_diagnostics()
         logger.info(
             f'Saved calibration diagnostics for {pass_name} '
-            f'({len(self._calibration_diagnostics)} pass(es) so far) to calibration_diagnostics.pkl'
+            f'({len(self._calibration_diagnostics)} pass(es) so far) to {self._calibration_diagnostics_path}'
         )
 
     def _record_calibration_abort(self, reason, error=None):
@@ -4109,7 +4174,7 @@ class AsyncObserver:
         })
         self._flush_calibration_diagnostics()
         logger.info(f'Saved calibration abort ({reason}) during step "{step}" '
-                    f'to calibration_diagnostics.pkl')
+                    f'to {self._calibration_diagnostics_path}')
 
     def _record_calibration_fitness(self, pass_name, fit_info):
         """Attach fit_info to this pass's diagnostics record and log its total_cost.
@@ -4146,6 +4211,7 @@ class AsyncObserver:
         self._calibration_step = (0.0, 'Starting')
         if self.rec_diagnostics:
             self._calibration_diagnostics = []  # clear any stale data from a previous run
+            self._calibration_diagnostics_path = None  # and start a file of this run's own
         try:
             if len(self.anchors) < N_ANCHORS:
                 self.send_ui(operation_progress=telemetry.OperationProgress(
@@ -4201,6 +4267,8 @@ class AsyncObserver:
             )))
 
             raw_obs = await self.snapshot_tag_observations_still()
+            if not any(len(b) for b in raw_obs['gantry']):
+                raw_obs = await self.wait_for_gantry_marker()
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=1.0,
@@ -4491,8 +4559,7 @@ class AsyncObserver:
         except asyncio.CancelledError:
             self._calibration_abort_cleanup()
             if finger_task is not None:
-                finger_task.cancel()
-                await finger_task
+                await self._cancel_and_wait(finger_task)
             # read and clear both, so whichever did not cause this abort cannot go on to
             # mislabel the next one
             marker_fault, self.gantry_marker_fault = self.gantry_marker_fault, None
@@ -4524,6 +4591,21 @@ class AsyncObserver:
                 current_action='Calibration failed, see motion controller console',
             ))
             raise
+
+    @staticmethod
+    async def _cancel_and_wait(task):
+        """Cancel a helper task and wait for it to finish, without raising.
+
+        Awaiting a task that ends cancelled raises CancelledError in the awaiter. In an abort
+        handler that would skip the rest of the handler: the abort record, the UI message, and
+        clearing the fault flags."""
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception(f'{task.get_name()} failed while being cancelled')
 
     def _calibration_abort_cleanup(self):
         """On any calibration abort (safety tension trip, user cancel, or error) stop all spools
@@ -6086,7 +6168,7 @@ def main():
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Record the arguments of every optimize_arp_anchors call during full_auto_calibration "
-             "to calibration_diagnostics.pkl, for offline analysis. On by default so every "
+             "to calibration_diagnostics_<timestamp>.pkl, for offline analysis. On by default so every "
              "calibration attempt leaves evidence. Arpeggio hardware only."
     )
     parser.add_argument(
